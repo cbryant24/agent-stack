@@ -1,0 +1,9 @@
+# Qdrant configuration overrides
+# Qdrant works well with defaults; add overrides here as needed.
+# Reference: https://qdrant.tech/documentation/guides/configuration/
+
+# Example overrides:
+# service:
+#   max_request_size_mb: 32
+# storage:
+#   on_disk_payload: true

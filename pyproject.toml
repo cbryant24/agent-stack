@@ -1,0 +1,15 @@
+[project]
+name = "agent-stack"
+version = "0.0.1"
+requires-python = ">=3.12"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "mypy>=1.10",
+    "ipython>=8.0",
+]
