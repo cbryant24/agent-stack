@@ -1,0 +1,74 @@
+---
+title: "{{ title }}"
+agent: {{ agent_name }}
+run_id: {{ run_id }}
+session_id: {{ session_id }}
+date: {{ date }}
+duration_sec: {{ duration_sec | round(2) }}
+status: {{ status }}
+cost_usd: {{ cost_usd | round(6) }}
+tags: {{ tags | tojson }}
+---
+
+## Summary
+
+Agent `{{ agent_name }}` completed run `{{ run_id[:12] }}…` with status **{{ status }}** in {{ duration_sec | round(1) }}s. Total LLM cost: ${{ cost_usd | round(4) }}. {{ llm_calls }} LLM call(s), {{ tool_calls }} tool call(s), {{ delegations }} delegation(s).
+
+## Delegation Tree
+
+{% if delegations > 0 %}
+- {{ agent_name }} (root)
+{% for d in delegation_events %}
+  - → {{ d.metadata.get('delegation', {}).get('target', 'unknown') }} ({{ d.metadata.get('delegation', {}).get('status', '') }}, ${{ "%.4f" | format(d.metadata.get('delegation', {}).get('cost_usd', 0)) }})
+{% endfor %}
+{% else %}
+No delegations in this run.
+{% endif %}
+
+## Tool Calls
+
+| Tool | Count |
+|------|-------|
+{% for name, count in tool_summary.items() %}
+| {{ name }} | {{ count }} |
+{% else %}
+| — | 0 |
+{% endfor %}
+
+## LLM Usage
+
+| Model | Calls | Input Tokens | Output Tokens | Cost USD |
+|-------|-------|--------------|---------------|----------|
+{% for row in llm_summary %}
+| {{ row.model }} | {{ row.calls }} | {{ row.input_tokens }} | {{ row.output_tokens }} | ${{ "%.4f" | format(row.cost_usd) }} |
+{% else %}
+| — | 0 | 0 | 0 | $0.0000 |
+{% endfor %}
+
+**Total:** {{ llm_calls }} call(s) · ${{ cost_usd | round(4) }}
+
+## Memory Operations
+
+- Queries: {{ memory_queries }}
+- Writes: {{ memory_writes }}
+- Collections: {{ collections | join(", ") or "none" }}
+
+## Notable Events
+
+{% if notable_events %}
+{% for event in notable_events %}
+- **{{ event.event_type }}** at {{ event.timestamp }}: {{ event.metadata | tojson }}
+{% endfor %}
+{% else %}
+No notable events.
+{% endif %}
+
+## Outputs
+
+{% if outputs %}
+{% for output in outputs %}
+- {{ output }}
+{% endfor %}
+{% else %}
+No outputs recorded.
+{% endif %}
