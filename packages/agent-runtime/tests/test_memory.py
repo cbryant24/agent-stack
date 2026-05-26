@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 import uuid
+import zlib
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,9 +15,44 @@ from agent_runtime.memory.chunking import (
     chunk_document,
     chunk_document_with_structure,
 )
+from agent_runtime.memory.embeddings import MultimodalInput
 from agent_runtime.memory.schema import MemoryPoint, SearchResult
 
-from tests.conftest import requires_qdrant
+
+def _qdrant_reachable() -> bool:
+    try:
+        import httpx
+        r = httpx.get("http://localhost:6333/healthz", timeout=1)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+requires_qdrant = pytest.mark.skipif(
+    not _qdrant_reachable(),
+    reason="Qdrant not running on localhost:6333",
+)
+
+
+def _minimal_png() -> bytes:
+    """Minimal valid 1×1 white PNG, under 100 bytes."""
+    def chunk(name: bytes, data: bytes) -> bytes:
+        c = struct.pack(">I", len(data)) + name + data
+        return c + struct.pack(">I", zlib.crc32(c[4:]) & 0xFFFFFFFF)
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
+        + chunk(b"IEND", b"")
+    )
+
+
+@pytest.fixture
+def test_png(tmp_path: Path) -> Path:
+    p = tmp_path / "test.png"
+    p.write_bytes(_minimal_png())
+    return p
 
 
 @pytest.fixture(autouse=True)
@@ -256,3 +294,266 @@ class TestMemoryStoreLive:
         from agent_runtime.memory.store import filter_by_source_type
         f = filter_by_source_type("web_page")
         assert f.must[0].key == "source_type"
+
+
+class TestMemoryStoreMultimodal:
+    """Tests for upsert_multimodal_points and upsert_mixed — no external services required."""
+
+    def test_length_mismatch_raises(self) -> None:
+        async def run() -> None:
+            from agent_runtime.memory.store import MemoryStore
+            store = MemoryStore("http://localhost:6333")
+            point = _make_point()
+            inp = MultimodalInput(text="hello")
+            with pytest.raises(ValueError, match="same length"):
+                await store.upsert_multimodal_points("col", [point], [inp, inp])
+        asyncio.run(run())
+
+    def test_empty_is_noop(self) -> None:
+        async def run() -> None:
+            from agent_runtime.memory.store import MemoryStore
+            store = MemoryStore("http://localhost:6333")
+            # Returns early without touching the Qdrant client
+            await store.upsert_multimodal_points("col", [], [])
+        asyncio.run(run())
+
+    def test_upsert_mixed_routes_to_sub_methods(self) -> None:
+        async def run() -> None:
+            from agent_runtime.memory.store import MemoryStore
+            store = MemoryStore("http://localhost:6333")
+
+            text_calls: list[tuple] = []
+            mm_calls: list[tuple] = []
+
+            async def mock_upsert_points(col: str, pts: list) -> None:
+                text_calls.append((col, pts))
+
+            async def mock_upsert_mm(col: str, pts: list, inputs: list) -> None:
+                mm_calls.append((col, pts, inputs))
+
+            store.upsert_points = mock_upsert_points  # type: ignore[method-assign]
+            store.upsert_multimodal_points = mock_upsert_mm  # type: ignore[method-assign]
+
+            text_pts = [_make_point(text="text chunk")]
+            mm_pts = [_make_point(text="caption", content_type="image_with_caption")]
+            mm_inputs = [MultimodalInput(text="caption")]
+
+            counts = await store.upsert_mixed("testcol", text_pts, mm_pts, mm_inputs)
+
+            assert counts == {"text": 1, "multimodal": 1}
+            assert len(text_calls) == 1
+            assert text_calls[0][0] == "testcol"
+            assert len(mm_calls) == 1
+            assert mm_calls[0][0] == "testcol"
+            assert len(mm_calls[0][1]) == 1
+            assert len(mm_calls[0][2]) == 1
+
+        asyncio.run(run())
+
+    def test_upsert_mixed_skips_empty_lists(self) -> None:
+        async def run() -> None:
+            from agent_runtime.memory.store import MemoryStore
+            store = MemoryStore("http://localhost:6333")
+
+            called = []
+
+            async def mock_upsert_points(col: str, pts: list) -> None:
+                called.append("text")
+
+            async def mock_upsert_mm(col: str, pts: list, inputs: list) -> None:
+                called.append("mm")
+
+            store.upsert_points = mock_upsert_points  # type: ignore[method-assign]
+            store.upsert_multimodal_points = mock_upsert_mm  # type: ignore[method-assign]
+
+            counts = await store.upsert_mixed("col", [], [], [])
+
+            assert counts == {"text": 0, "multimodal": 0}
+            assert called == []
+
+        asyncio.run(run())
+
+    @requires_qdrant
+    def test_upsert_multimodal_text_only_live(self) -> None:
+        async def run() -> None:
+            from unittest.mock import AsyncMock, MagicMock, patch
+            from agent_runtime.memory.store import MemoryStore
+            from ulid import ULID
+
+            store = MemoryStore("http://localhost:6333")
+            col = f"test_mm_{str(ULID()).lower()[:12]}"
+            await store.ensure_collection(col, vector_size=1024)
+
+            point = _make_point(text="hello multimodal world", content_type="text")
+            inp = MultimodalInput(text="hello multimodal world")
+
+            mock_client = MagicMock()
+            mock_client.embed_multimodal = AsyncMock(return_value=[[0.5] * 1024])
+
+            with patch(
+                "agent_runtime.memory.store.get_embedding_client",
+                return_value=mock_client,
+            ):
+                await store.upsert_multimodal_points(col, [point], [inp])
+
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            result = await store._client.count(
+                collection_name=col,
+                count_filter=Filter(
+                    must=[FieldCondition(key="source_id", match=MatchValue(value="src-001"))]
+                ),
+            )
+            assert result.count == 1
+            await store._client.delete_collection(col)
+
+        asyncio.run(run())
+
+
+class TestMultimodalInput:
+    def test_text_only(self) -> None:
+        m = MultimodalInput(text="hello")
+        assert m.text == "hello"
+        assert m.image_path is None
+
+    def test_image_only(self, test_png: Path) -> None:
+        m = MultimodalInput(image_path=test_png)
+        assert m.image_path == test_png
+        assert m.text is None
+
+    def test_text_and_image(self, test_png: Path) -> None:
+        m = MultimodalInput(text="caption", image_path=test_png)
+        assert m.text == "caption"
+        assert m.image_path == test_png
+
+    def test_rejects_empty(self) -> None:
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="At least one"):
+            MultimodalInput()
+
+    def test_rejects_nonexistent_image(self, tmp_path: Path) -> None:
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="does not exist"):
+            MultimodalInput(image_path=tmp_path / "ghost.png")
+
+    def test_rejects_unsupported_extension(self, tmp_path: Path) -> None:
+        from pydantic import ValidationError
+        bad = tmp_path / "file.bmp"
+        bad.write_bytes(b"BM")
+        with pytest.raises(ValidationError, match="Unsupported image format"):
+            MultimodalInput(image_path=bad)
+
+    def test_to_voyage_content_text_only(self) -> None:
+        from PIL import Image
+        m = MultimodalInput(text="hello world")
+        content = m.to_voyage_content()
+        assert len(content) == 1
+        assert content[0] == "hello world"
+
+    def test_to_voyage_content_image_only(self, test_png: Path) -> None:
+        from PIL import Image
+        m = MultimodalInput(image_path=test_png)
+        content = m.to_voyage_content()
+        assert len(content) == 1
+        assert isinstance(content[0], Image.Image)
+
+    def test_to_voyage_content_text_and_image(self, test_png: Path) -> None:
+        from PIL import Image
+        m = MultimodalInput(text="caption", image_path=test_png)
+        content = m.to_voyage_content()
+        assert len(content) == 2
+        assert content[0] == "caption"
+        assert isinstance(content[1], Image.Image)
+
+
+class TestEmbeddingClientMultimodal:
+    def test_embed_multimodal_returns_correct_dimension(
+        self, test_png: Path
+    ) -> None:
+        async def run() -> None:
+            from agent_runtime.memory.embeddings import EmbeddingClient
+
+            mock_response = MagicMock()
+            mock_response.embeddings = [[0.1] * 1024, [0.2] * 1024]
+            client = EmbeddingClient(api_key="test-key")
+            client._client.multimodal_embed = AsyncMock(return_value=mock_response)
+
+            inputs = [
+                MultimodalInput(text="caption"),
+                MultimodalInput(image_path=test_png),
+            ]
+            vectors = await client.embed_multimodal(inputs)
+            assert len(vectors) == 2
+            assert len(vectors[0]) == 1024
+            assert len(vectors[1]) == 1024
+
+        asyncio.run(run())
+
+    def test_embed_multimodal_batches(self, test_png: Path) -> None:
+        async def run() -> None:
+            from agent_runtime.memory.embeddings import EmbeddingClient, _MULTIMODAL_BATCH_SIZE
+
+            call_count = 0
+
+            async def mock_mm_embed(inputs: list, **kwargs: Any) -> Any:
+                nonlocal call_count
+                call_count += 1
+                resp = MagicMock()
+                resp.embeddings = [[0.1] * 1024] * len(inputs)
+                return resp
+
+            client = EmbeddingClient(api_key="test-key")
+            client._client.multimodal_embed = mock_mm_embed
+
+            # _MULTIMODAL_BATCH_SIZE + 2 items → 2 batches
+            inputs = [MultimodalInput(text=f"text {i}") for i in range(_MULTIMODAL_BATCH_SIZE + 2)]
+            vectors = await client.embed_multimodal(inputs)
+            assert len(vectors) == _MULTIMODAL_BATCH_SIZE + 2
+            assert call_count == 2
+
+        asyncio.run(run())
+
+    def test_embed_multimodal_empty(self) -> None:
+        async def run() -> None:
+            from agent_runtime.memory.embeddings import EmbeddingClient
+            client = EmbeddingClient(api_key="test-key")
+            result = await client.embed_multimodal([])
+            assert result == []
+
+        asyncio.run(run())
+
+
+class TestMemoryPointMultimodal:
+    def test_default_content_type_text(self) -> None:
+        point = _make_point()
+        assert point.content_type == "text"
+
+    def test_image_with_caption_fields(self, test_png: Path) -> None:
+        point = _make_point(
+            content_type="image_with_caption",
+            image_path=str(test_png),
+            caption="A screenshot of the UI",
+        )
+        assert point.content_type == "image_with_caption"
+        assert point.caption == "A screenshot of the UI"
+
+    def test_backward_compat_no_content_type(self) -> None:
+        # Simulates a payload loaded from Qdrant that predates the field
+        payload = {
+            "text": "old point",
+            "source_id": "old-src",
+            "source_type": "web_page",
+            "processed_by_agent": "test",
+            "processed_in_run": "run-old",
+        }
+        point = MemoryPoint.from_qdrant_payload(str(uuid.uuid4()), payload)
+        assert point.content_type == "text"
+
+    def test_to_qdrant_point_includes_content_type(self, test_png: Path) -> None:
+        point = _make_point(
+            content_type="image_with_caption",
+            image_path=str(test_png),
+            caption="test caption",
+        )
+        qp = point.to_qdrant_point([0.1] * 3)
+        assert qp.payload["content_type"] == "image_with_caption"
+        assert qp.payload["caption"] == "test caption"

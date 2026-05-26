@@ -224,3 +224,116 @@ class TestInitTracing:
         assert t1 is not None
         assert t2 is not None
         _initialized.discard("test-service")
+
+
+class TestTracePersisterContextVar:
+    def test_none_when_no_persister_active(self) -> None:
+        from agent_runtime.tracing.persistence import get_current_persister
+        assert get_current_persister() is None
+
+    def test_contextvar_set_on_enter(self, fake_env: None, tmp_path: Path) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        from agent_runtime.tracing.persistence import get_current_persister
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            assert get_current_persister() is None
+            with TracePersister(agent="cv-agent", run_id="cv-run-001") as p:
+                assert get_current_persister() is p
+            assert get_current_persister() is None
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()
+
+    def test_contextvar_restored_on_exit(self, fake_env: None, tmp_path: Path) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        from agent_runtime.tracing.persistence import get_current_persister
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            with TracePersister(agent="cv-agent", run_id="cv-run-002") as outer:
+                with TracePersister(agent="cv-agent", run_id="cv-run-003") as inner:
+                    assert get_current_persister() is inner
+                # inner has exited — outer should be restored
+                assert get_current_persister() is outer
+            assert get_current_persister() is None
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()
+
+    def test_record_llm_emits_to_persister(
+        self, fake_env: None, tmp_path: Path, in_memory_tracer: InMemorySpanExporter
+    ) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        from agent_runtime.tracing.persistence import get_current_persister
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            run_id = "emit-test-llm"
+            with TracePersister(agent="emit-agent", run_id=run_id) as p:
+                with span("agent.run"):
+                    record_llm_call("claude-sonnet-4-6", 500, 250, 0.005)
+
+            events = load_trace(run_id, "emit-agent")
+            llm_events = [e for e in events if e.event_type == "llm_call"]
+            assert len(llm_events) == 1
+            assert llm_events[0].metadata["llm.model"] == "claude-sonnet-4-6"
+            assert llm_events[0].metadata["llm.input_tokens"] == 500
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()
+
+    def test_record_tool_emits_to_persister(
+        self, fake_env: None, tmp_path: Path, in_memory_tracer: InMemorySpanExporter
+    ) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            run_id = "emit-test-tool"
+            with TracePersister(agent="emit-agent", run_id=run_id) as p:
+                with span("agent.run"):
+                    record_tool_call("web_search", "python async", "5 results")
+
+            events = load_trace(run_id, "emit-agent")
+            tool_events = [e for e in events if e.event_type == "tool_call"]
+            assert len(tool_events) == 1
+            assert tool_events[0].metadata["tool.name"] == "web_search"
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()
+
+    def test_record_memory_query_emits_to_persister(
+        self, fake_env: None, tmp_path: Path, in_memory_tracer: InMemorySpanExporter
+    ) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            run_id = "emit-test-mq"
+            with TracePersister(agent="emit-agent", run_id=run_id) as p:
+                with span("agent.run"):
+                    record_memory_query("tutorials", "async python", 3)
+
+            events = load_trace(run_id, "emit-agent")
+            mq_events = [e for e in events if e.event_type == "memory_query"]
+            assert len(mq_events) == 1
+            assert mq_events[0].metadata["memory.collection"] == "tutorials"
+            assert mq_events[0].metadata["memory.results_count"] == 3
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()
+
+    def test_no_emission_without_persister(
+        self, fake_env: None, in_memory_tracer: InMemorySpanExporter
+    ) -> None:
+        # Should not raise even when no persister is active
+        with span("standalone"):
+            record_llm_call("claude-haiku-4-5", 100, 50, 0.0001)
+            record_tool_call("search", "q", "r")
+        # No error = pass

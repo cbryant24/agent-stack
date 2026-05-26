@@ -9,6 +9,8 @@ from typing import Any, Callable, Generator
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 
+from agent_runtime.models import TraceEvent
+
 
 def _safe_attr(value: Any, max_len: int = 200) -> str:
     try:
@@ -26,6 +28,20 @@ def _span_kind(kind: str) -> SpanKind:
         "producer": SpanKind.PRODUCER,
         "consumer": SpanKind.CONSUMER,
     }.get(kind, SpanKind.INTERNAL)
+
+
+def _current_span_id() -> str:
+    ctx = trace.get_current_span().get_span_context()
+    if ctx and ctx.is_valid:
+        return format(ctx.span_id, "016x")
+    return ""
+
+
+def _emit_to_persister(event: TraceEvent) -> None:
+    from agent_runtime.tracing.persistence import get_current_persister
+    persister = get_current_persister()
+    if persister is not None:
+        persister.record(event)
 
 
 def traced(
@@ -94,6 +110,16 @@ def record_llm_call(
     s.set_attribute("llm.input_tokens", input_tokens)
     s.set_attribute("llm.output_tokens", output_tokens)
     s.set_attribute("llm.cost_usd", cost_usd)
+    _emit_to_persister(TraceEvent(
+        event_type="llm_call",
+        span_id=_current_span_id(),
+        metadata={
+            "llm.model": model,
+            "llm.input_tokens": input_tokens,
+            "llm.output_tokens": output_tokens,
+            "llm.cost_usd": cost_usd,
+        },
+    ))
 
 
 def record_tool_call(tool_name: str, input_summary: str, output_summary: str) -> None:
@@ -101,6 +127,15 @@ def record_tool_call(tool_name: str, input_summary: str, output_summary: str) ->
     s.set_attribute("tool.name", tool_name)
     s.set_attribute("tool.input", input_summary[:200])
     s.set_attribute("tool.output", output_summary[:200])
+    _emit_to_persister(TraceEvent(
+        event_type="tool_call",
+        span_id=_current_span_id(),
+        metadata={
+            "tool.name": tool_name,
+            "tool.input": input_summary[:200],
+            "tool.output": output_summary[:200],
+        },
+    ))
 
 
 def record_delegation(target_agent: str, status: str, cost_usd: float) -> None:
@@ -108,6 +143,15 @@ def record_delegation(target_agent: str, status: str, cost_usd: float) -> None:
     s.set_attribute("delegation.target", target_agent)
     s.set_attribute("delegation.status", status)
     s.set_attribute("delegation.cost_usd", cost_usd)
+    _emit_to_persister(TraceEvent(
+        event_type="delegation",
+        span_id=_current_span_id(),
+        metadata={
+            "delegation.target": target_agent,
+            "delegation.status": status,
+            "delegation.cost_usd": cost_usd,
+        },
+    ))
 
 
 def record_memory_query(collection: str, query: str, results_count: int) -> None:
@@ -116,6 +160,15 @@ def record_memory_query(collection: str, query: str, results_count: int) -> None
     s.set_attribute("memory.collection", collection)
     s.set_attribute("memory.query", query[:200])
     s.set_attribute("memory.results_count", results_count)
+    _emit_to_persister(TraceEvent(
+        event_type="memory_query",
+        span_id=_current_span_id(),
+        metadata={
+            "memory.collection": collection,
+            "memory.query": query[:200],
+            "memory.results_count": results_count,
+        },
+    ))
 
 
 def record_memory_write(collection: str, count: int) -> None:
@@ -123,3 +176,11 @@ def record_memory_write(collection: str, count: int) -> None:
     s.set_attribute("memory.operation", "write")
     s.set_attribute("memory.collection", collection)
     s.set_attribute("memory.write_count", count)
+    _emit_to_persister(TraceEvent(
+        event_type="memory_write",
+        span_id=_current_span_id(),
+        metadata={
+            "memory.collection": collection,
+            "memory.write_count": count,
+        },
+    ))

@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from qdrant_client.models import PointStruct
 
 
@@ -25,7 +25,18 @@ class MemoryPoint(BaseModel):
     domain_tags: list[str] = Field(default_factory=list)
     topic_tags: list[str] = Field(default_factory=list)
     language: str = "en"
+    # Multimodal fields — default "text" for backward compatibility
+    content_type: Literal["text", "image", "image_with_caption"] = "text"
+    image_path: str | None = None
+    caption: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_content_type(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "content_type" not in data:
+            data["content_type"] = "text"
+        return data
 
     def to_qdrant_point(self, vector: list[float]) -> PointStruct:
         payload = self.model_dump(exclude={"id"})

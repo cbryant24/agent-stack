@@ -7,7 +7,12 @@ from agent_runtime.tracing.decorators import (
     span,
     traced,
 )
-from agent_runtime.tracing.persistence import TracePersister, load_trace
+from agent_runtime.tracing.persistence import (
+    TracePersister,
+    get_current_persister,
+    load_trace,
+    set_current_persister,
+)
 from agent_runtime.tracing.setup import init_tracing
 
 __all__ = [
@@ -20,5 +25,7 @@ __all__ = [
     "record_memory_query",
     "record_memory_write",
     "TracePersister",
+    "get_current_persister",
+    "set_current_persister",
     "load_trace",
 ]

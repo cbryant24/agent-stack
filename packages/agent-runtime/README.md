@@ -14,7 +14,7 @@ Shared infrastructure library for the agent-stack workspace. All agent packages 
 
 **Delegation** — `register_agent / get_agent` registry + `delegate()` async function. Derives child budget from parent, enforces depth limits, and maps outcomes to `DelegationResult` (completed / partial / failed). Parent budget is automatically debited via contextvar.
 
-**Memory** — Qdrant-backed vector store (`MemoryStore`), Voyage AI embeddings (`EmbeddingClient`, model `voyage-3-large`), and a tiktoken-based chunker (`chunk_document`) with paragraph/sentence-aware splitting and overlap.
+**Memory** — Qdrant-backed vector store (`MemoryStore`), Voyage AI embeddings (`EmbeddingClient`, model `voyage-3-large`), multimodal embeddings (`embed_multimodal`, model `voyage-multimodal-3`), `MultimodalInput` for text/image queries, and a tiktoken-based chunker (`chunk_document`) with paragraph/sentence-aware splitting and overlap.
 
 **Reporting** — `render_run_report()` renders a Jinja2 Markdown report from the persisted trace and writes it to the Obsidian vault. `notify*` helpers fire macOS notifications.
 
@@ -46,8 +46,18 @@ from agent_runtime import BudgetTracker, register_agent, get_agent, delegate
 from agent_runtime import (
     MemoryStore, get_memory_store,
     EmbeddingClient, get_embedding_client,
+    MultimodalInput,           # text + image_path; validates extension/existence
     MemoryPoint, SearchResult,
     chunk_document, chunk_document_with_structure,
+)
+
+# Multimodal example
+from agent_runtime import MultimodalInput, get_embedding_client, get_memory_store
+
+input = MultimodalInput(text="caption", image_path=Path("screenshot.png"))
+[vector] = await get_embedding_client().embed_multimodal([input])
+results = await get_memory_store().search_multimodal(
+    "my-collection", query_text="describe the UI", limit=5
 )
 
 # Reporting

@@ -151,3 +151,78 @@ class TestBudgetTrackerEnforcement:
                 assert not t.check_can_afford(1.0)
 
         asyncio.run(run())
+
+
+class TestBudgetTrackerJSONLEmission:
+    def test_llm_call_written_to_jsonl(self, tmp_path: pytest.TempPathFactory) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        from agent_runtime.tracing.persistence import load_trace
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            async def run() -> str:
+                envelope = BudgetEnvelope(max_depth=0)
+                async with BudgetTracker(envelope, "test-agent") as t:
+                    t.add_llm_cost("claude-haiku-4-5", 200, 100)
+                    t.add_llm_cost("claude-sonnet-4-6", 500, 300)
+                    return t.run_id
+
+            run_id = asyncio.run(run())
+            events = load_trace(run_id, "test-agent")
+            llm_events = [e for e in events if e.event_type == "llm_call"]
+            assert len(llm_events) == 2
+            models = {e.metadata["llm.model"] for e in llm_events}
+            assert models == {"claude-haiku-4-5", "claude-sonnet-4-6"}
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()
+
+    def test_tool_call_written_to_jsonl(self, tmp_path: pytest.TempPathFactory) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        from agent_runtime.tracing.persistence import load_trace
+        from agent_runtime.tracing.decorators import record_tool_call
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            async def run() -> str:
+                envelope = BudgetEnvelope(max_depth=0)
+                async with BudgetTracker(envelope, "test-agent") as t:
+                    record_tool_call("tavily.search", "query", "results")
+                    record_tool_call("tavily.search", "query2", "results2")
+                    t.add_tool_call()
+                    t.add_tool_call()
+                    return t.run_id
+
+            run_id = asyncio.run(run())
+            events = load_trace(run_id, "test-agent")
+            tool_events = [e for e in events if e.event_type == "tool_call"]
+            assert len(tool_events) == 2
+            assert all(e.metadata["tool.name"] == "tavily.search" for e in tool_events)
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()
+
+    def test_memory_query_written_to_jsonl(self, tmp_path: pytest.TempPathFactory) -> None:
+        import os
+        from agent_runtime.config import reset_config
+        from agent_runtime.tracing.persistence import load_trace
+        from agent_runtime.tracing.decorators import record_memory_query
+        os.environ["AGENT_DATA_DIR"] = str(tmp_path / "data")
+        reset_config()
+        try:
+            async def run() -> str:
+                envelope = BudgetEnvelope(max_depth=0)
+                async with BudgetTracker(envelope, "test-agent") as t:
+                    record_memory_query("tutorials", "async python", 5)
+                    return t.run_id
+
+            run_id = asyncio.run(run())
+            events = load_trace(run_id, "test-agent")
+            mq_events = [e for e in events if e.event_type == "memory_query"]
+            assert len(mq_events) == 1
+            assert mq_events[0].metadata["memory.collection"] == "tutorials"
+        finally:
+            os.environ.pop("AGENT_DATA_DIR", None)
+            reset_config()

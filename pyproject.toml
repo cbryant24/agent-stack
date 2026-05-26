@@ -13,3 +13,7 @@ dev = [
     "mypy>=1.10",
     "ipython>=8.0",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = ["packages"]
