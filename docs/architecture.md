@@ -8,7 +8,7 @@
 
 ### agent-runtime
 
-The shared infrastructure layer. All other packages import from here. **Status: complete.** 167 tests passing.
+The shared infrastructure layer. All other packages import from here. **Status: complete.** 127 tests passing.
 
 #### Layer 1 — Config & Models
 
@@ -63,7 +63,7 @@ The shared infrastructure layer. All other packages import from here. **Status: 
 
 ### yt-intelligence-pipeline
 
-The canonical YouTube ingestion capability. **Status: complete.** Designed to be called both from the CLI and programmatically by agents.
+The canonical YouTube ingestion capability. **Status: complete.** 40 tests passing. Designed to be called both from the CLI and programmatically by agents.
 
 **Two modes of operation:**
 
@@ -136,7 +136,81 @@ uv run yt-pipeline <url> --collection my_col # custom collection name
 
 ### tutorial-research
 
-The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: under development.**
+The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 35 tests passing.
+
+#### Request modes
+
+Mode is inferred from the request string (`classify_request()`) or set explicitly via `request_type=`:
+
+| Mode | Trigger | Pipeline |
+|------|---------|----------|
+| `research` | Default | Tavily → Haiku scoring → `process_video` × N → retrieve → Sonnet synthesis |
+| `ingest` | URL in request | Skips Tavily; fetches metadata → scores → ingests URLs directly |
+| `retrieve` | "find", "show me what", etc. | Qdrant retrieval only; no ingestion |
+
+#### Pipeline stages (research mode)
+
+1. **Discovery** — `search_for_tutorials(topic, max_results=20)` — Tavily web search filtered to `youtube.com/watch` URLs. On failure, degrades gracefully to retrieve-only (emits `event_subtype="tavily_degradation"` TraceEvent).
+2. **Metadata filter** — `fetch_video_metadata(url) → CandidateEntry | None` — yt-dlp fetch. Drops only: fetch failure (private/deleted/unavailable/region-locked), `is_live`/`was_live`, members-only/paywalled. No view count threshold. `has_captions` is informational only (yt-intelligence-pipeline has local Whisper fallback).
+3. **Scoring** — `score_candidates(topic, candidates, tracker, client) → list[ScoredCandidate]` — Haiku 4.5 via tool-use, one call per candidate. Scores 1–5 on topical fit; `has_captions` as soft tiebreaker only. Emits `event_subtype="candidate_scoring"` TraceEvent.
+4. **Ingestion plan** — top-N candidates (≤ `max_items`) sorted by score. `estimated_cost_usd` is informational. Emits `event_subtype="ingestion_plan"` TraceEvent.
+5. **Ingestion** — `process_video(url, human_output=False, agent_output=True, collection_name=...)` for each selected candidate. BudgetExhaustedError caught per-item with `status="partial"`.
+6. **Coverage assessment** — after post-ingestion retrieval, emits `event_subtype="coverage_assessment"` TraceEvent with labels `empty / sparse / thin / adequate` (thresholds: sparse < 0.55 max score; thin ≤ 2 distinct sources). Appended to the Obsidian run report as a "## Coverage Assessment" section.
+7. **Synthesis** — Sonnet 4.6 synthesis with source attribution. Default on for `research` mode; off for `ingest` and `retrieve`.
+
+#### Run lifecycle
+
+```python
+async with BudgetTracker(effective_budget, "tutorial-research") as tracker:
+    tracker_ref = tracker
+    run_id = tracker.run_id
+    # ... mode-specific work ...
+except BudgetExhaustedError:
+    status = "partial"
+
+# Always after context exit — trace is finalized
+snap = tracker_ref._consumption
+report_path = render_run_report(run_id, "tutorial-research")
+_append_coverage_to_report(run_id, "tutorial-research", report_path)
+notify_run_complete("tutorial-research", run_id, status, cost_usd)
+```
+
+Stats (`cost_usd`, `items_processed`, `wall_time_sec`) are read from `tracker_ref._consumption` after the context exits so they're accurate even on partial runs.
+
+#### Library API
+
+```python
+from tutorial_research import research, research_sync, ResearchResult
+
+result = research_sync("python asyncio patterns")
+result = research_sync("python asyncio patterns", synthesize=False, dry_run=True)
+```
+
+#### CLI
+
+```bash
+uv run tutorial-research "python asyncio patterns"
+uv run tutorial-research "python asyncio patterns" --plan-only
+uv run tutorial-research "python asyncio patterns" --type retrieve --no-synthesize
+```
+
+#### Model constants
+
+| Constant | Model | Used for |
+|---|---|---|
+| `MODEL_SCORER` | `claude-haiku-4-5` | Candidate scoring (tool-use) |
+| `MODEL_SYNTHESIZER` | `claude-sonnet-4-6` | Research synthesis |
+| `MODEL_ORCHESTRATOR` | `claude-sonnet-4-6` | (reserved) |
+
+#### Default budget
+
+```
+max_items=5, max_depth=0, max_cost_usd=2.00, max_wall_time_sec=900
+```
+
+#### Known runtime gap (follow-up)
+
+`notify_budget_threshold` is called explicitly in `scoring.py` and `synthesis.py` because `BudgetTracker.check_budget()` does not auto-call it, despite the architecture doc implying it does. Follow-up: move the call into `BudgetTracker.check_budget()` and remove the explicit call sites.
 
 ### music-curation
 
@@ -201,9 +275,10 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv run pytest -v                   # full suite (167 tests)
-uv run pytest packages/agent-runtime/tests/ -v
-uv run pytest packages/yt-intelligence-pipeline/tests/ -v
+uv run pytest -v                                         # full suite (202 tests)
+uv run pytest packages/agent-runtime/tests/ -v          # 127 tests
+uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 40 tests
+uv run pytest packages/tutorial-research/tests/ -v      # 35 tests
 ```
 
 Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage or Anthropic API keys.

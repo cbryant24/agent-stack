@@ -4,10 +4,19 @@ version = "0.0.1"
 requires-python = ">=3.12"
 dependencies = [
     "agent-runtime",
+    "yt-intelligence-pipeline",
+    "anthropic>=0.40",
+    "tavily-python>=0.3",
+    "yt-dlp>=2024.1",
+    "click>=8.0",
 ]
+
+[project.scripts]
+tutorial-research = "tutorial_research.cli:cli"
 
 [tool.uv.sources]
 agent-runtime = { workspace = true }
+yt-intelligence-pipeline = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

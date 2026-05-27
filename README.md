@@ -6,9 +6,9 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 
 | Package | Description | Status |
 |---|---|---|
-| `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete |
-| `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete |
-| `tutorial-research` | Agent that researches and synthesizes programming tutorials | Under development |
+| `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (127 tests) |
+| `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (40 tests) |
+| `tutorial-research` | Agent that researches and synthesizes programming tutorials | Complete (35 tests) |
 | `music-curation` | Agent that curates and organizes music recommendations | Under development |
 
 ## Setup
@@ -55,7 +55,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv run pytest -v                   # full suite (167 tests)
+uv run pytest -v                   # full suite (202 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage or Anthropic API keys.
@@ -87,6 +87,33 @@ result = await process_video(
     agent_output=True,
     collection_name="tutorial_research",
 )
+```
+
+## Tutorial Research Agent
+
+**Research mode** (Tavily discovery → ingestion → synthesis):
+```bash
+uv run tutorial-research "python asyncio patterns"
+```
+
+**Plan only** (score candidates, no ingestion):
+```bash
+uv run tutorial-research "python asyncio patterns" --plan-only
+```
+
+**Retrieve mode** (query existing knowledge base):
+```bash
+uv run tutorial-research "python asyncio patterns" --type retrieve
+```
+
+**As a library:**
+```python
+from tutorial_research import research_sync
+
+result = research_sync("python asyncio patterns")
+print(result.synthesis)       # Sonnet-generated summary
+print(result.plan)            # scored candidates
+print(result.report_path)     # Obsidian run report
 ```
 
 ## Data Directories
