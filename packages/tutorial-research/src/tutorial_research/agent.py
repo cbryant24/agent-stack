@@ -9,6 +9,7 @@ from anthropic import AsyncAnthropic
 
 from agent_runtime import BudgetEnvelope, BudgetExhaustedError, TraceEvent
 from agent_runtime.budget import BudgetTracker
+from agent_runtime.config import get_config
 from agent_runtime.reporting import notify_run_complete, render_run_report
 from agent_runtime.tracing import get_current_persister
 
@@ -295,7 +296,7 @@ async def research(
     plan: IngestionPlan | None = None
     tracker_ref: BudgetTracker | None = None
 
-    client = AsyncAnthropic()
+    client = AsyncAnthropic(api_key=get_config().anthropic_api_key)
 
     try:
         async with BudgetTracker(effective_budget, "tutorial-research") as tracker:
