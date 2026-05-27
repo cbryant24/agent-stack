@@ -29,9 +29,9 @@ No delegations in this run.
 
 | Tool | Count |
 |------|-------|
-{% for name, count in tool_summary.items() %}
+{% for name, count in tool_summary.items() -%}
 | {{ name }} | {{ count }} |
-{% else %}
+{% else -%}
 | — | 0 |
 {% endfor %}
 
@@ -39,9 +39,9 @@ No delegations in this run.
 
 | Model | Calls | Input Tokens | Output Tokens | Cost USD |
 |-------|-------|--------------|---------------|----------|
-{% for row in llm_summary %}
+{% for row in llm_summary -%}
 | {{ row.model }} | {{ row.calls }} | {{ row.input_tokens }} | {{ row.output_tokens }} | ${{ "%.4f" | format(row.cost_usd) }} |
-{% else %}
+{% else -%}
 | — | 0 | 0 | 0 | $0.0000 |
 {% endfor %}
 

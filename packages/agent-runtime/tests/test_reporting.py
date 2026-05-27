@@ -258,6 +258,13 @@ class TestReportTableAggregation:
         assert "claude-sonnet-4-6" in content
         assert "claude-haiku-4-5" in content
 
+    def test_markdown_tables_have_no_blank_row_after_separator(self, tmp_path: Path) -> None:
+        content = self._render(tmp_path, "agg-llm", "tutorial-research")
+        llm_section = content.split("## LLM Usage", 1)[1].split("##", 1)[0]
+        tool_section = content.split("## Tool Calls", 1)[1].split("##", 1)[0]
+        assert "|\n\n|" not in llm_section
+        assert "|\n\n|" not in tool_section
+
     def test_llm_table_sonnet_combined(self, tmp_path: Path) -> None:
         content = self._render(tmp_path, "agg-sonnet", "tutorial-research")
         # Two sonnet calls: 1000+800=1800 input, 500+400=900 output
