@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -33,6 +35,32 @@ class TestRuntimeConfig:
         assert (cfg.agent_data_dir / "runs").exists()
         assert (cfg.agent_data_dir / "qdrant").exists()
         assert (cfg.agent_reports_vault / "tutorial-research").exists()
+
+    def test_tilde_in_agent_data_dir_is_expanded(
+        self, fake_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+    ) -> None:
+        from unittest.mock import patch
+        monkeypatch.setenv("AGENT_DATA_DIR", "~/test_tilde_data_dir_expansion")
+        monkeypatch.setenv("AGENT_REPORTS_VAULT", str(tmp_path / "reports"))
+        reset_config()
+        request.addfinalizer(reset_config)
+        with patch.object(Path, "mkdir"):
+            cfg = RuntimeConfig()
+        assert cfg.agent_data_dir == Path.home() / "test_tilde_data_dir_expansion"
+        assert not str(cfg.agent_data_dir).startswith("~")
+
+    def test_tilde_in_agent_reports_vault_is_expanded(
+        self, fake_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+    ) -> None:
+        from unittest.mock import patch
+        monkeypatch.setenv("AGENT_REPORTS_VAULT", "~/test_tilde_reports_vault_expansion")
+        monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path / "data"))
+        reset_config()
+        request.addfinalizer(reset_config)
+        with patch.object(Path, "mkdir"):
+            cfg = RuntimeConfig()
+        assert cfg.agent_reports_vault == Path.home() / "test_tilde_reports_vault_expansion"
+        assert not str(cfg.agent_reports_vault).startswith("~")
 
 
 class TestGetConfig:

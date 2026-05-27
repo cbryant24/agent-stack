@@ -210,6 +210,22 @@ class TestTracePersister:
         events = load_trace("nonexistent-run", "test-agent")
         assert events == []
 
+    def test_persister_writes_to_configured_path(
+        self, fake_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+    ) -> None:
+        from agent_runtime.config import reset_config
+        monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path / "data"))
+        reset_config()
+        request.addfinalizer(reset_config)
+
+        run_id = "path-check-run"
+        with TracePersister(agent="test-agent", run_id=run_id) as p:
+            p.record(TraceEvent(event_type="info", metadata={"check": True}))
+
+        traces = list((tmp_path / "data" / "runs").rglob("trace.jsonl"))
+        assert len(traces) == 1
+        assert '"check"' in traces[0].read_text()
+
 
 class TestInitTracing:
     def test_idempotent(self, fake_env: None) -> None:

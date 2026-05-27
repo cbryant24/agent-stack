@@ -172,6 +172,21 @@ class TestRenderRunReport:
             reset_config()
 
 
+    def test_render_run_report_raises_for_missing_trace(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+    ) -> None:
+        from agent_runtime.config import reset_config
+        monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("AGENT_REPORTS_VAULT", str(tmp_path / "reports"))
+        reset_config()
+        request.addfinalizer(reset_config)
+
+        from agent_runtime.reporting.renderer import render_run_report
+        with pytest.raises(FileNotFoundError) as exc_info:
+            render_run_report("nonexistent-run-id", "tutorial-research")
+        assert "nonexistent-run-id" in str(exc_info.value)
+
+
 class TestNotifications:
     def test_notify_calls_osascript_on_darwin(self) -> None:
         with patch("subprocess.run") as mock_run, \

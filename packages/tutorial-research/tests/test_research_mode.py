@@ -73,6 +73,28 @@ def test_research_mode_happy_path():
     assert result.report_path == Path("/tmp/report.md")
 
 
+def test_render_report_failure_is_logged_not_raised():
+    with (
+        patch("tutorial_research.agent.search_for_tutorials", AsyncMock(return_value=[URLS[0]])),
+        patch("tutorial_research.agent.fetch_video_metadata", AsyncMock(return_value=_candidate(URLS[0]))),
+        patch("tutorial_research.agent.score_candidates", AsyncMock(return_value=[_scored(URLS[0])])),
+        patch("yt_intelligence_pipeline.process_video", AsyncMock(return_value=_pipeline_result("youtube:aaa"))),
+        patch("tutorial_research.agent.retrieve_chunks", AsyncMock(return_value=[])),
+        patch("tutorial_research.agent._synthesize", AsyncMock(return_value="")),
+        patch("tutorial_research.agent.render_run_report", side_effect=FileNotFoundError("trace missing")),
+        patch("tutorial_research.agent.notify_run_complete"),
+        patch("tutorial_research.agent.logger") as mock_logger,
+    ):
+        from tutorial_research import research_sync
+
+        result = research_sync("python asyncio patterns")
+
+    assert result.status == "completed"
+    assert result.report_path is None
+    mock_logger.warning.assert_called()
+    assert "report" in str(mock_logger.warning.call_args).lower()
+
+
 def test_research_mode_synthesis_on_by_default():
     chunks = [RetrievedChunk(score=0.9, source_id="youtube:aaa", content="asyncio basics")]
     with (

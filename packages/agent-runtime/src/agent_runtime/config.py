@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,11 @@ class RuntimeConfig(BaseSettings):
     otel_endpoint: str = "http://localhost:4318"
     agent_data_dir: Path = Path("~/agent-data").expanduser()
     agent_reports_vault: Path = Path("~/obsidian/agent-reports").expanduser()
+
+    @field_validator("agent_data_dir", "agent_reports_vault", mode="before")
+    @classmethod
+    def _expand_path(cls, v: Any) -> Path:
+        return Path(v).expanduser()
 
     @model_validator(mode="after")
     def _ensure_directories(self) -> RuntimeConfig:

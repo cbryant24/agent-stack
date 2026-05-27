@@ -99,6 +99,13 @@ def render_run_report(
     config = get_config()
     events = load_trace(run_id, agent_name, date)
 
+    if not events:
+        runs_dir = config.agent_data_dir / "runs"
+        raise FileNotFoundError(
+            f"No trace found for run_id={run_id!r} agent={agent_name!r}. "
+            f"Expected trace.jsonl under {runs_dir}/<date>/{agent_name}/{run_id}/"
+        )
+
     ctx = _extract_context(events)
     summary = ctx["summary"]
 
