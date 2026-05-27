@@ -208,9 +208,20 @@ uv run tutorial-research "python asyncio patterns" --type retrieve --no-synthesi
 max_items=5, max_depth=0, max_cost_usd=2.00, max_wall_time_sec=900
 ```
 
-#### Known runtime gap (follow-up)
+#### Known runtime gaps (follow-ups)
 
-`notify_budget_threshold` is called explicitly in `scoring.py` and `synthesis.py` because `BudgetTracker.check_budget()` does not auto-call it, despite the architecture doc implying it does. Follow-up: move the call into `BudgetTracker.check_budget()` and remove the explicit call sites.
+**`notify_budget_threshold` not auto-called:** Called explicitly in `scoring.py` and `synthesis.py` because `BudgetTracker.check_budget()` does not auto-call it, despite the architecture doc implying it does. Follow-up: move the call into `BudgetTracker.check_budget()` and remove the explicit call sites.
+
+**Anthropic client construction — all agents:** `pydantic-settings` loads `.env` into config fields but does **not** inject values into `os.environ`. The Anthropic SDK (`AsyncAnthropic()`) reads `os.environ` directly, so calling `AsyncAnthropic()` with no arguments will fail to authenticate even when the key is set in `.env`. Every agent package must construct the client as:
+
+```python
+from agent_runtime.config import get_config
+from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic(api_key=get_config().anthropic_api_key)
+```
+
+The same applies to any other SDK that reads credentials from `os.environ` (Tavily, Voyage AI, etc.) — check their constructors and pass the key explicitly from `get_config()` rather than relying on environment variable injection.
 
 ### music-curation
 
