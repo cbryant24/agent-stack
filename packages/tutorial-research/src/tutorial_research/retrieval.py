@@ -24,6 +24,9 @@ async def retrieve_chunks(
             score=r.score,
             source_id=r.point.source_id,
             content=r.point.text,
+            source_title=r.point.source_title,
+            source_url=r.point.source_url,
+            chunk_index=r.point.chunk_index,
         )
         for r in results
     ]

@@ -73,6 +73,20 @@ def _emit_coverage_assessment(
         )
 
 
+def _append_retrieved_to_report(report_path: Path, retrieved: list[RetrievedChunk]) -> None:
+    if not retrieved:
+        return
+    lines = ["\n\n## Retrieved Content\n"]
+    for chunk in retrieved[:10]:
+        label = chunk.source_title or chunk.source_id
+        snippet = chunk.content[:200] + ("..." if len(chunk.content) > 200 else "")
+        lines.append(f"- [{chunk.score:.3f}] **{label}** — {snippet}")
+    if len(retrieved) > 10:
+        lines.append(f"\n*...and {len(retrieved) - 10} more chunks*")
+    with report_path.open("a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def _append_coverage_to_report(run_id: str, agent_name: str, report_path: Path) -> None:
     from agent_runtime.tracing import load_trace
 
@@ -168,6 +182,7 @@ async def _run_research(
 
     ingested: list[IngestedVideo] = []
     for candidate in selected:
+        tracker.check_budget()
         try:
             result = await process_video(
                 candidate.url,
@@ -188,8 +203,6 @@ async def _run_research(
             raise
         except Exception as exc:
             logger.warning("Failed to process %s: %s — continuing", candidate.url, exc)
-
-        tracker.check_budget()
 
     retrieved = await retrieve_chunks(collection, request)
     _emit_coverage_assessment(retrieved, ingested)
@@ -248,6 +261,7 @@ async def _run_ingest(
 
     ingested: list[IngestedVideo] = []
     for candidate in selected:
+        tracker.check_budget()
         try:
             result = await process_video(
                 candidate.url,
@@ -268,8 +282,6 @@ async def _run_ingest(
             raise
         except Exception as exc:
             logger.warning("Failed to process %s: %s — continuing", candidate.url, exc)
-
-        tracker.check_budget()
 
     return plan, ingested
 
@@ -322,6 +334,14 @@ async def research(
     except BudgetExhaustedError:
         status = "partial"
 
+    if (
+        status == "completed"
+        and not dry_run
+        and plan is not None
+        and len(ingested) < plan.estimated_items
+    ):
+        status = "partial"
+
     # Capture consumption stats after context exits — works for both completed and partial runs
     snap = tracker_ref._consumption if tracker_ref is not None else None
     cost_usd = snap.cost_usd if snap is not None else 0.0
@@ -334,6 +354,8 @@ async def research(
             report_path = render_run_report(run_id, "tutorial-research")
             if report_path:
                 _append_coverage_to_report(run_id, "tutorial-research", report_path)
+                if retrieved:
+                    _append_retrieved_to_report(report_path, retrieved)
         except Exception as exc:
             logger.warning("Failed to render run report: %s", exc)
         notify_run_complete("tutorial-research", run_id, status, cost_usd)

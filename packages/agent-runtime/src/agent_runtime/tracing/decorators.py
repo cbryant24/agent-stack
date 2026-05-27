@@ -136,6 +136,12 @@ def record_tool_call(tool_name: str, input_summary: str, output_summary: str) ->
             "tool.output": output_summary[:200],
         },
     ))
+    # Bridge to BudgetTracker — lazy import avoids circular dependency
+    # (budget.py imports record_llm_call from this module at module level)
+    from agent_runtime.budget import get_current_tracker  # noqa: PLC0415
+    tracker = get_current_tracker()
+    if tracker is not None:
+        tracker.add_tool_call()
 
 
 def record_delegation(target_agent: str, status: str, cost_usd: float) -> None:

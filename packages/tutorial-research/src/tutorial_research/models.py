@@ -44,6 +44,9 @@ class RetrievedChunk(BaseModel):
     score: float
     source_id: str
     content: str
+    source_title: str | None = None
+    source_url: str | None = None
+    chunk_index: int | None = None
 
 
 class ResearchResult(BaseModel):

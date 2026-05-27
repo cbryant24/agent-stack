@@ -93,5 +93,15 @@ def cli(
     if result.synthesis:
         click.echo(f"\nSynthesis:\n{result.synthesis}")
 
+    if result.retrieved and (result.request_type == "retrieve" or not result.synthesis):
+        count = len(result.retrieved)
+        click.echo(f"\nRetrieved Content ({count} chunk{'s' if count != 1 else ''}):")
+        for chunk in result.retrieved[:10]:
+            label = chunk.source_title or chunk.source_id
+            snippet = chunk.content[:200] + ("..." if len(chunk.content) > 200 else "")
+            click.echo(f"  [{chunk.score:.3f}] {label} — {snippet}")
+        if count > 10:
+            click.echo(f"  ...and {count - 10} more")
+
     if result.report_path:
         click.echo(f"\nReport: {result.report_path}")

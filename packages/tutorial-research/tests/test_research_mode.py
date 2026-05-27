@@ -275,3 +275,54 @@ def test_coverage_assessment_adequate():
     assert event.metadata["assessment"] == "adequate"
     assert event.metadata["retrieved_count"] == 10
     assert event.metadata["distinct_sources"] == 5
+
+
+# ── Bug 2 — partial/completed status logic ───────────────────────────────────
+
+def test_successful_run_at_max_items_returns_completed():
+    """A run where exactly max_items succeed should be completed, not partial."""
+    with (
+        patch("tutorial_research.agent.search_for_tutorials", AsyncMock(return_value=URLS)),
+        patch("tutorial_research.agent.fetch_video_metadata", AsyncMock(side_effect=lambda u: _candidate(u))),
+        patch("tutorial_research.agent.score_candidates", AsyncMock(return_value=[_scored(u) for u in URLS])),
+        patch("yt_intelligence_pipeline.process_video", AsyncMock(side_effect=lambda u, **kw: _pipeline_result(f"youtube:{u.split('=')[1]}"))),
+        patch("tutorial_research.agent.retrieve_chunks", AsyncMock(return_value=[])),
+        patch("tutorial_research.agent._synthesize", AsyncMock(return_value="")),
+        patch("tutorial_research.agent.render_run_report", return_value=Path("/tmp/report.md")),
+        patch("tutorial_research.agent.notify_run_complete"),
+    ):
+        from agent_runtime import BudgetEnvelope
+        from tutorial_research import research_sync
+
+        result = research_sync(
+            "python asyncio",
+            budget=BudgetEnvelope(max_items=2),
+        )
+
+    assert result.status == "completed"
+    assert result.items_processed == 2
+
+
+def test_one_failed_item_returns_partial():
+    """A run where one process_video call fails silently should be marked partial."""
+    def _fail_second(url: str, **kw: object) -> object:
+        if "bbb" in url:
+            raise RuntimeError("video unavailable")
+        return _pipeline_result(f"youtube:{url.split('=')[1]}")
+
+    with (
+        patch("tutorial_research.agent.search_for_tutorials", AsyncMock(return_value=URLS)),
+        patch("tutorial_research.agent.fetch_video_metadata", AsyncMock(side_effect=lambda u: _candidate(u))),
+        patch("tutorial_research.agent.score_candidates", AsyncMock(return_value=[_scored(u) for u in URLS])),
+        patch("yt_intelligence_pipeline.process_video", AsyncMock(side_effect=_fail_second)),
+        patch("tutorial_research.agent.retrieve_chunks", AsyncMock(return_value=[])),
+        patch("tutorial_research.agent._synthesize", AsyncMock(return_value="")),
+        patch("tutorial_research.agent.render_run_report", return_value=Path("/tmp/report.md")),
+        patch("tutorial_research.agent.notify_run_complete"),
+    ):
+        from tutorial_research import research_sync
+
+        result = research_sync("python asyncio")
+
+    assert result.status == "partial"
+    assert result.items_processed == 1

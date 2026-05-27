@@ -353,3 +353,29 @@ class TestTracePersisterContextVar:
             record_llm_call("claude-haiku-4-5", 100, 50, 0.0001)
             record_tool_call("search", "q", "r")
         # No error = pass
+
+
+class TestToolCallBridge:
+    def test_record_tool_call_increments_tracker(
+        self,
+        fake_env: None,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        request: pytest.FixtureRequest,
+    ) -> None:
+        import asyncio
+        from agent_runtime.config import reset_config
+        from agent_runtime import BudgetEnvelope
+        from agent_runtime.budget import BudgetTracker
+
+        monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path / "data"))
+        reset_config()
+        request.addfinalizer(reset_config)
+
+        async def _run() -> int:
+            async with BudgetTracker(BudgetEnvelope(), "test-agent") as tracker:
+                record_tool_call("voyage.embed", "texts", "vectors")
+                return tracker._consumption.tool_calls
+
+        count = asyncio.run(_run())
+        assert count == 1
