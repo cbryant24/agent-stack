@@ -8,7 +8,7 @@
 
 ### agent-runtime
 
-The shared infrastructure layer. All other packages import from here. **Status: complete.** 127 tests passing.
+The shared infrastructure layer. All other packages import from here. **Status: complete.** 133 tests passing.
 
 #### Layer 1 — Config & Models
 
@@ -21,13 +21,13 @@ The shared infrastructure layer. All other packages import from here. **Status: 
 
 - **`@traced`** decorator — handles sync and async, records span attributes from args, captures exceptions
 - **`span(name)`** — context manager for manual OTel spans
-- **Record helpers** — `record_llm_call`, `record_tool_call`, `record_delegation`, `record_memory_query`, `record_memory_write`; all emit OTel span attributes and, if a `TracePersister` is active, append `TraceEvent` JSONL lines
+- **Record helpers** — `record_llm_call`, `record_tool_call`, `record_delegation`, `record_memory_query`, `record_memory_write`; all emit OTel span attributes and, if a `TracePersister` is active, append `TraceEvent` JSONL lines. `record_tool_call` additionally bridges to `BudgetTracker.add_tool_call()` via a lazy import (avoiding the circular dependency where `budget.py` imports `record_llm_call` at module level). This means tool calls from any package — including external wrappers like yt-pipeline or Voyage — correctly increment the tracker's `tool_calls` counter.
 - **`TracePersister`** — sync context manager (`__enter__`/`__exit__`); writes `~/agent-data/runs/<date>/<agent>/<run_id>/trace.jsonl` using `threading.Lock`; exposes via `_current_persister` ContextVar so record helpers find it without being passed explicitly
 - **`init_tracing(service_name)`** — configures OTLPSpanExporter pointing at `get_config().otel_endpoint`
 
 #### Layer 3 — Budget & Delegation
 
-- **`BudgetTracker`** — async context manager; tracks cost (USD), tool calls, items processed, wall time; raises `BudgetExhaustedError` when any dimension is exceeded; emits summary `TraceEvent` on exit
+- **`BudgetTracker`** — async context manager; tracks cost (USD), tool calls, items processed, wall time; raises `BudgetExhaustedError` when any dimension is exceeded; emits summary `TraceEvent` on exit. `check_budget()` should be called at the **start** of each loop iteration (before doing work), not after — calling it after the last `add_item_processed()` would spuriously mark a fully-successful run as `partial`.
 - **Pricing table** (2026-05-26): `claude-opus-4-7/4-6` $15/$75, `claude-sonnet-4-6` $3/$15, `claude-haiku-4-5` $0.80/$4 per 1M tokens
 - **`_current_tracker`** ContextVar — lets nested code access the active `BudgetTracker` without explicit passing
 - **`register_agent` / `get_agent` / `list_agents`** — module-level agent registry
@@ -136,7 +136,7 @@ uv run yt-pipeline <url> --collection my_col # custom collection name
 
 ### tutorial-research
 
-The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 35 tests passing.
+The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 38 tests passing.
 
 #### Request modes
 
@@ -154,9 +154,10 @@ Mode is inferred from the request string (`classify_request()`) or set explicitl
 2. **Metadata filter** — `fetch_video_metadata(url) → CandidateEntry | None` — yt-dlp fetch. Drops only: fetch failure (private/deleted/unavailable/region-locked), `is_live`/`was_live`, members-only/paywalled. No view count threshold. `has_captions` is informational only (yt-intelligence-pipeline has local Whisper fallback).
 3. **Scoring** — `score_candidates(topic, candidates, tracker, client) → list[ScoredCandidate]` — Haiku 4.5 via tool-use, one call per candidate. Scores 1–5 on topical fit; `has_captions` as soft tiebreaker only. Emits `event_subtype="candidate_scoring"` TraceEvent.
 4. **Ingestion plan** — top-N candidates (≤ `max_items`) sorted by score. `estimated_cost_usd` is informational. Emits `event_subtype="ingestion_plan"` TraceEvent.
-5. **Ingestion** — `process_video(url, human_output=False, agent_output=True, collection_name=...)` for each selected candidate. BudgetExhaustedError caught per-item with `status="partial"`.
+5. **Ingestion** — `process_video(url, human_output=False, agent_output=True, collection_name=...)` for each selected candidate. `check_budget()` runs at the top of each iteration (before calling `process_video`) so the loop exits cleanly when the budget is reached without falsely marking the run partial. Non-budget exceptions log a warning and continue; if fewer items are ingested than `plan.estimated_items`, the run is marked `partial` after the loop.
 6. **Coverage assessment** — after post-ingestion retrieval, emits `event_subtype="coverage_assessment"` TraceEvent with labels `empty / sparse / thin / adequate` (thresholds: sparse < 0.55 max score; thin ≤ 2 distinct sources). Appended to the Obsidian run report as a "## Coverage Assessment" section.
-7. **Synthesis** — Sonnet 4.6 synthesis with source attribution. Default on for `research` mode; off for `ingest` and `retrieve`.
+7. **Retrieval** — `RetrievedChunk` carries `score`, `source_id`, `content`, `source_title`, `source_url`, and `chunk_index` (all populated from `MemoryPoint` fields stored by yt-pipeline at ingest time). Retrieved chunks are appended to the run report as a "## Retrieved Content" section and displayed in the CLI for `retrieve` mode or when synthesis is disabled.
+8. **Synthesis** — Sonnet 4.6 synthesis with source attribution. Default on for `research` mode; off for `ingest` and `retrieve`.
 
 #### Run lifecycle
 
@@ -168,10 +169,16 @@ async with BudgetTracker(effective_budget, "tutorial-research") as tracker:
 except BudgetExhaustedError:
     status = "partial"
 
+# Partial guard: silent process_video failures produce fewer ingested items than planned
+if status == "completed" and not dry_run and plan and len(ingested) < plan.estimated_items:
+    status = "partial"
+
 # Always after context exit — trace is finalized
 snap = tracker_ref._consumption
 report_path = render_run_report(run_id, "tutorial-research")
 _append_coverage_to_report(run_id, "tutorial-research", report_path)
+if retrieved:
+    _append_retrieved_to_report(report_path, retrieved)
 notify_run_complete("tutorial-research", run_id, status, cost_usd)
 ```
 
@@ -286,10 +293,10 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv run pytest -v                                         # full suite (202 tests)
-uv run pytest packages/agent-runtime/tests/ -v          # 127 tests
+uv run pytest -v                                         # full suite (211 tests)
+uv run pytest packages/agent-runtime/tests/ -v          # 133 tests
 uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 40 tests
-uv run pytest packages/tutorial-research/tests/ -v      # 35 tests
+uv run pytest packages/tutorial-research/tests/ -v      # 38 tests
 ```
 
 Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage or Anthropic API keys.
