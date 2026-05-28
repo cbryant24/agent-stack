@@ -136,7 +136,7 @@ uv run yt-pipeline <url> --collection my_col # custom collection name
 
 ### tutorial-research
 
-The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 38 tests passing.
+The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 41 tests passing.
 
 #### Request modes
 
@@ -157,7 +157,7 @@ Mode is inferred from the request string (`classify_request()`) or set explicitl
 5. **Ingestion** — `process_video(url, human_output=False, agent_output=True, collection_name=...)` for each selected candidate. `check_budget()` runs at the top of each iteration (before calling `process_video`) so the loop exits cleanly when the budget is reached without falsely marking the run partial. Non-budget exceptions log a warning and continue; if fewer items are ingested than `plan.estimated_items`, the run is marked `partial` after the loop.
 6. **Coverage assessment** — after post-ingestion retrieval, emits `event_subtype="coverage_assessment"` TraceEvent with labels `empty / sparse / thin / adequate` (thresholds: sparse < 0.55 max score; thin ≤ 2 distinct sources). Appended to the Obsidian run report as a "## Coverage Assessment" section.
 7. **Retrieval** — `RetrievedChunk` carries `score`, `source_id`, `content`, `source_title`, `source_url`, and `chunk_index` (all populated from `MemoryPoint` fields stored by yt-pipeline at ingest time). Retrieved chunks are appended to the run report as a "## Retrieved Content" section and displayed in the CLI for `retrieve` mode or when synthesis is disabled.
-8. **Synthesis** — Sonnet 4.6 synthesis with source attribution. Default on for `research` mode; off for `ingest` and `retrieve`.
+8. **Synthesis** — Sonnet 4.6 synthesis with source attribution, capped at `MAX_SYNTHESIS_TOKENS` (8192) output tokens. Default on for `research` mode; off for `ingest` and `retrieve`. The cap matches Sonnet 4.6's output ceiling to prevent mid-sentence truncation on longer research responses.
 
 #### Run lifecycle
 
@@ -203,11 +203,12 @@ uv run tutorial-research "python asyncio patterns" --type retrieve --no-synthesi
 
 #### Model constants
 
-| Constant | Model | Used for |
+| Constant | Value | Used for |
 |---|---|---|
 | `MODEL_SCORER` | `claude-haiku-4-5` | Candidate scoring (tool-use) |
 | `MODEL_SYNTHESIZER` | `claude-sonnet-4-6` | Research synthesis |
 | `MODEL_ORCHESTRATOR` | `claude-sonnet-4-6` | (reserved) |
+| `MAX_SYNTHESIS_TOKENS` | `8192` | Output token ceiling for synthesis calls (Sonnet 4.6 max); scoring calls are not affected |
 
 #### Default budget
 
@@ -293,10 +294,10 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv run pytest -v                                         # full suite (211 tests)
+uv run pytest -v                                         # full suite (214 tests)
 uv run pytest packages/agent-runtime/tests/ -v          # 133 tests
 uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 40 tests
-uv run pytest packages/tutorial-research/tests/ -v      # 38 tests
+uv run pytest packages/tutorial-research/tests/ -v      # 41 tests
 ```
 
 Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage or Anthropic API keys.

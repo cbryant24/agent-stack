@@ -8,7 +8,7 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 |---|---|---|
 | `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (133 tests) |
 | `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (40 tests) |
-| `tutorial-research` | Agent that researches and synthesizes programming tutorials | Complete (38 tests) |
+| `tutorial-research` | Agent that researches and synthesizes programming tutorials | Complete (41 tests) |
 | `music-curation` | Agent that curates and organizes music recommendations | Under development |
 
 ## Setup
@@ -55,7 +55,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv run pytest -v                   # full suite (211 tests)
+uv run pytest -v                   # full suite (214 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage or Anthropic API keys.

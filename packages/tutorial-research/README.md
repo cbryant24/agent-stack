@@ -106,7 +106,7 @@ Coverage thresholds:
 ## Running tests
 
 ```bash
-uv run pytest packages/tutorial-research/tests/ -v   # 38 tests
+uv run pytest packages/tutorial-research/tests/ -v   # 41 tests
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running.
