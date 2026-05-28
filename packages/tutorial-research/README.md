@@ -1,6 +1,6 @@
 # tutorial-research
 
-Agent that autonomously researches and synthesizes programming tutorials. Uses Tavily for discovery, yt-intelligence-pipeline for ingestion, and Sonnet 4.6 for synthesis. Depends on `agent-runtime`.
+Domain-agnostic agent that autonomously discovers, ingests, and synthesizes tutorial content into a queryable Qdrant knowledge base for other agents to consume. Uses Tavily for discovery, yt-intelligence-pipeline for ingestion, and Sonnet 4.6 for synthesis. Depends on `agent-runtime`.
 
 ## Request modes
 

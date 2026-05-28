@@ -8,7 +8,7 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 |---|---|---|
 | `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (133 tests) |
 | `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (40 tests) |
-| `tutorial-research` | Agent that researches and synthesizes programming tutorials | Complete (41 tests) |
+| `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content into a queryable knowledge base for other agents | Complete (41 tests) |
 | `music-curation` | Agent that curates and organizes music recommendations | Under development |
 
 ## Setup
@@ -93,24 +93,24 @@ result = await process_video(
 
 **Research mode** (Tavily discovery → ingestion → synthesis):
 ```bash
-uv run tutorial-research "python asyncio patterns"
+uv run tutorial-research "suno prompt structures"
 ```
 
 **Plan only** (score candidates, no ingestion):
 ```bash
-uv run tutorial-research "python asyncio patterns" --plan-only
+uv run tutorial-research "suno prompt structures" --plan-only
 ```
 
 **Retrieve mode** (query existing knowledge base):
 ```bash
-uv run tutorial-research "python asyncio patterns" --type retrieve
+uv run tutorial-research "suno meta tags for vocal control" --type retrieve
 ```
 
 **As a library:**
 ```python
 from tutorial_research import research_sync
 
-result = research_sync("python asyncio patterns")
+result = research_sync("suno prompt structures")
 print(result.synthesis)       # Sonnet-generated summary
 print(result.retrieved)       # list of RetrievedChunk (score, content, source_title, source_url)
 print(result.plan)            # scored candidates
