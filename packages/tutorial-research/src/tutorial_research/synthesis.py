@@ -7,7 +7,7 @@ from anthropic import AsyncAnthropic
 from agent_runtime.budget import BudgetTracker
 from agent_runtime.reporting import notify_budget_threshold
 
-from tutorial_research.constants import MODEL_SYNTHESIZER
+from tutorial_research.constants import MAX_SYNTHESIS_TOKENS, MODEL_SYNTHESIZER
 from tutorial_research.models import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def synthesize(
 
     response = await client.messages.create(
         model=MODEL_SYNTHESIZER,
-        max_tokens=1024,
+        max_tokens=MAX_SYNTHESIS_TOKENS,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
