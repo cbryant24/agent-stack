@@ -33,6 +33,7 @@ result = research_sync(
 
 print(result.plan.estimated_items)   # how many videos selected
 print(result.synthesis)              # Sonnet-generated synthesis text
+print(result.retrieved)              # list of RetrievedChunk with source metadata
 print(result.report_path)            # path to Obsidian run report
 ```
 
@@ -41,7 +42,7 @@ print(result.report_path)            # path to Obsidian run report
 | Field | Type | Description |
 |---|---|---|
 | `request_type` | `"research" \| "ingest" \| "retrieve"` | Inferred or explicit mode |
-| `status` | `"completed" \| "partial" \| "failed"` | `partial` when budget exhausted mid-run |
+| `status` | `"completed" \| "partial" \| "failed"` | `partial` if budget exhausted or any item fails silently |
 | `plan` | `IngestionPlan \| None` | Candidates scored and selected |
 | `ingested` | `list[IngestedVideo]` | Videos actually ingested this run |
 | `retrieved` | `list[RetrievedChunk]` | Chunks retrieved for synthesis context |
@@ -49,6 +50,17 @@ print(result.report_path)            # path to Obsidian run report
 | `report_path` | `Path \| None` | Obsidian-compatible Markdown report |
 | `cost_usd` | `float` | Total spend this run |
 | `items_processed` | `int` | Items processed (works even on partial runs) |
+
+### `RetrievedChunk` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `score` | `float` | Cosine similarity score from Qdrant |
+| `source_id` | `str` | e.g. `"youtube:abc123"` |
+| `content` | `str` | Text content of the chunk |
+| `source_title` | `str \| None` | Video title (populated from MemoryPoint at ingest time) |
+| `source_url` | `str \| None` | Original YouTube URL |
+| `chunk_index` | `int \| None` | Position of this chunk within its source video |
 
 ## CLI
 
@@ -75,7 +87,7 @@ uv run tutorial-research "python asyncio patterns" --max-items 10 --max-cost 5.0
 max_items=5, max_cost_usd=2.00, max_wall_time_sec=900
 ```
 
-Wall-time budget absorbs Whisper fallback cost on videos without captions. A `partial` result with 3 of 5 items processed is a valid outcome.
+Wall-time budget absorbs Whisper fallback cost on videos without captions. A `partial` result is a valid outcome — it occurs when the budget is exhausted mid-run or when one or more `process_video` calls fail silently (ingested fewer items than planned).
 
 ## Observability
 
@@ -83,6 +95,7 @@ Each run emits a JSONL trace and an Obsidian Markdown report. The report include
 - LLM usage by model (Haiku scoring + Sonnet synthesis)
 - Ingestion plan with scored candidates
 - **Coverage assessment**: after ingestion, retrieved chunks are evaluated for `empty` / `sparse` / `thin` / `adequate` coverage and appended to the report
+- **Retrieved content**: top-10 retrieved chunks with similarity scores and source titles, appended after the coverage assessment
 
 Coverage thresholds:
 - `empty` — no chunks retrieved
@@ -93,7 +106,7 @@ Coverage thresholds:
 ## Running tests
 
 ```bash
-uv run pytest packages/tutorial-research/tests/ -v   # 35 tests
+uv run pytest packages/tutorial-research/tests/ -v   # 38 tests
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running.
