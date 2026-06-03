@@ -21,6 +21,7 @@ from agent_runtime.tracing import (
     init_tracing,
     load_trace,
     record_delegation,
+    record_delegation_decision,
     record_llm_call,
     record_memory_query,
     record_memory_write,
@@ -47,6 +48,12 @@ from agent_runtime.reporting import (
     notify_budget_threshold,
     notify_run_complete,
     render_run_report,
+)
+from agent_runtime.knowledge import (
+    Draft,
+    KnowledgeEntry,
+    KnowledgeHit,
+    UserKnowledgeStore,
 )
 
 __all__ = [
@@ -75,6 +82,7 @@ __all__ = [
     "record_llm_call",
     "record_tool_call",
     "record_delegation",
+    "record_delegation_decision",
     "record_memory_query",
     "record_memory_write",
     "TracePersister",
@@ -101,4 +109,9 @@ __all__ = [
     "notify",
     "notify_budget_threshold",
     "notify_run_complete",
+    # knowledge
+    "UserKnowledgeStore",
+    "Draft",
+    "KnowledgeEntry",
+    "KnowledgeHit",
 ]

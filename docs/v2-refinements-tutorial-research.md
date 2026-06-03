@@ -1,7 +1,6 @@
-# tutorial-research v2 Refinements
+# tutorial-research v2 refinements
 
-Items observed during v1 real-world testing that are real limitations
-but not blockers. Filed for future work, not active.
+Items observed during v1 real-world testing that are real limitations but not blockers. Filed for future work, not active.
 
 ## Haiku scorer discrimination (calibration, low priority)
 

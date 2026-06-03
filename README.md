@@ -6,10 +6,10 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 
 | Package | Description | Status |
 |---|---|---|
-| `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (133 tests) |
+| `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (158 tests) |
 | `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (40 tests) |
-| `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content into a queryable knowledge base for other agents | Complete (41 tests) |
-| `music-curation` | Agent that curates and organizes music recommendations | Under development |
+| `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (50 tests) |
+| `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (213 tests) |
 
 ## Setup
 
@@ -55,7 +55,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv run pytest -v                   # full suite (214 tests)
+uv sync --all-packages && uv run pytest -v   # full suite (461 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage or Anthropic API keys.
@@ -124,7 +124,56 @@ print(result.report_path)     # Obsidian run report
 | `~/agent-data/` | Run artifacts, source files, Qdrant storage |
 | `~/agent-data/sources/youtube-tutorials/<id>/` | Transcripts, metadata, screenshots per video |
 | `~/agent-data/runs/<date>/<agent>/<run_id>/` | JSONL trace files |
+| `~/agent-data/drafts/user_knowledge/` | Pending `UserKnowledgeStore` entries awaiting confirmation (7-day expiry) |
 | `~/obsidian/agent-reports/` | Agent-generated Markdown reports |
+
+## Music Curation Agent
+
+**Generate Suno prompts:**
+```bash
+music-curation generate "lo-fi hip-hop for late-night studying"
+```
+
+**Record your reaction after running in Suno:**
+```bash
+music-curation report <gen_id> --reaction loved
+```
+
+**Search your generation history:**
+```bash
+music-curation recall "phonk with heavy bass"
+```
+
+**Review pending generations:**
+```bash
+music-curation review-pending
+```
+
+**Seed from session files:**
+```bash
+music-curation seed ingest ~/path/to/session-files/    # interactive confirmation
+music-curation seed ingest ~/path/to/file.md --dry-run # preview without writing
+music-curation seed review-taste                       # review deferred taste lessons
+```
+
+**As a library:**
+```python
+from music_curation import curate_sync, MusicResult
+
+result = curate_sync("atmospheric jazz with French café vibes")
+for prompt in result.prompts:
+    print(prompt.style_field)     # paste into Suno
+    print(prompt.lyrics_field)    # optional lyrics structure
+print(result.theory_reasoning)    # why these choices work
+```
+
+## Qdrant Collections
+
+| Collection | Contents |
+|---|---|
+| `user_knowledge` | Runtime-owned user-authored knowledge (Suno-mechanics facts + other verified knowledge) |
+| `tutorial_research` | YouTube tutorial transcripts + screenshots (populated by tutorial-research) |
+| `music_curation_memory` | Generation history, taste lessons, templates, sound references (music-curation) |
 
 ## Required Environment Variables
 

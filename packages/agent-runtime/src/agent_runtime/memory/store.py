@@ -12,11 +12,12 @@ from qdrant_client.models import (
     Filter,
     MatchAny,
     MatchValue,
+    PointStruct,
     Range,
     VectorParams,
 )
 
-from agent_runtime.memory.embeddings import MultimodalInput, get_embedding_client
+from agent_runtime.memory.embeddings import EmbeddingClient, MultimodalInput, get_embedding_client
 from agent_runtime.memory.schema import MemoryPoint, SearchResult
 from agent_runtime.tracing.decorators import record_memory_query, record_memory_write
 
@@ -49,6 +50,74 @@ def filter_after(dt: datetime) -> Filter:
 class MemoryStore:
     def __init__(self, url: str) -> None:
         self._client = AsyncQdrantClient(url=url)
+
+    # ── Low-level public surface ─────────────────────────────────────────────
+    # These methods expose raw Qdrant operations for components (like
+    # UserKnowledgeStore) that manage their own payload schema and cannot use
+    # the higher-level upsert_points / search methods, which assume MemoryPoint.
+
+    @property
+    def embedding_client(self) -> EmbeddingClient:
+        """Return the shared embedding client."""
+        return get_embedding_client()
+
+    async def upsert_raw_points(
+        self, collection: str, points: list[PointStruct]
+    ) -> None:
+        """Upsert pre-built PointStruct objects without re-embedding."""
+        for i in range(0, len(points), _UPSERT_BATCH_SIZE):
+            await self._client.upsert(
+                collection_name=collection,
+                points=points[i : i + _UPSERT_BATCH_SIZE],
+            )
+        record_memory_write(collection, len(points))
+
+    async def set_payload(
+        self, collection: str, point_id: str, payload: dict[str, Any]
+    ) -> None:
+        """Update specific payload fields on an existing point without re-embedding."""
+        await self._client.set_payload(
+            collection_name=collection,
+            payload=payload,
+            points=[point_id],
+        )
+
+    async def retrieve_points(
+        self, collection: str, point_ids: list[str]
+    ) -> list[Any]:
+        """Fetch points by ID. Returns raw qdrant Record objects (.id, .payload)."""
+        return await self._client.retrieve(
+            collection_name=collection,
+            ids=point_ids,
+            with_payload=True,
+        )
+
+    async def query_by_vector(
+        self,
+        collection: str,
+        vector: list[float],
+        *,
+        limit: int = 10,
+        filters: Filter | None = None,
+    ) -> list[tuple[str, float, dict[str, Any]]]:
+        """Search using a pre-computed vector.
+
+        Returns a list of (point_id, score, payload) tuples. For use by
+        components that manage their own payload schema.
+        """
+        results = await self._client.query_points(
+            collection_name=collection,
+            query=vector,
+            limit=limit,
+            query_filter=filters,
+            with_payload=True,
+        )
+        return [
+            (str(hit.id), hit.score, hit.payload or {})
+            for hit in results.points
+        ]
+
+    # ────────────────────────────────────────────────────────────────────────
 
     async def ensure_collection(self, name: str, vector_size: int = 1024) -> None:
         existing = await self._client.get_collections()

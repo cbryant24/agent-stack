@@ -10,11 +10,13 @@ Shared infrastructure library for the agent-stack workspace. All agent packages 
 
 **Tracing** — `@traced` decorator and `span()` context manager for OTel spans. `record_llm_call / record_tool_call / record_memory_*` helpers attach structured attributes to the current span. `TracePersister` writes a parallel JSONL trace to disk for offline reporting.
 
-**Budget** — `BudgetTracker` (async context manager) enforces per-run cost, item, and wall-time limits. Raises `BudgetExhaustedError` on violation. Tracks cost via a hardcoded pricing table for supported Claude models.
+**Budget** — `BudgetTracker` (async context manager) enforces per-run cost, item, and wall-time limits. Raises `BudgetExhaustedError` on violation. Tracks cost via a hardcoded pricing table for supported Claude models. `check_budget()` auto-fires `notify_budget_threshold` the first time usage crosses 75% on any of three dimensions (`max_cost_usd`, `max_items`, `max_wall_time_sec`) — once per dimension per run. Accepts `time_source: Callable[[], float]` (default `time.monotonic`) for clock injection in tests.
 
 **Delegation** — `register_agent / get_agent` registry + `delegate()` async function. Derives child budget from parent, enforces depth limits, and maps outcomes to `DelegationResult` (completed / partial / failed). Parent budget is automatically debited via contextvar.
 
-**Memory** — Qdrant-backed vector store (`MemoryStore`), Voyage AI embeddings (`EmbeddingClient`, model `voyage-3-large`), multimodal embeddings (`embed_multimodal`, model `voyage-multimodal-3`), `MultimodalInput` for text/image queries, and a tiktoken-based chunker (`chunk_document`) with paragraph/sentence-aware splitting and overlap.
+**Memory** — Qdrant-backed vector store (`MemoryStore`), Voyage AI embeddings (`EmbeddingClient`, model `voyage-3-large`), multimodal embeddings (`embed_multimodal`, model `voyage-multimodal-3`), `MultimodalInput` for text/image queries, and a tiktoken-based chunker (`chunk_document`) with paragraph/sentence-aware splitting and overlap. `MemoryStore` also exposes a low-level surface for components with custom payload schemas: `embedding_client` (property), `upsert_raw_points`, `set_payload`, `retrieve_points`, `query_by_vector`.
+
+**Knowledge** — `UserKnowledgeStore` is a runtime-owned wrapper for the `user_knowledge` Qdrant collection. Implements a propose → confirm workflow for individual entries and `bulk_load_verified` for seed batches. Drafts persist to `~/agent-data/drafts/user_knowledge/` with a 7-day expiry. Exports: `UserKnowledgeStore`, `Draft`, `KnowledgeEntry`, `KnowledgeHit`.
 
 **Reporting** — `render_run_report()` renders a Jinja2 Markdown report from the persisted trace and writes it to the Obsidian vault. `notify*` helpers fire macOS notifications.
 
@@ -36,6 +38,7 @@ from agent_runtime import BudgetExhaustedError, DelegationError, ConfigurationEr
 # Tracing
 from agent_runtime import init_tracing, traced, span
 from agent_runtime import record_llm_call, record_tool_call, record_delegation
+from agent_runtime import record_delegation_decision  # delegation-threshold tuning
 from agent_runtime import record_memory_query, record_memory_write
 from agent_runtime import TracePersister, load_trace
 
@@ -50,6 +53,9 @@ from agent_runtime import (
     MemoryPoint, SearchResult,
     chunk_document, chunk_document_with_structure,
 )
+
+# Knowledge
+from agent_runtime import UserKnowledgeStore, Draft, KnowledgeEntry, KnowledgeHit
 
 # Multimodal example
 from agent_runtime import MultimodalInput, get_embedding_client, get_memory_store
@@ -93,7 +99,7 @@ asyncio.run(main())
 ## Running tests
 
 ```bash
-# From workspace root
+# From workspace root (158 tests)
 uv run pytest packages/agent-runtime/ -v
 
 # Layer-by-layer

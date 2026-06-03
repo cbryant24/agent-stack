@@ -32,6 +32,7 @@ class RuntimeConfig(BaseSettings):
     def _ensure_directories(self) -> RuntimeConfig:
         for subdir in ("sources", "runs", "qdrant"):
             (self.agent_data_dir / subdir).mkdir(parents=True, exist_ok=True)
+        (self.agent_data_dir / "drafts" / "user_knowledge").mkdir(parents=True, exist_ok=True)
         for subdir in ("tutorial-research", "music-curation", "system"):
             (self.agent_reports_vault / subdir).mkdir(parents=True, exist_ok=True)
         return self

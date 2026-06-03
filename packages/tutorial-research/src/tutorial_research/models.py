@@ -47,6 +47,7 @@ class RetrievedChunk(BaseModel):
     source_title: str | None = None
     source_url: str | None = None
     chunk_index: int | None = None
+    collection_name: str | None = None
 
 
 class ResearchResult(BaseModel):

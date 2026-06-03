@@ -12,6 +12,7 @@ dev = [
     "ruff>=0.9",
     "mypy>=1.10",
     "ipython>=8.0",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [tool.pytest.ini_options]

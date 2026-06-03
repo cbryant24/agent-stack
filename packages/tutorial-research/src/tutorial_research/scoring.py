@@ -7,7 +7,6 @@ from anthropic import AsyncAnthropic
 
 from agent_runtime import BudgetExhaustedError, TraceEvent
 from agent_runtime.budget import BudgetTracker
-from agent_runtime.reporting import notify_budget_threshold
 from agent_runtime.tracing import get_current_persister
 
 from tutorial_research.constants import MODEL_SCORER
@@ -104,9 +103,6 @@ async def score_candidates(
 
     if total_input or total_output:
         tracker.add_llm_cost(MODEL_SCORER, total_input, total_output)
-        # TODO(agent-runtime): notify_budget_threshold should fire from BudgetTracker.check_budget;
-        # see handoff discrepancy 2026-05-26
-        notify_budget_threshold("tutorial-research", tracker.consumption, tracker.envelope)
 
     persister = get_current_persister()
     if persister:

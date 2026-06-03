@@ -49,7 +49,11 @@ This document specifies the agent ecosystem at the system level. Implementation 
 | Agent-readable references | Obsidian vault `agent-reports/` (separate from user's personal vault) |
 | Source documents | `~/agent-data/sources/` on disk |
 
-**Runtime fixes (2026-05-28):** During the tutorial-research build, four bugs were fixed in the shared layer: (1) `RuntimeConfig` now expands `~` in path fields via a validator (previously broke trace persistence silently); (2) `render_run_report` raises `FileNotFoundError` on a missing trace instead of returning a bogus path; (3) `record_tool_call` now correctly increments `BudgetTracker.consumption.tool_calls`; (4) tutorial-research's partial-vs-completed status logic was made explicit (completed unless an item fails or budget is exhausted). One deferred item: `notify_budget_threshold` is still called explicitly by agents rather than auto-firing from `BudgetTracker` — fold into the runtime when a second consumer justifies it.
+**Runtime fixes (2026-05-28):** During the tutorial-research build, four bugs were fixed in the shared layer: (1) `RuntimeConfig` now expands `~` in path fields via a validator (previously broke trace persistence silently); (2) `render_run_report` raises `FileNotFoundError` on a missing trace instead of returning a bogus path; (3) `record_tool_call` now correctly increments `BudgetTracker.consumption.tool_calls`; (4) tutorial-research's partial-vs-completed status logic was made explicit (completed unless an item fails or budget is exhausted).
+
+**Runtime additions (2026-05-29, Session 1 of music-curation arc):** (1) `UserKnowledgeStore` added to `agent-runtime` — runtime-owned wrapper for the `user_knowledge` Qdrant collection (user-authored first-party knowledge, distinct from `tutorial_research`); (2) `BudgetTracker.check_budget()` now auto-fires `notify_budget_threshold` once per dimension when usage exceeds 75% — the explicit calls were removed from tutorial-research; (3) tutorial-research retrieval now queries `user_knowledge` in parallel, applies a 1.25× score boost to those hits, and instructs Sonnet to treat them as authoritative.
+
+**Runtime additions (2026-05-29, Session 2 of music-curation arc):** (1) `record_delegation_decision(trigger_type, collection, query, local_max_score, threshold, decision)` added to `agent_runtime.tracing` — records delegation trigger check decisions as `event_type="info"` / `event_subtype="delegation_decision"` TraceEvents for post-hoc threshold tuning. Used by music-curation's delegation trigger logic.
 
 **Current choices, open to revision.** The stack above reflects what's been chosen for the current build, not permanent commitments. Several tools were considered and set aside for now but remain viable if the situation changes:
 
@@ -59,6 +63,40 @@ This document specifies the agent ecosystem at the system level. Implementation 
 - **Google Sheets** — not currently used because Qdrant + filesystem covers the data layer. For genuinely tabular, human-reviewable logging (generation logs, project status tracking) where Qdrant would be overkill or over-complicate things, Google Sheets is a reasonable choice and not ruled out.
 
 The principle: use the simplest tool that does the job well. Qdrant earns its place for semantic retrieval; it does not need to be forced onto problems that are better served by a spreadsheet or a flat file. Each of these tools should be adopted when it's the better answer, not avoided on principle.
+
+## Working-relationship rules
+
+Standing rules for how the user works with Claude across all agent builds. These survive into every chat that builds or modifies an agent in this system.
+
+**Single-version-of-inputs rule.** Anything the user will paste, copy, type, or act on
+elsewhere appears exactly once in the chat, in its final form. Refinements, improvements,
+alternate phrasings, or "actually, better:" versions of the same input do NOT appear in
+the same message as the original — by the time the refinement arrives, the user may have
+already acted on the first version, making the refinement either wasted or actively
+disruptive.
+
+If a better version occurs while composing: use it directly, don't show the worse one.
+If a better version occurs after sending: send a separate, clearly-marked follow-up
+message ("Use this instead of what I sent above:") before the user has acted.
+
+This rule applies to: Claude Code prompts, CLI commands the user will run, edited text
+for confirmation flows, message drafts, configuration values, scripts, file contents,
+or anything else the user will transfer out of chat. It does NOT apply to:
+explanations, reasoning, or analysis the user reads but doesn't act on — those can
+be revised in-message normally.
+
+Genuine forks where the call depends on user preference (e.g., "interactive vs.
+scripted") are not refinements; presenting both with their tradeoffs is correct.
+Refinements of the same recommendation are not forks and should not be presented as
+options.
+
+**No timelines, timeframes, or duration estimates.** Do not include phrases like "this should take X hours", "spend some time testing", "after a week of use", "in a few sessions", or any speculative duration or schedule. The user manages their own time. Recommendations include order and dependency, not schedule.
+
+**Treat the user as an experienced programmer.** No beginner framing, no over-explanation of fundamentals. Push back directly when the user's stated approach is wrong rather than accommodating it.
+
+**Terminal-first.** Prefer terminal-based solutions over GUI alternatives. CLI subcommands, scripts, and one-off Python invocations over web UIs or graphical tools, unless the GUI is genuinely the only option.
+
+## Build methodology
 
 ## The Agents
 
@@ -70,7 +108,7 @@ Status reflects current state of the `agent-stack` workspace.
 
 ### Tutorial Research Agent — `tutorial-research`
 
-**Status: complete.** 41 tests passing.
+**Status: complete.** 50 tests passing.
 
 **Purpose:** Builds domain knowledge bases for other agents to query. Given a topic, discovers relevant tutorial content, processes it through `yt-intelligence-pipeline`, and produces chunked + embedded points in the `tutorial_research` Qdrant collection. Can also delegate to itself — when another agent identifies a knowledge gap, it requests research on that gap.
 
@@ -91,8 +129,8 @@ Status reflects current state of the `agent-stack` workspace.
 **Tools it uses:**
 - Tavily web search for candidate discovery
 - `yt-intelligence-pipeline.process_video()` for ingestion
-- `MemoryStore.search()` for querying existing knowledge
-- Claude (Haiku) for candidate scoring; Claude (Sonnet) for synthesis
+- `MemoryStore.search()` for querying tutorial knowledge; `UserKnowledgeStore`-compatible query for `user_knowledge` (read-only)
+- Claude (Haiku) for candidate scoring; Claude (Sonnet) for synthesis (with authoritative weighting of user-knowledge hits)
 
 ---
 
@@ -114,9 +152,9 @@ The user explicitly wanted to start simple here — this isn't a forced workflow
 
 ---
 
-### Music Curation Agent — `music-curation` *(under development)*
+### Music Curation Agent — `music-curation`
 
-**Status: skeleton package exists, implementation pending.** Next in line for development.
+**Status: complete.** 213 tests passing.
 
 **Purpose:** A music-theory expert and creative partner with persistent memory, helping craft Suno prompts grounded in real musical understanding. The agent is genuinely expert in music theory — it understands harmony, rhythm, genre conventions, instrumentation, song structure, production techniques — and uses that expertise to translate the user's intent into effective Suno prompts. Reusable across video projects, podcasts, and standalone music exploration — not anime-mashup-specific.
 
@@ -301,20 +339,25 @@ Each agent owns one or more Qdrant collections. The structure:
 
 | Collection | Owned by | Contents |
 |---|---|---|
+| `user_knowledge` | `agent-runtime` (`UserKnowledgeStore`) | User-authored first-party knowledge: verified facts, doc distillations, hand-written experience. Shared across all agents. Seeded with Suno-mechanics facts during music-curation seed ingestion. |
 | `tutorial_research` | Tutorial Research | YouTube tutorial chunks + screenshot+caption multimodal points across all domains |
-| `music_curation_memory` | Music Curation | User taste, reference commentary, prior generation log |
+| `music_curation_memory` | Music Curation | Generation history (prompts + reactions + chains), taste lessons, templates, sound references |
 | `voiceover_direction_memory` | Voiceover Direction | User voice library notes, prior direction patterns, reference voices |
 | `technique_research_outputs` | Technique Research | Curated technique findings per domain |
 | `project_archive` | Cross-agent | Final artifacts and decisions from completed projects (planned, low priority) |
 
 Cross-collection reads are fine. Tutorial Research's collection is *the* tutorial knowledge base; any agent can query it.
 
+### Runtime-owned shared knowledge layer
+
+`user_knowledge` is special: it is owned by the runtime, not by any single agent. Any agent can read from it; only `UserKnowledgeStore` writes to it (via a propose → confirm workflow for individual entries, or `bulk_load_verified` for seed ingestion). This prevents multiple agents from independently writing conflicting facts to the same shared collection. The propose/confirm workflow makes human review practical — entries can be inspected as drafts before committing to Qdrant. Drafts live in `~/agent-data/drafts/user_knowledge/` and expire after 7 days.
+
 ## Build Order
 
 A rough current order, subject to revision based on what the user wants to use next. This covers the agents identified so far; new agents will slot in wherever they make sense.
 
-1. **Tutorial Research** — done (41 tests passing)
-2. **Music Curation** — next, has the most existing user material to work from
+1. **Tutorial Research** — done (50 tests passing)
+2. **Music Curation** — done (213 tests passing)
 3. **Concept & Script** — needed before Edit Brief and Voiceover Direction make sense
 4. **Voiceover Direction** — after Concept & Script (it consumes the script)
 5. **Technique Research** — useful in parallel with the above; not blocking
@@ -325,6 +368,72 @@ A rough current order, subject to revision based on what the user wants to use n
 Beyond these, the roster is open — image generation, thumbnail design, social scheduling, analytics, and others will be added as the need becomes concrete.
 
 Each agent build follows the same shape: scaffold the package, design the data models, build the chains, build the invocation surface(s), integrate into the runtime, write tests, document.
+
+## Build Methodology
+
+Every agent build in this system is split across three discrete chat sessions, each with its own scope and end condition. This pattern exists for two reasons: (1) chat and Claude Code token budgets are real constraints that one continuous session frequently exceeds, and (2) the natural shape of agent development has three distinct modes (design, implementation, refinement) that each benefit from a fresh context window.
+
+The phased pattern is mandatory for new agent builds. It does not apply to small follow-up changes to existing agents (e.g., the Group A reaction-vocabulary changes to music-curation), which are scoped to a single focused session.
+
+### Phase 1: Design and discovery
+
+**Scope.** Architecture, technology choices, memory model, workflow shape, CLI surface, and any other design questions specific to the new agent. No code is written.
+
+The phase opens with a design conversation, not a build prompt. The user and Claude work through the central design question for the agent (which is identified in the agent's handoff doc), then secondary questions in dependency order. Each decision is recorded with its reasoning, not just its conclusion. No premature schemas.
+
+**Scope discipline.** The central design question is the gate. Secondary questions are addressed only after the central question is settled with the user's explicit confirmation. Questions that surface during Phase 1 but are not necessary for Phase 2 to begin go on a "design questions to revisit" list — they do NOT get worked through in Phase 1. The instinct will be to keep opening adjacent design questions ("while we're at it, let's also figure out X"); resist that instinct. Phase 1 ends when the questions that must be answered for Phase 2 to make decisions are answered, not when every interesting question has been explored. A short Phase 1 that closes cleanly is better than a long Phase 1 that drifts.
+
+If during this phase the design conversation reveals gaps in the existing knowledge bases (`tutorial_research` and `user_knowledge`) that the agent will need at build time — for example, the new agent depends on understanding a third-party API the user hasn't yet ingested docs or tutorials for — Phase 1 also produces the *signals* for closing those gaps:
+
+- A Claude Code prompt for running `tutorial-research` against specific topics (preferred), and/or
+- A list of specific URLs, domains, or documents the user should manually retrieve and ingest into `user_knowledge` via the seed/docs ingestion paths.
+
+Phase 1 does NOT include actually gathering or ingesting that research. That happens as a between-phase activity. Phase 2 opens against a knowledge base that already has the gaps closed.
+
+**End condition.** All design questions necessary for Phase 2 are resolved with documented reasoning, the first build session's scope is concretely proposed, all research signals (if any) have been identified, and an updated handoff document is produced that hands off to Phase 2. The handoff includes everything Phase 2 needs to begin without re-deriving Phase 1's conclusions.
+
+### Phase 2: Implementation
+
+**Scope.** Write the agent. The phase begins with the Phase-1 handoff loaded as context, and the knowledge gaps from Phase 1's research signals already filled by the user. Claude Code does the implementation work; chat handles design questions that surface during build, smoke verification of intermediate states, and Claude Code prompt drafting.
+
+**Handoff verification at start.** Phase 2 opens with a deliberate verification turn before any implementation work begins. The user reads the Phase-1 handoff fresh and either confirms it still reflects their understanding, or flags any drift — things they learned during between-phase research ingestion that change Phase 1's conclusions, or anything that no longer feels right with fresh eyes. Any drift gets reconciled in the chat before any build prompt is sent. This is a short step but a load-bearing one: skipping it can mean Phase 2 commits to building against a stale design, with the staleness only surfacing mid-implementation when fixes are more expensive.
+
+The bar for Phase 2 completion is an MVP — the agent accomplishes the tasks described in its `ai-director-agent-system.md` section, confirmed working by the user via a real-use smoke test. Not "feature-complete." Not "all v2 refinements landed." Just: it works for its stated purpose.
+
+Issues, gaps, optimizations, and refinement opportunities will surface during Phase 2. These are evaluated against a single test:
+
+- If the issue blocks the MVP from working at all (architecture broken, data corruption, agent literally cannot complete its stated task), fix it in Phase 2.
+- If the issue is anything else — performance, ergonomics, missing-but-not-blocking features, code quality, doc cleanup — defer it to Phase 3.
+
+The judgment call to flag explicitly: code or architecture changes that would be substantially harder to make in Phase 3 (because Phase 3 is meant to be smaller-touch) should be considered for Phase 2 inclusion even if not strictly MVP-blocking. The threshold is real but not bright-line; when uncertain, propose the inclusion to the user with reasoning.
+
+**Post-MVP polish within Phase 2.** After the smoke test confirms the MVP working, there is typically a small set of immediate-friction items the user notices on first contact with the working agent — a confusingly-named flag, a missing display line, a default that proves wrong. These items are NOT Phase 3 work; they fall in a named "post-MVP polish" segment of Phase 2. The bar for inclusion in this segment is: noticed during the smoke test or immediately after, small enough to land in the remaining Phase 2 token budget, and would create accumulated friction if deferred. Anything larger than that, or anything not noticed in immediate post-smoke-test use, properly belongs in Phase 3. This segment exists to prevent the MVP-boundary ambiguity that otherwise forces users to choose between "extend Phase 2 indefinitely" and "live with rough edges until Phase 3."
+
+**End condition.** The agent is working as designed, verified by user smoke testing against a real use case, with immediate post-smoke-test friction items addressed. All documentation (`README.md`, `docs/architecture.md`, `docs/ai-director-agent-system.md`, the agent's own `packages/<agent>/README.md`) updated to reflect the post-Phase-2 state. An updated handoff document produced for Phase 3, capturing all deferred items from Phase 2.
+
+### Phase 3: Refinement
+
+**Scope.** Address the issues, changes, improvements, optimizations, and preferences deferred from Phase 2, scoped to non-major architecture changes, cost considerations, necessity, and scope-appropriate work. Phase 3 is deliberately smaller-touch than Phase 2 — it polishes a working agent, not redesigns one.
+
+Same pattern as Group A in the music-curation arc: focused, well-defined changes, often grouped by surface area for cohesion, each with explicit smoke verification.
+
+**End condition.** All Phase-3-scoped items either landed or moved to `v2-refinements-<agent>.md` with documented reasoning for the defer. The `v2-refinements-<agent>.md` file is the durable record of everything captured-but-not-built; it stays current. All other documentation (agent-stack `README.md`, `docs/architecture.md`, `docs/ai-director-agent-system.md`, the agent's own README) reflects the post-Phase-3 state. A handoff document is produced for the next agent, tool, or application to be built.
+
+### What survives between phases
+
+Between Phase 1 and Phase 2: the updated handoff doc, any new `docs/v2-refinements-<agent>.md` skeleton, any architecture-document additions, plus the user's between-phase research ingestion.
+
+Between Phase 2 and Phase 3: everything in the codebase plus the updated handoff with deferred-item list and all docs reflecting the post-Phase-2 state.
+
+After Phase 3: a new handoff for the next agent, plus all documentation fully current. Phase 3's end is the next agent's Phase 1 starting point.
+
+### When this pattern does NOT apply
+
+- Small follow-up changes to existing agents (e.g., adding a flag, renaming a value, fixing a bug). These fit in a single focused session.
+- Documentation-only updates (e.g., the post-Session housekeeping passes). Single session.
+- Cross-agent refactors that touch multiple existing agents but don't constitute a new agent build. Scope these independently.
+
+The three-phase pattern is specifically for new agent builds — the case where a new agent is being designed, implemented, and refined from a cold start.
 
 ## State of Connected Services
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
 from agent_runtime.exceptions import BudgetExhaustedError
 from agent_runtime.models import BudgetConsumption, BudgetEnvelope, TraceEvent
+from agent_runtime.reporting.notifications import notify_budget_threshold
 from agent_runtime.tracing.decorators import record_llm_call
 
 # Pricing table: USD per 1M tokens, sourced 2026-05-26 from Anthropic docs
@@ -32,6 +34,7 @@ class BudgetTracker:
         envelope: BudgetEnvelope,
         agent_name: str,
         run_id: str | None = None,
+        time_source: Callable[[], float] | None = None,
     ) -> None:
         self.envelope = envelope
         self.agent_name = agent_name
@@ -42,12 +45,14 @@ class BudgetTracker:
         self._persister: Any = None
         self._span: Any = None
         self._token: Any = None
+        self._time_source: Callable[[], float] = time_source or time.monotonic
+        self._threshold_fired: set[str] = set()
 
     async def __aenter__(self) -> BudgetTracker:
         from opentelemetry import trace
         from agent_runtime.tracing.persistence import TracePersister
 
-        self._start_time = time.monotonic()
+        self._start_time = self._time_source()
         self._persister = TracePersister(agent=self.agent_name, run_id=self.run_id)
         self._persister.__enter__()
 
@@ -67,7 +72,7 @@ class BudgetTracker:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        elapsed = time.monotonic() - self._start_time
+        elapsed = self._time_source() - self._start_time
         self._consumption.wall_time_sec = elapsed
 
         status = "failed" if exc_type is not None else "completed"
@@ -112,9 +117,35 @@ class BudgetTracker:
         self._consumption.delegations += 1
         self._consumption.cost_usd += child_cost_usd
 
+    def _maybe_notify_threshold(
+        self, dimension: str, current: float, maximum: float | int | None
+    ) -> None:
+        """Fire notify_budget_threshold once when usage first exceeds 75% on a dimension."""
+        if maximum is None or dimension in self._threshold_fired:
+            return
+        if current / maximum > 0.75:
+            notify_budget_threshold(self.agent_name, self._consumption, self.envelope)
+            self._threshold_fired.add(dimension)
+
     def check_budget(self) -> None:
-        elapsed = time.monotonic() - self._start_time
+        """Check all budget dimensions; raise BudgetExhaustedError if any limit is hit.
+
+        Also fires notify_budget_threshold once per dimension the first time usage
+        exceeds 75%. Threshold notifications cover three dimensions:
+          - max_cost_usd
+          - max_items (items_processed)
+          - max_wall_time_sec
+
+        There is no max_tool_calls dimension in BudgetEnvelope, so tool calls
+        are not threshold-checked here.
+        """
+        elapsed = self._time_source() - self._start_time
         self._consumption.wall_time_sec = elapsed
+
+        # Threshold notifications — fire once per dimension, before hard enforcement
+        self._maybe_notify_threshold("max_cost_usd", self._consumption.cost_usd, self.envelope.max_cost_usd)
+        self._maybe_notify_threshold("max_items", self._consumption.items_processed, self.envelope.max_items)
+        self._maybe_notify_threshold("max_wall_time_sec", elapsed, self.envelope.max_wall_time_sec)
 
         if (
             self.envelope.max_items is not None
@@ -141,7 +172,7 @@ class BudgetTracker:
 
     @property
     def consumption(self) -> BudgetConsumption:
-        elapsed = time.monotonic() - self._start_time
+        elapsed = self._time_source() - self._start_time
         return self._consumption.model_copy(update={"wall_time_sec": elapsed})
 
     @property

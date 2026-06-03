@@ -1,5 +1,6 @@
 from agent_runtime.tracing.decorators import (
     record_delegation,
+    record_delegation_decision,
     record_llm_call,
     record_memory_query,
     record_memory_write,
@@ -22,6 +23,7 @@ __all__ = [
     "record_llm_call",
     "record_tool_call",
     "record_delegation",
+    "record_delegation_decision",
     "record_memory_query",
     "record_memory_write",
     "TracePersister",

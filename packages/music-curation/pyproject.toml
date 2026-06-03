@@ -4,7 +4,12 @@ version = "0.0.1"
 requires-python = ">=3.12"
 dependencies = [
     "agent-runtime",
+    "anthropic>=0.40",
+    "click>=8.0",
 ]
+
+[project.scripts]
+music-curation = "music_curation.cli:cli"
 
 [tool.uv.sources]
 agent-runtime = { workspace = true }

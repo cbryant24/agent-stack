@@ -27,7 +27,7 @@ from tutorial_research.models import (
     RetrievedChunk,
     ScoredCandidate,
 )
-from tutorial_research.retrieval import retrieve_chunks
+from tutorial_research.retrieval import USER_KNOWLEDGE_COLLECTION, retrieve_chunks
 from tutorial_research.scoring import score_candidates
 from tutorial_research.search import search_for_tutorials
 from tutorial_research.synthesis import synthesize as _synthesize
@@ -76,13 +76,30 @@ def _emit_coverage_assessment(
 def _append_retrieved_to_report(report_path: Path, retrieved: list[RetrievedChunk]) -> None:
     if not retrieved:
         return
-    lines = ["\n\n## Retrieved Content\n"]
-    for chunk in retrieved[:10]:
+
+    uk_chunks = [c for c in retrieved if c.collection_name == USER_KNOWLEDGE_COLLECTION]
+    tutorial_chunks = [c for c in retrieved if c.collection_name != USER_KNOWLEDGE_COLLECTION]
+    has_uk = bool(uk_chunks)
+
+    lines: list[str] = []
+
+    section_title = "## Retrieved Content — Tutorial Research\n" if has_uk else "## Retrieved Content\n"
+    lines.append(f"\n\n{section_title}")
+    display = tutorial_chunks if tutorial_chunks else ([] if has_uk else retrieved)
+    for chunk in display[:10]:
         label = chunk.source_title or chunk.source_id
         snippet = chunk.content[:200] + ("..." if len(chunk.content) > 200 else "")
         lines.append(f"- [{chunk.score:.3f}] **{label}** — {snippet}")
-    if len(retrieved) > 10:
-        lines.append(f"\n*...and {len(retrieved) - 10} more chunks*")
+    if len(display) > 10:
+        lines.append(f"\n*...and {len(display) - 10} more chunks*")
+
+    if uk_chunks:
+        lines.append("\n\n## Retrieved Content — User Knowledge\n")
+        for chunk in uk_chunks:
+            label = chunk.source_title or chunk.source_id
+            snippet = chunk.content[:200] + ("..." if len(chunk.content) > 200 else "")
+            lines.append(f"- [{chunk.score:.3f}] **{label}** — {snippet}")
+
     with report_path.open("a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 

@@ -27,3 +27,4 @@ build/
 .cursor/
 *.swp
 *.swo
+tmp/

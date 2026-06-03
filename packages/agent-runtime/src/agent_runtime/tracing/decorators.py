@@ -160,6 +160,40 @@ def record_delegation(target_agent: str, status: str, cost_usd: float) -> None:
     ))
 
 
+def record_delegation_decision(
+    trigger_type: str,
+    collection: str,
+    query: str,
+    local_max_score: float,
+    threshold: float,
+    decision: str,
+) -> None:
+    """Record the outcome of a delegation trigger check.
+
+    Emitted before (or instead of) a delegation so post-hoc threshold tuning
+    is data-driven. decision is "delegate" or "local".
+    """
+    s = trace.get_current_span()
+    s.set_attribute("delegation_decision.trigger_type", trigger_type)
+    s.set_attribute("delegation_decision.collection", collection)
+    s.set_attribute("delegation_decision.local_max_score", local_max_score)
+    s.set_attribute("delegation_decision.threshold", threshold)
+    s.set_attribute("delegation_decision.decision", decision)
+    _emit_to_persister(TraceEvent(
+        event_type="info",
+        span_id=_current_span_id(),
+        metadata={
+            "event_subtype": "delegation_decision",
+            "trigger_type": trigger_type,
+            "collection": collection,
+            "query": query[:200],
+            "local_max_score": local_max_score,
+            "threshold": threshold,
+            "decision": decision,
+        },
+    ))
+
+
 def record_memory_query(collection: str, query: str, results_count: int) -> None:
     s = trace.get_current_span()
     s.set_attribute("memory.operation", "query")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from unittest.mock import patch
 
 import pytest
 from agent_runtime.budget import BudgetTracker, _PRICING
@@ -149,6 +150,84 @@ class TestBudgetTrackerEnforcement:
             async with BudgetTracker(envelope, "test-agent") as t:
                 t.add_llm_cost("claude-sonnet-4-6", 1000, 1000)
                 assert not t.check_can_afford(1.0)
+
+        asyncio.run(run())
+
+
+class TestBudgetThreshold:
+    """notify_budget_threshold fires from check_budget() at 75% — once per dimension."""
+
+    def test_fires_on_cost_cross(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0, max_cost_usd=1.0)
+            async with BudgetTracker(envelope, "test-agent") as t:
+                t._consumption.cost_usd = 0.76
+                with patch("agent_runtime.budget.notify_budget_threshold") as mock_notify:
+                    t.check_budget()
+                    mock_notify.assert_called_once()
+
+        asyncio.run(run())
+
+    def test_fires_on_items_cross(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0, max_items=10)
+            async with BudgetTracker(envelope, "test-agent") as t:
+                for _ in range(8):  # 80 % of 10
+                    t.add_item_processed()
+                with patch("agent_runtime.budget.notify_budget_threshold") as mock_notify:
+                    t.check_budget()
+                    mock_notify.assert_called_once()
+
+        asyncio.run(run())
+
+    def test_fires_on_wall_time_cross(self) -> None:
+        async def run() -> None:
+            fake_time = [0.0]
+
+            def time_source() -> float:
+                return fake_time[0]
+
+            envelope = BudgetEnvelope(max_depth=0, max_wall_time_sec=100)
+            async with BudgetTracker(envelope, "test-agent", time_source=time_source) as t:
+                fake_time[0] = 80.0  # 80 % of 100 s
+                with patch("agent_runtime.budget.notify_budget_threshold") as mock_notify:
+                    t.check_budget()
+                    mock_notify.assert_called_once()
+
+        asyncio.run(run())
+
+    def test_does_not_fire_below_75(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0, max_cost_usd=1.0)
+            async with BudgetTracker(envelope, "test-agent") as t:
+                t._consumption.cost_usd = 0.74  # below threshold
+                with patch("agent_runtime.budget.notify_budget_threshold") as mock_notify:
+                    t.check_budget()
+                    mock_notify.assert_not_called()
+
+        asyncio.run(run())
+
+    def test_fires_only_once_per_dimension(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0, max_cost_usd=1.0)
+            async with BudgetTracker(envelope, "test-agent") as t:
+                t._consumption.cost_usd = 0.80
+                with patch("agent_runtime.budget.notify_budget_threshold") as mock_notify:
+                    t.check_budget()
+                    t.check_budget()
+                    t.check_budget()
+                    assert mock_notify.call_count == 1
+
+        asyncio.run(run())
+
+    def test_no_fire_when_no_max_set(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0)  # no limits
+            async with BudgetTracker(envelope, "test-agent") as t:
+                t._consumption.cost_usd = 999.0
+                with patch("agent_runtime.budget.notify_budget_threshold") as mock_notify:
+                    t.check_budget()
+                    mock_notify.assert_not_called()
 
         asyncio.run(run())
 
