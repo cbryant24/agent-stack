@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import yt_dlp
+from agent_runtime.youtube import prepare_ydl_opts
 
 
 def is_playlist_url(url: str) -> bool:
@@ -14,6 +15,7 @@ def fetch_playlist_videos(playlist_url: str) -> tuple[str, list[str]]:
         "extract_flat": True,
         "skip_download": True,
     }
+    prepare_ydl_opts(opts)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(playlist_url, download=False)
 

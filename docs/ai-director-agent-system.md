@@ -96,8 +96,6 @@ options.
 
 **Terminal-first.** Prefer terminal-based solutions over GUI alternatives. CLI subcommands, scripts, and one-off Python invocations over web UIs or graphical tools, unless the GUI is genuinely the only option.
 
-## Build methodology
-
 ## The Agents
 
 The agents specified below are the ones currently identified — they are not a closed set. The system is designed to grow: new agents will be added as new domains and needs emerge (image generation, thumbnail design, social media scheduling, analytics, and others not yet imagined). Each new agent follows the same pattern — standalone, runtime-backed, independently invokable — so adding one doesn't disturb the others. Treat the list as the current roster, not a ceiling.
@@ -108,7 +106,7 @@ Status reflects current state of the `agent-stack` workspace.
 
 ### Tutorial Research Agent — `tutorial-research`
 
-**Status: complete.** 50 tests passing.
+**Status: complete.** 52 tests passing.
 
 **Purpose:** Builds domain knowledge bases for other agents to query. Given a topic, discovers relevant tutorial content, processes it through `yt-intelligence-pipeline`, and produces chunked + embedded points in the `tutorial_research` Qdrant collection. Can also delegate to itself — when another agent identifies a knowledge gap, it requests research on that gap.
 
@@ -194,23 +192,31 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 
 ---
 
-### Voiceover Direction Agent — `voiceover-direction` *(planned)*
+### Voiceover Direction Agent — `voiceover-direction`
 
-**Status: not built.**
+**Status: Phase 2 complete (MVP).** 145 tests passing.
 
-**Purpose:** Same shape as Music Curation but for voice. Reference-driven, iterative, knows the user's voice library. Generates ElevenLabs-ready scripts with emotion direction.
+**Purpose:** Same shape as Music Curation but for voice. Reference-driven, iterative, knows the user's voice library. Generates ElevenLabs-ready directed scripts with emotion direction, then spends characters on generation as a deliberate commitment.
 
-**Inputs:** As with Music Curation, the user doesn't yet know the full set of inputs that would serve this agent best and wants to discover them. Known starting points: script content (from Concept & Script Agent or provided directly), voice references (films, speeches, TV characters, prior voiceovers that hit the right tone), and some notion of intended delivery. But the user is explicit that he doesn't know all the useful framings — for example, the "use case" categories (narration, character voice, energetic intro, somber transition) are just examples he can think of, not a fixed taxonomy. Part of building this agent well is surfacing the inputs that genuinely shape good voice direction, including ones neither of us has named yet.
+**The central design decision (the cost inversion).** ElevenLabs *inverts* music-curation's cost structure. There, emitting the prompt was free and the scarce step was running it in Suno. Here it's reversed: **direction** (choosing text, emotion tags, voice, pacing) is LLM-only — cheap, infinitely iterable — while **generation** (the ElevenLabs TTS call) burns a scarce monthly character budget. So a turn is *direct freely until the direction is settled, then spend characters on generation as a deliberate commitment.* Iteration lives in direction, never in generation. The lifecycle is split — `generate` writes audio + a `pending` take and exits; the user listens, then `report`s a reaction.
+
+**Inputs:** Script content as **markdown with headings** (each heading is a section), produced by a human or the planned Concept & Script Agent. Voice references and intended delivery shape the direction. The "use case" categories (narration, character voice, energetic intro) remain examples, not a fixed taxonomy — the agent's direction lessons accumulate the real distinctions over use.
 
 **Outputs:**
-- Per-section text with emotion tags (`[excited]`, `[whispering]`, `[deadpan]`, etc.) in ElevenLabs's tag format
-- Recommended voice profile (which voice in the user's library, with reasoning)
-- Direction notes for delivery
-- Generated audio files via ElevenLabs API once the user approves
+- An **editable directed-script file** (`direct`) — markdown, headings preserved, audio tags (`[excited]`, `[whispers]`, etc.) inline, per-section metadata (voice, model, settings, notes) in invisible HTML-comment JSON that round-trips losslessly.
+- **Generated audio files + a `take` record** (`generate`) — born `pending` until the user reacts; section-scoped lineage so re-directs compound.
+- **Recorded reactions** (`report`) — `loved`/`liked`/`liked_with_changes`/`disliked`/`render_failed`, with the load-bearing `disliked` (aesthetic — weighs against the direction) vs. `render_failed` (the render missed, the direction was fine — territory stays open) distinction.
+- **Direction lessons + ElevenLabs-mechanics facts** accumulated in memory for retrieval on future runs.
 
-**Tools:** Known tools are Claude for direction and tagging, the runtime's memory layer (`voiceover_direction_memory`), the ElevenLabs API for generation, and delegation to Tutorial Research for ElevenLabs feature knowledge. Not a closed list — additional tools (audio analysis of reference voices, voice-matching heuristics) may be added if they improve results.
+**Two orthogonal budgets.** The per-run Claude cost (`direct` and the `generate` re-direction fold-in) stays in `BudgetEnvelope`. The **monthly ElevenLabs character budget never enters `BudgetEnvelope`** — it is queried from the vendor at generation time (source of truth, not a local counter that drifts because the user also generates in the ElevenLabs UI), shown at a **soft-inform** gate (cost + remaining, `--yes` to skip), and recorded only as a span attribute. ElevenLabs already hard-enforces the quota, so the agent informs rather than gatekeeps.
 
-**Note on ElevenLabs status:** the user is currently on the free plan. Cost-conscious design is appropriate — the agent should batch reasonably, support a "preview a single section before generating the rest" mode, and avoid burning credits on iterations the user could review in script form first.
+**Fixing a bad section (option B).** There is no separate re-direct command. The user notes the problem on `report`; the next `generate` for that section folds the note into a section-scoped re-direction (a Claude call) and shows the revised markup + cost at the soft-inform gate before spending. `--raw` skips the fold-in and speaks the file's markup verbatim (the hand-edit branch).
+
+**Tools:** Claude (Sonnet) for whole-script direction and the per-section re-direction; the runtime's memory layer (`voiceover_direction_memory` for takes + direction lessons, `user_knowledge` for `elevenlabs_mechanics` facts, `tutorial_research` for direction judgment — composed in parallel, user-knowledge score-boosted); the ElevenLabs API for `voice sync` (catalog), usage query (soft-inform), and TTS generation. Direction never triggers research inline — the cold-start knowledge gap is closed between phases via `knowledge ingest-docs` and tutorial-research, not at runtime.
+
+**Voice library:** synced from ElevenLabs via `voice sync` (stock + cloned, with labels/description) into a local JSON registry — vendor is source of truth, no hand-entry. Voice cloning is out of scope (done in ElevenLabs; `voice sync` picks clones up once they exist). The "which voice for what" intelligence emerges from takes + direction lessons (a `lesson add` with the voice attached), not a separate annotation surface.
+
+**Note on ElevenLabs status:** the user is currently on the free plan. The design is cost-conscious by construction — direction is free and infinitely iterable, generation is section-scoped behind a soft-inform gate, and nothing pays blind. `eleven_v3` is the expressive, audio-tag-capable default; its discrete stability *mode* (`creative`/`natural`/`robust`) is translated to the API's float at the ElevenLabs client boundary only (`creative→0.0`, `natural→0.5`, `robust→1.0`).
 
 ---
 
@@ -339,10 +345,10 @@ Each agent owns one or more Qdrant collections. The structure:
 
 | Collection | Owned by | Contents |
 |---|---|---|
-| `user_knowledge` | `agent-runtime` (`UserKnowledgeStore`) | User-authored first-party knowledge: verified facts, doc distillations, hand-written experience. Shared across all agents. Seeded with Suno-mechanics facts during music-curation seed ingestion. |
+| `user_knowledge` | `agent-runtime` (`UserKnowledgeStore`) | User-authored first-party knowledge: verified facts, doc distillations, hand-written experience. Shared across all agents. Seeded with Suno-mechanics facts (music-curation seed ingestion) and ElevenLabs-mechanics facts (`domain=elevenlabs_mechanics`, via voiceover-direction's `knowledge ingest-docs` / `fact add`). |
 | `tutorial_research` | Tutorial Research | YouTube tutorial chunks + screenshot+caption multimodal points across all domains |
 | `music_curation_memory` | Music Curation | Generation history (prompts + reactions + chains), taste lessons, templates, sound references |
-| `voiceover_direction_memory` | Voiceover Direction | User voice library notes, prior direction patterns, reference voices |
+| `voiceover_direction_memory` | Voiceover Direction | Takes (section text → voice/settings/reaction, section-scoped lineage) and direction lessons. The voice library is a local JSON registry, not a vector type; ElevenLabs-mechanics facts live in `user_knowledge` (`domain=elevenlabs_mechanics`). |
 | `technique_research_outputs` | Technique Research | Curated technique findings per domain |
 | `project_archive` | Cross-agent | Final artifacts and decisions from completed projects (planned, low priority) |
 
@@ -356,10 +362,10 @@ Cross-collection reads are fine. Tutorial Research's collection is *the* tutoria
 
 A rough current order, subject to revision based on what the user wants to use next. This covers the agents identified so far; new agents will slot in wherever they make sense.
 
-1. **Tutorial Research** — done (50 tests passing)
+1. **Tutorial Research** — done (52 tests passing)
 2. **Music Curation** — done (213 tests passing)
-3. **Concept & Script** — needed before Edit Brief and Voiceover Direction make sense
-4. **Voiceover Direction** — after Concept & Script (it consumes the script)
+3. **Voiceover Direction** — done, Phase 2 MVP (145 tests passing). Built ahead of Concept & Script: it consumes a markdown-with-headings script, which a human can author directly, so it doesn't block on the scriptwriting agent existing yet.
+4. **Concept & Script** — produces the brief/script that Voiceover Direction (and Edit Brief) consume; lines up with the directed-script input format already in place.
 5. **Technique Research** — useful in parallel with the above; not blocking
 6. **Edit Brief** — needs the upstream agents to produce its inputs
 7. **Feedback & Iteration** — needs Edit Brief to iterate on

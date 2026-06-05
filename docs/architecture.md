@@ -8,7 +8,7 @@
 
 ### agent-runtime
 
-The shared infrastructure layer. All other packages import from here. **Status: complete.** 158 tests passing.
+The shared infrastructure layer. All other packages import from here. **Status: complete.** 168 tests passing.
 
 #### Layer 1 — Config & Models
 
@@ -71,7 +71,7 @@ Runtime-owned wrapper around `MemoryStore` that owns the `user_knowledge` Qdrant
 | Field | Type | Notes |
 |---|---|---|
 | `statement` | str | The fact/assertion; also the vector source text |
-| `domain` | str | e.g. `suno_mechanics`, `music_theory`, `voiceover`, `general` |
+| `domain` | str | e.g. `suno_mechanics`, `elevenlabs_mechanics`, `music_theory`, `voiceover`, `general` |
 | `topic_tags` | list[str] | e.g. `["style_field", "copyright_filter"]` |
 | `source_type` | str | `user_verified`, `documentation`, `forum_distilled`, `manual` |
 | `source_ref` | str \| None | URL, doc citation, or `file://...` for seed-loaded entries |
@@ -110,7 +110,7 @@ Runtime-owned wrapper around `MemoryStore` that owns the `user_knowledge` Qdrant
 
 ### yt-intelligence-pipeline
 
-The canonical YouTube ingestion capability. **Status: complete.** 40 tests passing. Designed to be called both from the CLI and programmatically by agents.
+The canonical YouTube ingestion capability. **Status: complete.** 45 tests passing. Designed to be called both from the CLI and programmatically by agents.
 
 **Two modes of operation:**
 
@@ -183,7 +183,7 @@ uv run yt-pipeline <url> --collection my_col # custom collection name
 
 ### tutorial-research
 
-The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 50 tests passing.
+The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 52 tests passing.
 
 #### Request modes
 
@@ -370,6 +370,160 @@ max_items=1, max_depth=2, max_cost_usd=1.50, max_wall_time_sec=300
 
 ---
 
+### voiceover-direction
+
+ElevenLabs voiceover director. **Status: Phase 2 complete (MVP).** 145 tests passing.
+
+A director for voice work that inverts music-curation's cost structure: *direction* (choosing
+text, emotion tags, voice, pacing) is free LLM iteration, while *generation* (the ElevenLabs
+TTS call) burns a scarce monthly character budget. The turn is **direct freely until the
+direction is settled, then spend characters on generation as a deliberate commitment**;
+iteration lives in direction, never in generation. The lifecycle is split — `generate` writes
+audio + a `pending` take and exits; the user listens, then `report`s a reaction.
+
+#### Two orthogonal budgets
+
+The per-run Claude cost (for `direct` and the `generate` re-direction fold-in) stays in
+agent-runtime's `BudgetEnvelope`. The **monthly ElevenLabs character budget never enters
+`BudgetEnvelope`** — it is queried from the vendor at generation time (source of truth, not a
+local counter that drifts when you also generate in the ElevenLabs UI), displayed at a
+**soft-inform** gate, and recorded only as a span attribute (`elevenlabs.characters_consumed`).
+ElevenLabs already hard-enforces the quota, so the agent informs rather than gatekeeps.
+
+#### Collection & memory model
+
+`voiceover_direction_memory` (1024-dim cosine), two memory types discriminated by `memory_type`:
+
+- **`take`** — embed target: the section text sent to ElevenLabs. Payload: `voice_id`, `model`,
+  `settings` (model-agnostic dict), `emotion_tags`, `character_count`, `audio_path` (relative to
+  `agent_data_dir`, portable), `reaction`, `rating`, `status` (pending/complete, derived),
+  `section_id`, `project_id`, `domain`, `parent_take_id`, `chain_root_id`. Lineage is
+  **section-scoped** (music-curation's chain concept reshaped per section).
+- **`direction_lesson`** — embed target: the statement. Payload: `valence` (positive/negative),
+  `scope` (voice/pacing/tone/general), `confirmed`.
+
+The **voice registry** is *not* a vector type: a local JSON file
+(`<agent_data_dir>/voiceover/voices.json`) rewritten wholesale on each `voice sync`. Voices are
+enumerated/looked-up by `voice_id`, never semantically searched. **ElevenLabs mechanics facts**
+live in the runtime-owned `user_knowledge` collection (`domain=elevenlabs_mechanics`).
+
+#### Reaction vocabulary (`constants.py`)
+
+`loved`, `liked`, `liked_with_changes`, `disliked`, `render_failed` (a take is born `pending`).
+The load-bearing distinction adapts music-curation's `disliked`/`prompt_failed` split to TTS:
+
+- **`disliked`** — ElevenLabs rendered the direction faithfully, but the result isn't to taste
+  (aesthetic). Weighs **against** the direction/territory.
+- **`render_failed`** — ElevenLabs did **not** render the intent (tags ignored, mispronunciation,
+  wrong emphasis). The direction was fine, the territory stays **open**, and the prior take
+  surfaces as structure to learn from.
+
+Dropped from music-curation (don't apply to TTS — a take always has saved audio):
+`copyright_blocked`, `never_ran`, `lost_track`. `rating` (1–5) is meaningful only for the
+positive reactions.
+
+#### Retrieval (`retrieval.py`)
+
+`retrieve_context(query, store, memory_store, ...)` composes three collections in parallel via
+`asyncio.gather`: `voiceover_direction_memory` (prior takes, exclude-pending; direction lessons),
+`user_knowledge` (`domain=elevenlabs_mechanics`, 1.25× score boost — `USER_KNOWLEDGE_SCORE_MULTIPLIER`),
+and `tutorial_research`. Each leg degrades silently to an empty bucket, so `direct` stays useful
+from a cold start with every collection empty. Mirrors music-curation's composition.
+
+#### Direction (`agent.py`, `chains.py`)
+
+`direct` parses the input script (sections split at the shallowest heading level present, so
+`#`- and `##`-headed scripts both work; deeper headings stay in the body; regex/heuristic — no
+LLM extraction), composes retrieval, runs the whole-script direction chain (Sonnet 4.6, `MODEL_DIRECTOR`,
+`MAX_DIRECTION_TOKENS=8192` — every section in one pass), and writes an **editable
+directed-script file**. Direction never triggers research inline (it would break the fast free
+loop). LLM-only: no ElevenLabs call, no character spend, free and re-runnable.
+
+**Directed-script format** (`directed_script.py`): markdown with headings preserved (section
+identity), audio tags literal inline in the prose, and per-section metadata in invisible
+HTML-comment JSON so the arbitrary `settings` dict round-trips losslessly. Load-bearing
+invariant: `read_directed_script(write_directed_script(s)) == s`. The `section_id` is carried
+in the per-section metadata, so the round-trip is exact even for duplicate headings.
+
+#### Generation (`generation.py`)
+
+Split into two phases so the soft-inform gate can show the *revised* markup before any spend:
+
+1. **`plan_generation`** — resolves each target section to the exact text that will be spoken.
+   If a section's last take carries a `report` note (and not `--raw`), the note is folded into a
+   **section-scoped re-direction** (a Claude call from the last take — option B, the compounding
+   chain) and the revised markup is shown. This phase carries the Claude cost, guarded by
+   `GENERATE_BUDGET`'s cost cap.
+2. **`spend_generation`** — drives the resolved plan: TTS → audio file + a `pending` take per
+   section. No LLM call; the character spend is recorded only as a span attribute, never in the
+   budget.
+
+The CLI runs plan → interactive gate → spend; `generate` is a prompt-free combined entry (plan +
+auto-spend) for library use. `--raw` skips the fold-in and speaks the file's markup verbatim
+(the hand-edit branch).
+
+#### ElevenLabs client (`elevenlabs_client.py`) — stability mode→float at the boundary
+
+`ElevenLabsClient` wraps the official async SDK. `list_voices()` and `get_usage()` are read-only
+(vendor is source of truth; nothing cached); `synthesize()` is the paid TTS call.
+
+`eleven_v3` expresses stability as a discrete **mode** (`creative`/`natural`/`robust`), which the
+direction chain emits and the directed-script `settings` dict carries — but the API's
+`voice_settings.stability` is a **float** (0.0–1.0): lower = broader emotional range, higher =
+more consistent/monotonous. The client translates the mode to its float **at the vendor boundary
+only** (`_normalise_stability`): `creative → 0.0`, `natural → 0.5`, `robust → 1.0`. A numeric
+stability passes through unchanged (v2-style settings stay valid); an unknown mode string raises a
+clear `ValueError` naming the valid modes rather than re-triggering the opaque 422 the SDK returns
+for a non-numeric stability. The chain output and directed-script format are unchanged — only the
+adapter coerces. (Mapping confirmed against the ElevenLabs Python SDK `VoiceSettings` docs.)
+
+#### CLI subcommands
+
+```bash
+voiceover-direction direct <script.md> [-o out] [--project-id ID] [--domain D] [--max-cost N] [--dry-run]
+voiceover-direction generate <script.directed.md> (--section <id> | --all) [--raw] [-y] [--max-cost N]
+voiceover-direction report <take_id> --reaction <X> [--rating 1-5] [--notes ...] [--context ...]
+voiceover-direction review-pending
+voiceover-direction recall "<query>" [--limit N]
+voiceover-direction lesson add "<statement>" [--valence ...] [--scope ...]
+voiceover-direction fact add "<statement>" [--domain elevenlabs_mechanics] [--confidence ...]
+voiceover-direction knowledge ingest-docs <folder> [--dry-run] [--yes]
+voiceover-direction voice sync
+```
+
+`knowledge ingest-docs` mirrors music-curation's seed-ingest pattern applied to local ElevenLabs
+docs: each `##`+ heading becomes a candidate (heading hierarchy → `topic_tags`, body →
+`statement`), confirmed via y/n/edit/defer (no LLM), loaded through `bulk_load_verified`
+(`domain=elevenlabs_mechanics`, `source_type=documentation`, `confidence=high`, `source_ref`
+`file://` or `url://` from frontmatter). The docs folder is the durable queue (deferred/skipped
+sections reappear next run); a re-run dedups against existing entries keyed on
+source_ref + topic_tags + statement.
+
+#### Library API
+
+```python
+from voiceover_direction import (
+    direct, direct_sync, generate, generate_sync,
+    plan_generation, spend_generation, read_directed_script, write_directed_script,
+)
+
+result = direct_sync("script.md")                                  # DirectionResult
+result = generate_sync("script.directed.md", all_sections=True)    # GenerationResult (plan + auto-spend)
+```
+
+#### Default budgets (`constants.py`)
+
+```
+DEFAULT_BUDGET  (direct):    max_items=1,    max_depth=1, max_cost_usd=1.50, max_wall_time_sec=300
+GENERATE_BUDGET (generate):  max_items=None, max_depth=0, max_cost_usd=2.00, max_wall_time_sec=600
+```
+
+`GENERATE_BUDGET` has no item cap (a `--all` run processes many sections); the real limiter on
+spend is the vendor character quota, which is orthogonal and never in the envelope. The cost cap
+guards the option-B re-direction Claude path.
+
+---
+
 ## Storage Layer (Qdrant)
 
 - Runs locally via Docker Compose on `localhost:6333`
@@ -385,6 +539,7 @@ Key collections:
 | `tutorial_research` | YouTube tutorial transcripts + screenshots | `yt-intelligence-pipeline` agent mode |
 | `user_knowledge` | User-authored first-party knowledge (verified facts, doc distillations) | `UserKnowledgeStore` (agent-runtime) |
 | `music_curation_memory` | Generation history, taste lessons, templates, sound references | `MusicCurationStore` (music-curation) |
+| `voiceover_direction_memory` | Takes (text → voice/settings/reaction, section-scoped lineage) and direction lessons | `VoiceoverDirectionStore` (voiceover-direction) |
 
 ---
 
@@ -429,13 +584,14 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv sync --all-packages && uv run pytest -v               # full suite (461 tests)
-uv run pytest packages/agent-runtime/tests/ -v          # 158 tests
-uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 40 tests
-uv run pytest packages/tutorial-research/tests/ -v      # 50 tests
+uv sync --all-packages && uv run pytest -v               # full suite (623 tests)
+uv run pytest packages/agent-runtime/tests/ -v          # 168 tests
+uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 45 tests
+uv run pytest packages/tutorial-research/tests/ -v      # 52 tests
 uv run pytest packages/music-curation/tests/ -v         # 213 tests
+uv run pytest packages/voiceover-direction/tests/ -v    # 145 tests
 ```
 
-Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage or Anthropic API keys.
+Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage, Anthropic, or ElevenLabs API keys.
 
 **Monorepo pytest isolation:** `--import-mode=importlib` is set in the workspace root `pyproject.toml`. Packages do not have `tests/__init__.py` — this prevents namespace collisions when pytest collects from multiple packages.

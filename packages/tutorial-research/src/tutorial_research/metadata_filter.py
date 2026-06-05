@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from agent_runtime.youtube import prepare_ydl_opts
+
 from tutorial_research.models import CandidateEntry
 
 logger = logging.getLogger(__name__)
@@ -17,6 +19,7 @@ def _fetch_metadata_sync(url: str) -> CandidateEntry | None:
         "skip_download": True,
         "extract_flat": False,
     }
+    prepare_ydl_opts(ydl_opts)
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)

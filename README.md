@@ -6,10 +6,11 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 
 | Package | Description | Status |
 |---|---|---|
-| `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (158 tests) |
-| `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (40 tests) |
-| `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (50 tests) |
+| `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (168 tests) |
+| `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (45 tests) |
+| `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (52 tests) |
 | `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (213 tests) |
+| `voiceover-direction` | Director for ElevenLabs voiceover — free LLM direction, deliberate paid generation, persistent takes + direction lessons | Complete (145 tests) |
 
 ## Setup
 
@@ -22,6 +23,7 @@ uv sync
 ```bash
 cp .env.example .env
 # Edit .env — set ANTHROPIC_API_KEY, VOYAGE_API_KEY, OBSIDIAN_OUTPUT_PATH at minimum
+# (set ELEVENLABS_API_KEY too if using voiceover-direction)
 ```
 
 **3. Start infrastructure (Qdrant + Jaeger)**
@@ -46,7 +48,8 @@ agent-stack/
 │   ├── agent-runtime/              # shared runtime (config, tracing, budget, memory, reporting)
 │   ├── yt-intelligence-pipeline/   # YouTube ingestion pipeline
 │   ├── tutorial-research/          # tutorial agent
-│   └── music-curation/             # music agent
+│   ├── music-curation/             # music agent
+│   └── voiceover-direction/        # ElevenLabs voiceover director
 ├── infrastructure/                 # docker-compose.yml (Qdrant + Jaeger)
 └── docs/
     └── architecture.md             # detailed design and API reference
@@ -55,10 +58,10 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv sync --all-packages && uv run pytest -v   # full suite (461 tests)
+uv sync --all-packages && uv run pytest -v   # full suite (623 tests)
 ```
 
-Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage or Anthropic API keys.
+Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage, Anthropic, or ElevenLabs API keys.
 
 ## YouTube Pipeline
 
@@ -167,13 +170,60 @@ for prompt in result.prompts:
 print(result.theory_reasoning)    # why these choices work
 ```
 
+## Voiceover Direction Agent
+
+Direction is free LLM iteration; generation spends a scarce monthly ElevenLabs character
+budget. So you direct freely, then generate as a deliberate commitment, then react after
+listening.
+
+**Direct a script** (free, re-runnable — writes an editable directed-script file):
+```bash
+voiceover-direction direct script.md
+```
+
+**Generate audio** (spends ElevenLabs characters — soft-inform cost gate, folds in `report`
+notes as a section re-direction):
+```bash
+voiceover-direction generate script.directed.md --section intro   # one section
+voiceover-direction generate script.directed.md --all             # every section
+```
+
+**React after listening** (flips the take pending → complete):
+```bash
+voiceover-direction report <take_id> --reaction loved --rating 5
+```
+
+**Inspect and direct-write:**
+```bash
+voiceover-direction review-pending                        # takes awaiting a reaction
+voiceover-direction recall "energetic intro narration"    # search prior takes + lessons
+voiceover-direction lesson add "Rachel reads calm intros well" --scope voice
+voiceover-direction fact add "eleven_v3 reads inline audio tags"
+```
+
+**Knowledge + voices:**
+```bash
+voiceover-direction knowledge ingest-docs ~/elevenlabs-docs/   # local docs → user_knowledge
+voiceover-direction voice sync                                 # pull voices from ElevenLabs
+```
+
+**As a library:**
+```python
+from voiceover_direction import direct_sync, generate_sync
+
+result = direct_sync("script.md")                                 # DirectionResult
+print(result.output_path)                                         # the directed-script file
+result = generate_sync("script.directed.md", all_sections=True)   # GenerationResult (no gate)
+```
+
 ## Qdrant Collections
 
 | Collection | Contents |
 |---|---|
-| `user_knowledge` | Runtime-owned user-authored knowledge (Suno-mechanics facts + other verified knowledge) |
+| `user_knowledge` | Runtime-owned user-authored knowledge (Suno-mechanics + ElevenLabs-mechanics facts + other verified knowledge) |
 | `tutorial_research` | YouTube tutorial transcripts + screenshots (populated by tutorial-research) |
 | `music_curation_memory` | Generation history, taste lessons, templates, sound references (music-curation) |
+| `voiceover_direction_memory` | Takes (text → voice/settings/reaction) and direction lessons (voiceover-direction) |
 
 ## Required Environment Variables
 
@@ -182,5 +232,6 @@ print(result.theory_reasoning)    # why these choices work
 | `ANTHROPIC_API_KEY` | Claude API key |
 | `VOYAGE_API_KEY` | Voyage AI key (text + multimodal embeddings) |
 | `OBSIDIAN_OUTPUT_PATH` | Path to your Obsidian vault folder for pipeline notes |
+| `ELEVENLABS_API_KEY` | Required for voiceover-direction (voice sync, usage query, TTS generation) |
 | `TAVILY_API_KEY` | Optional — web search for research agents |
 | `LANGSMITH_API_KEY` | Optional — LangSmith tracing for pipeline chains |

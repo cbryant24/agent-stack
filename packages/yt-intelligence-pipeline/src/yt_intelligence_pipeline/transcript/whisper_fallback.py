@@ -5,6 +5,7 @@ from pathlib import Path
 
 import whisper
 import yt_dlp
+from agent_runtime.youtube import prepare_ydl_opts
 
 _model: whisper.Whisper | None = None
 
@@ -46,6 +47,7 @@ def _download_audio(youtube_url: str, dest_dir: Path) -> Path:
         "quiet": True,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
     }
+    prepare_ydl_opts(opts)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(youtube_url, download=True)
         video_id = info["id"]

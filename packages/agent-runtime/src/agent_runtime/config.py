@@ -18,6 +18,7 @@ class RuntimeConfig(BaseSettings):
     anthropic_api_key: str
     voyage_api_key: str
     tavily_api_key: str | None = None
+    elevenlabs_api_key: str | None = None
     qdrant_url: str = "http://localhost:6333"
     otel_endpoint: str = "http://localhost:4318"
     agent_data_dir: Path = Path("~/agent-data").expanduser()

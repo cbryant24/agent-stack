@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import yt_dlp
+from agent_runtime.youtube import prepare_ydl_opts
 
 
 def download_video_to_temp(youtube_url: str) -> Path:
@@ -15,6 +16,7 @@ def download_video_to_temp(youtube_url: str) -> Path:
         "quiet": True,
         "merge_output_format": "mp4",
     }
+    prepare_ydl_opts(opts)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(youtube_url, download=True)
         video_id = info["id"]
