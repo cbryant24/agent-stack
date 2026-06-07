@@ -183,6 +183,18 @@ class TestTasteLesson:
         lesson = TasteLesson(statement="test", valence="negative", scope="genre", confirmed=True)
         assert lesson.confirmed is True
 
+    def test_arrangement_scope(self):
+        # arrangement scope carries standing length/structure preferences
+        lesson = TasteLesson(
+            statement="Blues feels best compact — ~2 min, single verse, no extended jams",
+            valence="positive",
+            scope="arrangement",
+            confirmed=True,
+        )
+        assert lesson.scope == "arrangement"
+        restored = TasteLesson.from_payload(lesson.to_payload())
+        assert restored.scope == "arrangement"
+
     def test_to_from_payload(self):
         lesson = TasteLesson(
             statement="Memphis cowbell is essential for phonk",

@@ -166,7 +166,7 @@ class TasteLesson(BaseModel):
     entry_id: str = Field(default_factory=_new_id)
     statement: str
     valence: Literal["positive", "negative"]
-    scope: Literal["genre", "production", "instrumentation", "vocal", "general"]
+    scope: Literal["genre", "production", "instrumentation", "vocal", "arrangement", "general"]
     derived_from_session_ids: list[str] = Field(default_factory=list)
     confirmed: bool = False
     created_at: str = Field(default_factory=_now_iso)
@@ -237,7 +237,7 @@ class ParsedTasteLesson(BaseModel):
     """A taste lesson candidate awaiting user confirmation."""
     statement: str
     valence: Literal["positive", "negative"]
-    scope: Literal["genre", "production", "instrumentation", "vocal", "general"] = "general"
+    scope: Literal["genre", "production", "instrumentation", "vocal", "arrangement", "general"] = "general"
     session_id: str
     is_explicit: bool = False  # True for README-derived and explicit summary tables
 
@@ -271,7 +271,7 @@ class TastePendingDraft(BaseModel):
     draft_id: str = Field(default_factory=_new_id)
     statement: str
     valence: Literal["positive", "negative"]
-    scope: Literal["genre", "production", "instrumentation", "vocal", "general"] = "general"
+    scope: Literal["genre", "production", "instrumentation", "vocal", "arrangement", "general"] = "general"
     session_id: str
     source_path: str
     created_at: str = Field(default_factory=_now_iso)

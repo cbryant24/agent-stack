@@ -132,27 +132,29 @@ Status reflects current state of the `agent-stack` workspace.
 
 ---
 
-### Concept & Script Agent — `concept-script` *(planned)*
+### Concept & Script Agent — `concept-script`
 
-**Status: not built.**
+**Status: Phase 2 complete (MVP).** 33 tests passing.
 
-**Purpose:** Creative brief generator. Given a theme, mood, target duration, and stylistic references, produces a structured brief containing concept, pacing arc, script sections for voiceover, and creative direction for downstream agents.
+**Purpose:** A structural/craft scriptwriting collaborator. It proposes craft scaffolding — section breakdown, pacing, an emotional arc, and candidate per-section emotion direction — and **surfaces, never decides** the creative core (theme, message, which references matter). The user owns every decision by editing the output. This isn't a forced workflow and it isn't a creative automator; it's a collaborator that turns decided inputs into the artifact the next agent ingests.
 
-The user explicitly wanted to start simple here — this isn't a forced workflow, it's a scriptwriting collaborator. Initial implementation should focus on producing a brief that the user actually wants to use as input to other agents, not on automating creative decisions.
+**The load-bearing claim (what makes it useful):** v1's output **is** the Voiceover-Direction-ready `script.md`, not an abstract brief the user adapts later. If the primary output weren't the artifact the next agent consumes, the agent would produce homework, not input. Both input modes converge on the same editable `script.md`, and `voiceover-direction direct` consumes it unchanged.
 
-**Inputs (starting points, not exhaustive):** theme/topic, mood descriptors, target duration (or a musical reference that implies duration), stylistic references (artists, films, prior work), project type. The actual best inputs will be discovered as the agent is built.
+**Two input modes → one editable `script.md`:**
+- **`draft` (generative)** — sparse seeds (theme/topic, mood, target duration or a musical reference implying it, stylistic references, project type) plus an optional `--ref` prior-script reference. The agent *proposes* structure.
+- **`shape` (curation)** — a verbatim voice-dictation transcript. The agent *extracts* the structure latent in the stream-of-consciousness: it preserves verbatim content, strips disfluencies, keeps natural stumbles/self-corrections as content (the voiceover agent narrates them — intended), and resolves an in-band command channel where the `director note` wake phrase is the one deliberate edit signal (executed, then removed; each cut listed in a trailer).
 
-**Outputs:**
-- A structured `VideoBrief` containing a logline, pacing/structure plan, per-section voiceover script with emotion direction, and cross-references to other agents' inputs (music style hints for Music Curation, voice direction for Voiceover Direction)
-- Optional Obsidian note for human review
+**Output:** a single editable `script.md` — a logline, per-section script with **inline** emotion direction (literal `[tag]`s in the prose; there is no separate voice-direction field), and an optional music-hint block for Music Curation. The logline, music hint, and curation cut-trailer live in the pre-heading preamble, which the voiceover parser skips, so the same file is consumed by `direct` with nothing leaking into narration. No Obsidian note — the script file is the artifact the user edits and owns.
 
-**Tools (starting points):** Claude for generation, the runtime's memory layer for retrieving reference material from prior projects, and possible delegation to Tutorial Research when style references involve techniques the agent doesn't know. Additional tools added as they prove useful.
+**Memory model — stateless v1.** The agent owns **no Qdrant collection**. The feedback loop that earns a memory collection elsewhere (a `report --reaction` signal accumulating into lessons) does not exist here, so a collection would be storage with no learning mechanism. Prior work as reference material is covered by file reference (`--ref @prior-script.md`). Reading `user_knowledge` / `tutorial_research` to fill a gap is deferred (`docs/v2-refinements-concept-script.md`).
+
+**Tools:** Claude (Sonnet) for both the generative and curation chains. v1 stands alone on Claude plus user-provided references; Technique Research delegation and knowledge-base reads are deferred enhancements, not v1 dependencies. (The `voiceover-direction` package is a test-only dependency — the integration test imports its parser to prove the contract holds.)
 
 ---
 
 ### Music Curation Agent — `music-curation`
 
-**Status: complete.** 213 tests passing.
+**Status: complete.** 214 tests passing.
 
 **Purpose:** A music-theory expert and creative partner with persistent memory, helping craft Suno prompts grounded in real musical understanding. The agent is genuinely expert in music theory — it understands harmony, rhythm, genre conventions, instrumentation, song structure, production techniques — and uses that expertise to translate the user's intent into effective Suno prompts. Reusable across video projects, podcasts, and standalone music exploration — not anime-mashup-specific.
 
@@ -363,9 +365,9 @@ Cross-collection reads are fine. Tutorial Research's collection is *the* tutoria
 A rough current order, subject to revision based on what the user wants to use next. This covers the agents identified so far; new agents will slot in wherever they make sense.
 
 1. **Tutorial Research** — done (52 tests passing)
-2. **Music Curation** — done (213 tests passing)
+2. **Music Curation** — done (214 tests passing)
 3. **Voiceover Direction** — done, Phase 2 MVP (145 tests passing). Built ahead of Concept & Script: it consumes a markdown-with-headings script, which a human can author directly, so it doesn't block on the scriptwriting agent existing yet.
-4. **Concept & Script** — produces the brief/script that Voiceover Direction (and Edit Brief) consume; lines up with the directed-script input format already in place.
+4. **Concept & Script** — done, Phase 2 MVP (33 tests passing). Produces the `script.md` that Voiceover Direction consumes unchanged (and Edit Brief will consume later); the inline emotion-tag format aligns with the directed-script input contract already in place.
 5. **Technique Research** — useful in parallel with the above; not blocking
 6. **Edit Brief** — needs the upstream agents to produce its inputs
 7. **Feedback & Iteration** — needs Edit Brief to iterate on

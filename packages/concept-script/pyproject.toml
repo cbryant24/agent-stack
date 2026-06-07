@@ -1,0 +1,30 @@
+[project]
+name = "concept-script"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = [
+    "agent-runtime",
+    "anthropic>=0.40",
+    "click>=8.0",
+]
+
+[project.scripts]
+concept-script = "concept_script.cli:cli"
+
+[dependency-groups]
+# voiceover-direction is a TEST-ONLY dependency: the integration test imports its
+# parser to prove script.md is consumed unchanged. No runtime coupling.
+dev = [
+    "voiceover-direction",
+]
+
+[tool.uv.sources]
+agent-runtime = { workspace = true }
+voiceover-direction = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/concept_script"]

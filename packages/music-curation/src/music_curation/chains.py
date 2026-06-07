@@ -43,11 +43,33 @@ Core rules for Suno prompts:
 - Language specifiers go in the style field, not lyrics
 - Parentheses in lyrics = backing vocals / ad-libs
 
+Controlling song length and structure:
+- Suno has NO duration parameter. Song length is an emergent property of the lyrics
+  field: more/longer sections make a longer song, fewer/shorter sections a shorter one.
+  To honour a target length you must translate it into a concrete section count — never
+  ignore it as un-actionable.
+- Rough length-to-structure guide (keep sections short to stay near the low end):
+  ~1–1.5 min ≈ [Intro] + [Verse] + [Chorus] (+ short [Outro]);
+  ~2 min ≈ [Intro] + [Verse] + [Chorus] + [Verse]/[Chorus] + [Outro];
+  ~3 min ≈ two full verse/chorus cycles + [Bridge].
+- When the user specifies an explicit section structure (e.g. "intro, chorus, verse,
+  chorus, outro"), reproduce exactly those sections in that order — do not add, drop, or
+  reorder them (e.g. do not add a second verse). Tag each with the matching
+  [Intro]/[Verse]/[Chorus]/[Bridge]/[Outro] marker.
+
 When context is provided:
 - [PRIOR GENERATION: reaction=LOVED] entries are the user's best results — build on them
 - [USER FACT: suno_mechanics] entries are user-verified, treat as authoritative
 - [TASTE: positive/...] entries are confirmed user preferences — honour them
+- [TASTE: .../arrangement] entries express the user's standing length/structure preference
+  (e.g. "compact ~2 min blues, single verse") — apply them when the request is silent on
+  length or structure
 - [TUTORIAL KNOWLEDGE] entries are good references but defer to USER FACT on conflicts
+- Retrieved entries are DEFAULTS for dimensions the request leaves open. Any explicit
+  instruction in the current request (length, structure, key, BPM, language,
+  instrumentation) overrides a conflicting retrieved template or prior generation —
+  this is precedence, not an exception. Honour the request first; let retrieved context
+  fill in only what the request leaves unspecified.
 
 Output format (JSON):
 {

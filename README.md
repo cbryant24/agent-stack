@@ -9,8 +9,9 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 | `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (168 tests) |
 | `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (45 tests) |
 | `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (52 tests) |
-| `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (213 tests) |
+| `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (214 tests) |
 | `voiceover-direction` | Director for ElevenLabs voiceover — free LLM direction, deliberate paid generation, persistent takes + direction lessons | Complete (145 tests) |
+| `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (33 tests) |
 
 ## Setup
 
@@ -49,7 +50,8 @@ agent-stack/
 │   ├── yt-intelligence-pipeline/   # YouTube ingestion pipeline
 │   ├── tutorial-research/          # tutorial agent
 │   ├── music-curation/             # music agent
-│   └── voiceover-direction/        # ElevenLabs voiceover director
+│   ├── voiceover-direction/        # ElevenLabs voiceover director
+│   └── concept-script/             # scriptwriting collaborator (→ script.md)
 ├── infrastructure/                 # docker-compose.yml (Qdrant + Jaeger)
 └── docs/
     └── architecture.md             # detailed design and API reference
@@ -58,7 +60,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv sync --all-packages && uv run pytest -v   # full suite (623 tests)
+uv sync --all-packages && uv run pytest -v   # full suite (657 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage, Anthropic, or ElevenLabs API keys.
@@ -135,7 +137,16 @@ print(result.report_path)     # Obsidian run report
 **Generate Suno prompts:**
 ```bash
 music-curation generate "lo-fi hip-hop for late-night studying"
+
+# For longer, repeated requests, keep a markdown file per genre and pipe it in
+# (see packages/music-curation/cli-prompts/TEMPLATE.md for a commented starting point):
+music-curation generate "$(cat packages/music-curation/cli-prompts/blues.md)"
 ```
+
+Length is controlled by song structure, not a duration slider — a target like "around 2
+minutes" is mapped to a concrete section count, and an explicit section list is reproduced
+exactly. A one-off spec in the request overrides saved taste for that song without changing
+it; to set a durable length/structure preference use `taste add ... --scope arrangement`.
 
 **Record your reaction after running in Suno:**
 ```bash
@@ -215,6 +226,47 @@ result = direct_sync("script.md")                                 # DirectionRes
 print(result.output_path)                                         # the directed-script file
 result = generate_sync("script.directed.md", all_sections=True)   # GenerationResult (no gate)
 ```
+
+## Concept & Script Agent
+
+A structural/craft scriptwriting collaborator. It proposes section breakdown, pacing, and
+candidate per-section emotion direction, and **surfaces, never decides** the creative core —
+you own every decision by editing the file. Both modes emit a single editable `script.md`
+that `voiceover-direction direct` consumes unchanged.
+
+**Generative — sparse seeds → script.md** (optionally anchored to a prior script):
+```bash
+concept-script draft --seeds seeds.md -o script.md
+concept-script draft --seeds seeds.md --ref prior-script.md -o script.md
+concept-script draft "focus, calm, ~2 min, video essay"          # inline seeds
+```
+
+`packages/concept-script/cli-prompts/SEEDS_TEMPLATE.md` is a fill-in-the-blanks starting point.
+
+**Curation — a verbatim dictation transcript → script.md:**
+```bash
+concept-script shape transcript.txt -o script.md
+```
+
+`shape` strips disfluencies, **keeps** natural stumbles/self-corrections as content, and
+resolves an in-band command channel: `director note, delete that last portion` is executed
+and removed, with each cut listed in a trailer. The logline, optional `Music:` hint, and the
+cut trailer live in the pre-heading preamble, which the voiceover parser skips — so the file
+hands off to `voiceover-direction direct` with nothing leaking into narration.
+
+**As a library:**
+```python
+from concept_script import draft_sync, shape_sync
+
+result = draft_sync("late-night focus, contemplative, ~2 min")    # ConceptResult
+print(result.script_path)                                         # the written script.md
+print(result.brief.logline, [s.heading for s in result.brief.sections])
+result = shape_sync(open("transcript.txt").read())               # ConceptResult
+print(result.brief.cut_trailer)                                  # executed director-note cuts
+```
+
+concept-script is **stateless** — it owns no Qdrant collection; prior work is reused via
+`--ref`. See `packages/concept-script/README.md` and `docs/v2-refinements-concept-script.md`.
 
 ## Qdrant Collections
 

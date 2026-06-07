@@ -224,7 +224,7 @@ def taste() -> None:
 @taste.command("add")
 @click.argument("lesson")
 @click.option("--valence", type=click.Choice(["positive", "negative"]), required=True)
-@click.option("--scope", type=click.Choice(["genre", "production", "instrumentation", "vocal", "general"]), default="general")
+@click.option("--scope", type=click.Choice(["genre", "production", "instrumentation", "vocal", "arrangement", "general"]), default="general")
 def taste_add(lesson: str, valence: str, scope: str) -> None:
     """Add an explicit confirmed taste lesson."""
     from music_curation.models import TasteLesson

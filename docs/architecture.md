@@ -278,7 +278,7 @@ The same applies to any other SDK that reads credentials from `os.environ` (Tavi
 
 ### music-curation
 
-Music curation agent. **Status: complete.** 213 tests passing.
+Music curation agent. **Status: complete.** 214 tests passing.
 
 A music-theory expert and creative partner with persistent memory, helping craft Suno prompts grounded in real musical understanding.
 
@@ -305,7 +305,7 @@ The user's own hand-written domain reference (`seed/music-curation/AI-Music-Gene
 
 - **`Generation`** — embed target: `style_field`. Payload: `lyrics_field`, `reaction` (pending/loved/liked/liked_with_changes/disliked/prompt_failed/copyright_blocked/never_ran/lost_track), `status` (pending/complete), `session_id`, `chain_root_id`, `parent_id`, `bpm`, `language`, `suggested_track_title`, `change_summary`, `goal`, `rating` (optional 1-5), `notes` (action-oriented), `context` (reasoning-oriented). `disliked` = Suno rendered correctly but not to taste (aesthetic); `prompt_failed` = Suno didn't render the prompt's intent (prompt-engineering issue). The `notes` field was previously `user_note`: legacy entries written before this change carry `user_note` in their payload, and `from_payload` maps it to `notes` transparently on read (only when `notes` is absent). Writes always emit `notes`. **This dual-key read is intentional and permanent — not a transitional state**; there is no migration, because writes already converged on `notes` and the read shim costs nothing.
 - **`Template`** — embed target: `descriptor`. Payload: `style_pattern`, `swap_variables`, `domain_tags`.
-- **`TasteLesson`** — embed target: `statement`. Payload: `valence` (positive/negative), `scope` (genre/production/instrumentation/vocal/general), `confirmed`.
+- **`TasteLesson`** — embed target: `statement`. Payload: `valence` (positive/negative), `scope` (genre/production/instrumentation/vocal/arrangement/general), `confirmed`. The `arrangement` scope holds standing **length / song-structure / section-layout** preferences (e.g. "compact ~2 min blues, single verse"); it is applied as a default when a request is silent on length or structure. `parser._infer_taste_scope` routes length/structure keywords (length, duration, minute, section, verse, chorus, intro, outro, bridge, hook) to it during seed ingestion.
 - **`SoundReference`** — embed target: `description`. Payload: `source_track`, `qualities`, `linked_generation_ids`, `linked_suno_tags`.
 - **`SunoPrompt`** — output type: `style_field` (validated ≤ 1000 chars, truncated on output), `lyrics_field`.
 - **`MusicResult`** — returned by `curate()`: `prompts: list[SunoPrompt]`, `theory_reasoning`, `cross_references: list[GenerationRef]`, `generation_ids`, `run_id`, `status`, `cost_usd`, `items_processed`, `wall_time_sec`, `report_path`.
@@ -329,6 +329,7 @@ Key methods: `upsert_generation`, `upsert_generations_bulk`, `upsert_template`, 
 #### Generation chain (`music_curation/chains.py`)
 
 - `generate_prompts(request, ctx, client)` → `(list[SunoPrompt], theory_reasoning, suggested_titles)` — Sonnet 4.6, JSON output, 4096 output tokens.
+- **Length & structure control (system prompt).** Suno exposes no duration parameter — length is an emergent property of the lyrics field. `_SYSTEM_PROMPT` carries an explicit length→structure mapping (~1–1.5 min ≈ intro+verse+chorus; ~2 min ≈ intro+verse+chorus+verse/chorus+outro; ~3 min ≈ two cycles + bridge) so a stated target is translated into a concrete section count instead of being dropped, and instructs the model to reproduce an explicitly listed section structure exactly (no added/dropped/reordered sections). **Request-over-context precedence:** an explicit request dimension (length, structure, key, BPM, language, instrumentation) overrides a conflicting retrieved template or prior generation — framed as precedence, not an exception, so a one-off spec never has to fight or pollute retrieval. Retrieved entries (including `[TASTE: .../arrangement]`) act as defaults only for dimensions the request leaves open. This closed the gap where requests like "around 2 minutes / one intro-chorus-verse-chorus-outro" were silently dropped and an extra verse was generated.
 - `check_for_question(request, ctx, client)` — one targeted clarifying question if it would materially change output; returns `None` to proceed without asking.
 - `DelegationTrigger.check(request, ctx)` → `"local"`, `"retrieve"`, or `"ingest"` — concrete trigger conditions (suno feature, music-theory why-question, artist reference) checked against thresholds in `constants.py`. Each decision emits a `record_delegation_decision` trace event with `local_max_score`, `threshold`, and `decision` for post-hoc tuning.
 
@@ -524,6 +525,93 @@ guards the option-B re-direction Claude path.
 
 ---
 
+### concept-script
+
+Structural/craft scriptwriting collaborator. **Status: Phase 2 complete (MVP).** 33 tests passing.
+
+Turns sparse creative seeds or a verbatim dictation transcript into a single editable `script.md`
+that `voiceover-direction direct` consumes unchanged. It proposes craft scaffolding (section
+breakdown, pacing, an emotional arc, candidate per-section emotion direction) and **surfaces, never
+decides** the creative core — the user owns every decision by editing the file. The load-bearing
+claim: v1's output **is** the Voiceover-Direction-ready script, not an abstract brief adapted later.
+
+#### Stateless by design — no collection
+
+concept-script owns **no Qdrant collection** and writes no memory. The `report --reaction` feedback
+loop that earns a collection for music-curation/voiceover-direction does not exist here (brief
+quality only surfaces many steps downstream and attribution back is muddy), so a collection would be
+storage without a learning mechanism. Prior work is reused via file reference (`--ref @prior-script.md`),
+since outputs are files. Reading `user_knowledge` / `tutorial_research` to fill a gap is deferred (see
+`docs/v2-refinements-concept-script.md`). The only side effect of a run is writing the script file;
+runtime wiring (budget, tracing, run report) mirrors the rest of the stack minus the stateful parts.
+
+#### Two modes → one artifact (`agent.py`, `chains.py`)
+
+- **`draft` (generative)** — `generate_brief(seeds, client, prior_script=...)` takes sparse seeds
+  (theme, mood, duration or a musical reference implying it, stylistic references, project type) plus
+  an optional prior-script reference, and asks Sonnet 4.6 (JSON) for a `VideoBrief`.
+- **`shape` (curation)** — `shape_brief(transcript, client)` resolves an in-band command channel
+  inside a verbatim dictation transcript (see below) and returns a `VideoBrief` plus a cut trailer.
+
+Both share `_record_llm` (the cost-routing bridge through the active `BudgetTracker`, same pattern as
+music-curation) and a JSON→`VideoBrief` validator. `MODEL = claude-sonnet-4-6`, `MAX_TOKENS = 8192`.
+
+#### Curation command channel (`shape`)
+
+The dictation tool captures verbatim; the chain's system prompt resolves the channel: preserve
+verbatim content; strip disfluencies (uh/um/dead-air/false starts); **keep** natural stumbles and
+self-corrections as content (authentic texture the voiceover agent will narrate); detect the
+**`director note` wake phrase** — the one deliberate edit signal, legitimate because it originates in
+the user's own dictation — execute its instruction (e.g. delete a portion) and remove the phrase plus
+its instruction from the output; then apply sectioning and inline emotion direction. Every executed
+cut is recorded in `VideoBrief.cut_trailer`. Provenance rule: nothing in the transcript other than a
+`director note` is ever treated as a command.
+
+#### The script.md format (`models.py`, `serialize.py`)
+
+`VideoBrief(logline, sections: list[BriefSection(heading, prose)], music_hint, cut_trailer)` serializes
+via `to_script_md`. The format is dictated by the consumer, `voiceover_direction.parser.parse_script_text`:
+
+- **Each section is an H1.** The voiceover parser splits at the shallowest heading level present and
+  slugifies the heading into the `section_id`; concept-script never authors ids.
+- **Emotion direction is inline** as literal ElevenLabs-style `[tag]`s in the prose (no separate
+  field) — the parser passes them through and `direct` refines them.
+- **The logline, optional `Music:` hint, and the cut trailer (an HTML comment) all live in the
+  preamble before the first `#`.** The voiceover parser skips everything before the first heading
+  (logging a harmless warning), so none of it leaks into narration. This is the invariant that makes
+  the file "consumed unchanged." Verified end-to-end by `tests/test_integration.py`, which feeds
+  serialized output through the real voiceover parser.
+
+`from_script_md` is a best-effort inverse used for round-trip tests and re-reads.
+
+#### CLI (`cli.py`)
+
+```bash
+concept-script draft --seeds seeds.md [--ref prior-script.md] [-o script.md] [--max-cost N] [--dry-run]
+concept-script draft "inline seed text" [-o script.md]
+concept-script shape transcript.txt [-o script.md] [--max-cost N] [--dry-run]
+```
+
+#### Library API
+
+```python
+from concept_script import draft, draft_sync, shape, shape_sync, ConceptResult
+
+result = draft_sync("focus, calm, ~2 min", prior_script=None)   # ConceptResult (.script_path, .brief, ...)
+result = shape_sync(open("transcript.txt").read())              # ConceptResult (.brief.cut_trailer)
+```
+
+#### Default budget (`constants.py`)
+
+```
+max_items=1, max_depth=0, max_cost_usd=1.00, max_wall_time_sec=300
+```
+
+`max_depth=0` — v1 never delegates. The `voiceover-direction` package is a **test-only** dependency
+(the integration test imports its parser); there is no runtime coupling.
+
+---
+
 ## Storage Layer (Qdrant)
 
 - Runs locally via Docker Compose on `localhost:6333`
@@ -584,12 +672,13 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv sync --all-packages && uv run pytest -v               # full suite (623 tests)
+uv sync --all-packages && uv run pytest -v               # full suite (657 tests)
 uv run pytest packages/agent-runtime/tests/ -v          # 168 tests
 uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 45 tests
 uv run pytest packages/tutorial-research/tests/ -v      # 52 tests
-uv run pytest packages/music-curation/tests/ -v         # 213 tests
+uv run pytest packages/music-curation/tests/ -v         # 214 tests
 uv run pytest packages/voiceover-direction/tests/ -v    # 145 tests
+uv run pytest packages/concept-script/tests/ -v         # 33 tests
 ```
 
 Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage, Anthropic, or ElevenLabs API keys.

@@ -351,6 +351,12 @@ def _parse_learning_section(
 
 
 def _infer_taste_scope(text: str) -> str:
+    if re.search(
+        r"\b(length|duration|minute|seconds?|structure|arrangement|section|"
+        r"verse|chorus|intro|outro|bridge|hook)\b",
+        text, re.IGNORECASE,
+    ):
+        return "arrangement"
     if re.search(r"\bvocal|voice|singer|lyric|breathy|smoky\b", text, re.IGNORECASE):
         return "vocal"
     if re.search(r"\bbass|drum|percussion|instrument|guitar|piano|synth|cowbell|808\b", text, re.IGNORECASE):

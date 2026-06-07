@@ -32,6 +32,8 @@ music-curation chain show <chain_root_id>   # show evolution chain
 
 # Write memory directly
 music-curation taste add "French vocals work well over lo-fi phonk" --valence positive --scope vocal
+music-curation taste add "Blues feels best compact — ~2 min, single verse, no extended jams" \
+    --valence positive --scope arrangement
 music-curation fact add "Memphis phonk cowbell is essential for authentic phonk sound" --domain suno_mechanics
 
 # Seed from session files
@@ -40,6 +42,46 @@ music-curation seed ingest ~/path/to/session-files/             # interactive
 music-curation seed ingest ~/path/to/file.md --yes              # no prompts
 music-curation seed review-taste                                 # review deferred taste
 ```
+
+## Reusable prompt files
+
+For repeated, multi-paragraph requests, keep a markdown file per genre and pipe it in:
+
+```bash
+uv run music-curation generate "$(cat packages/music-curation/cli-prompts/blues.md)"
+```
+
+`cli-prompts/TEMPLATE.md` is a fill-in-the-blanks starting point with inline comments on
+every input dimension that actually moves the output — genre, reference artist/song,
+instrumentation (including negative constraints like "no electric guitars"), vocal
+character, production/era texture, tempo, language, length, and explicit structure. Copy
+it per genre. Everything in HTML comments is guidance for you; it reaches the agent as
+plain prose, not a directive.
+
+## Controlling length and structure
+
+Suno has **no duration parameter** — song length is an emergent property of the lyrics
+field (more/longer sections ⇒ longer song). The generation system prompt (`chains.py`)
+carries a length→structure mapping so a request like "around 2 minutes" is translated into
+a concrete section count rather than dropped:
+
+| Target | Structure |
+|---|---|
+| ~1–1.5 min | `[Intro] + [Verse] + [Chorus]` (+ short `[Outro]`) |
+| ~2 min | `[Intro] + [Verse] + [Chorus] + [Verse]/[Chorus] + [Outro]` |
+| ~3 min | two verse/chorus cycles + `[Bridge]` |
+
+When a request names an explicit section list (e.g. "one intro, chorus, verse, chorus,
+outro"), the model reproduces exactly those sections in order — it will not add a second
+verse or reorder them.
+
+**Per-song spec vs. standing taste.** An explicit length/structure in the request is the
+spec for *that* generation and overrides any conflicting retrieved template or prior
+generation — this is **precedence, not an exception**, and it does not change your stored
+taste. To express a *durable* length/structure preference across songs, either let it
+emerge from `report ... --context "..."` reactions, or declare it with the **`arrangement`**
+taste scope (`taste add "..." --scope arrangement`). A saved taste becomes the default for
+dimensions a request leaves unspecified; the request always wins when it speaks.
 
 ## Library API
 
