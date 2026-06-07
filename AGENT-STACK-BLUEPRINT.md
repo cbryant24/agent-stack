@@ -96,9 +96,15 @@ workspace and build your agents on top. Re-deriving it would be wasted effort.
 | `pyproject.toml` (root), `.python-version`, `.env.example`, `.gitignore` | uv workspace config, pytest config (`--import-mode=importlib`), env template. | **Copy and trim** to your packages. |
 | `packages/yt-intelligence-pipeline/` | YouTube → transcript/screenshots → Qdrant ingestion. This is the **one domain-specific piece** in the foundation. | **Copy only if you need ingestion** of YouTube content. Otherwise it's a reference for "how a non-LLM-heavy capability package is structured." |
 
+> **Completed agents in the repo:** `agent-runtime`, `yt-intelligence-pipeline`,
+> `tutorial-research`, `music-curation`, `voiceover-direction`. A scriptwriting agent
+> is planned but not yet built. The domain-specific agents (everything except
+> `agent-runtime`) are references and starting points — don't copy them unless their
+> domain overlaps with yours.
+
 ### What `agent-runtime` gives you (so you know what NOT to write)
 
-Read `~/Desktop/agent-stack/docs/architecture.md` §`agent-runtime` for the full API.
+Read `~/Desktop/agent-stack/docs/ai-director-agent-system.md` under "Tech Stack / agent-runtime" for the full API.
 The short version of what you get for free:
 
 - **`RuntimeConfig` / `get_config()`** — reads `.env`, validates keys, auto-creates
@@ -186,7 +192,7 @@ shape of agent work has three distinct modes that each want a fresh context wind
 
 **A handoff document carries state between phases.** This is the load-bearing
 mechanism. At the end of each phase, chat produces a handoff doc (see
-`~/Desktop/agent-stack/docs/concept-script-phase1-handoff.md` for a real example)
+`~/Desktop/agent-stack/docs/voiceover-direction-phase2-handoff.md` for a real example)
 that contains everything the next phase needs to begin *without re-deriving the
 previous phase's conclusions*. You start the next chat by loading that handoff.
 
@@ -278,8 +284,9 @@ nothing.
 ### The anatomy of an agent package
 
 Every agent we built has the same shape (look at
-`~/Desktop/agent-stack/packages/concept-script/` for the cleanest small example,
-`packages/music-curation/` for a full stateful one):
+`~/Desktop/agent-stack/packages/tutorial-research/` for a clean stateless example,
+`packages/voiceover-direction/` for a full stateful one (and
+`packages/music-curation/` as a second stateful reference)):
 
 ```
 packages/<your-agent>/
@@ -312,10 +319,10 @@ collection **only if it has a feedback loop that accumulates learning** — typi
 
 - Our music and voiceover agents are **stateful**: the user reports a reaction to each
   result, and that reaction feeds future retrieval. Memory earns its place.
-- Our scriptwriting agent is **stateless**: brief quality only surfaces many steps
-  downstream and attribution is muddy, so there's no clean learning signal. A
-  collection would be storage with no learning mechanism. So it has none; prior work
-  is reused by passing a file reference instead.
+- Our `tutorial-research` agent is **stateless**: it produces a research artifact on
+  demand with no feedback signal to accumulate — there's nothing to remember between
+  runs that improves future output. So it has no collection; outputs are files passed
+  to downstream agents by reference.
 
 Apply this to each of your agents. Don't give an agent memory by default — give it
 memory when there's a signal worth remembering.
@@ -359,7 +366,8 @@ These are real bugs we hit. Inherit the fixes:
    updates consumption). Calling `record_llm_call` directly emits a trace event but
    leaves every aggregate cost reading at `$0.00`. Use the `_record_llm` bridge
    pattern (via the `_current_tracker` ContextVar) that our agents use — see
-   `music-curation/chains.py`.
+   `voiceover-direction/chains.py` (also demonstrates the two-budget pattern for
+   vendor quotas).
 3. **Call `check_budget()` at the TOP of each loop iteration, before doing work** —
    not after. Calling it after the last item spuriously marks a fully-successful run
    `partial`.
