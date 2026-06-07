@@ -41,6 +41,12 @@ def test_no_music_hint_omits_line() -> None:
     assert "Music:" not in text
 
 
+def test_no_cut_trailer_omits_block() -> None:
+    # Absent when no director note fired (default _brief has no cuts).
+    text = to_script_md(_brief())
+    assert "director note cuts applied" not in text
+
+
 def test_cut_trailer_in_preamble() -> None:
     text = to_script_md(_brief(cut_trailer=["Deleted the closing pricing tangent"]))
     assert "director note cuts applied" in text

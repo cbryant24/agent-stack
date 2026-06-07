@@ -5,6 +5,27 @@ each was consciously left out of v1 to keep the MVP lean and to avoid building
 mechanisms we can't yet validate. Each entry states the signal that should pull
 it forward.
 
+## Addressed in a refinement pass (2026-06-07)
+
+Two `shape`-mode defects surfaced in real-input testing and were **fixed**, not
+deferred (recorded here so the durable list stays honest):
+
+- **Self-correction handling is now configurable, preserve-by-default.** Real
+  transcripts were being polished — every self-correction resolved away — against
+  the agent's "preserve authentic spoken texture" contract. Preserve is now the
+  forceful, example-driven default; the shape-only `--clean` flag opts into
+  resolving self-corrections into final prose. The flag affects *only*
+  self-corrections; disfluency stripping, `director note` execution, and sectioning
+  are identical in both modes (`chains.py::_shape_system(clean)`).
+- **Cut trailer is now reliable for every executed `director note`.** A global note
+  ("remove every 'young' descriptor") executed but recorded no trailer. The prompt
+  now mandates one `cuts` entry per executed note in any form (deletion, global /
+  repeated change, replacement, reorder; a global change is one summarizing entry),
+  and a deterministic safety net warns when the wake phrase is present but no cut
+  was recorded. (Serialization already parked the trailer in the skipped preamble.)
+
+The items below remain deferred.
+
 ## Knowledge-base reads (user_knowledge / tutorial_research)
 
 **Deferred.** v1 is Claude-only: it reasons from the user's seeds (or transcript)

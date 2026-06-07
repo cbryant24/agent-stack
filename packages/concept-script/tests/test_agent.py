@@ -80,3 +80,27 @@ async def test_shape_writes_cut_trailer(tmp_path: Path) -> None:
 
     assert result.brief.cut_trailer == ["Deleted the closing tangent"]
     assert "director note cuts applied" in out.read_text()
+
+
+@pytest.mark.asyncio
+async def test_shape_clean_reaches_chain_with_clean_prompt(tmp_path: Path) -> None:
+    payload = json.dumps(
+        {"logline": "x", "sections": [{"heading": "A", "prose": "p"}], "cuts": []}
+    )
+    p_client, p_report, p_notify = _patches(payload)
+    with p_client as mock_anthropic, p_report, p_notify:
+        await shape("director note tidy this up", clean=True, output=tmp_path / "s.md")
+    system = mock_anthropic.return_value.messages.create.call_args.kwargs["system"]
+    assert "RESOLVE self-corrections" in system
+
+
+@pytest.mark.asyncio
+async def test_shape_default_uses_preserve_prompt(tmp_path: Path) -> None:
+    payload = json.dumps(
+        {"logline": "x", "sections": [{"heading": "A", "prose": "p"}]}
+    )
+    p_client, p_report, p_notify = _patches(payload)
+    with p_client as mock_anthropic, p_report, p_notify:
+        await shape("a transcript", output=tmp_path / "s.md")
+    system = mock_anthropic.return_value.messages.create.call_args.kwargs["system"]
+    assert "KEEP every natural stumble" in system

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,6 +10,7 @@ from concept_script.chains import (
     BriefParseError,
     _brief_from_data,
     _extract_json,
+    _shape_system,
     generate_brief,
     shape_brief,
 )
@@ -112,3 +114,70 @@ async def test_shape_brief_captures_cuts() -> None:
     assert brief.cut_trailer == ["Deleted the closing pricing tangent"]
     # A kept self-correction stays in the prose (authentic texture).
     assert "I was wrong about that" in brief.sections[0].prose
+
+
+# ── self-correction handling: preserve (default) vs --clean ─────────────────
+
+def test_shape_system_preserve_is_default() -> None:
+    sys = _shape_system(False)
+    assert "KEEP every natural stumble and self-correction VERBATIM" in sys
+    assert "reproduce BOTH" in sys
+    assert "RESOLVE self-corrections" not in sys
+
+
+def test_shape_system_clean_resolves() -> None:
+    sys = _shape_system(True)
+    assert "RESOLVE self-corrections" in sys
+    assert "keep ONLY the corrected version" in sys
+    assert "KEEP every natural stumble and self-correction VERBATIM" not in sys
+
+
+def test_shape_system_categories_1_3_4_identical() -> None:
+    # Disfluency stripping, the director-note wake-phrase rule, the cuts mandate,
+    # and sectioning are identical in both modes — only rule 3 swaps.
+    preserve, clean = _shape_system(False), _shape_system(True)
+    for fragment in (
+        "STRIP disfluencies",
+        "WAKE PHRASE",
+        "REMOVE the wake phrase",
+        "`cuts` MUST contain",
+        "NEVER leave",
+        "Apply sectioning",
+    ):
+        assert fragment in preserve, fragment
+        assert fragment in clean, fragment
+
+
+@pytest.mark.asyncio
+async def test_shape_brief_clean_flag_selects_prompt() -> None:
+    payload = json.dumps({"logline": "x", "sections": [{"heading": "A", "prose": "p"}]})
+
+    client = _client(payload)
+    await shape_brief("transcript", client, clean=True)
+    assert "RESOLVE self-corrections" in client.messages.create.call_args.kwargs["system"]
+
+    default_client = _client(payload)
+    await shape_brief("transcript", default_client)  # default = preserve
+    assert "KEEP every natural stumble" in default_client.messages.create.call_args.kwargs["system"]
+
+
+# ── cut-trailer safety net ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_shape_brief_warns_when_wake_phrase_has_no_cut(caplog) -> None:
+    payload = json.dumps(
+        {"logline": "x", "sections": [{"heading": "A", "prose": "p"}], "cuts": []}
+    )
+    with caplog.at_level(logging.WARNING, logger="concept_script.chains"):
+        await shape_brief("um, director note remove every young descriptor", _client(payload))
+    assert any("wake phrase" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_shape_brief_no_warning_without_wake_phrase(caplog) -> None:
+    payload = json.dumps(
+        {"logline": "x", "sections": [{"heading": "A", "prose": "p"}], "cuts": []}
+    )
+    with caplog.at_level(logging.WARNING, logger="concept_script.chains"):
+        await shape_brief("um, so like, shipping is hard", _client(payload))
+    assert not any("wake phrase" in r.getMessage() for r in caplog.records)

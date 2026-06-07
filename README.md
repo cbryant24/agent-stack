@@ -11,7 +11,7 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 | `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (52 tests) |
 | `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (214 tests) |
 | `voiceover-direction` | Director for ElevenLabs voiceover — free LLM direction, deliberate paid generation, persistent takes + direction lessons | Complete (145 tests) |
-| `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (33 tests) |
+| `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (45 tests) |
 
 ## Setup
 
@@ -60,7 +60,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv sync --all-packages && uv run pytest -v   # full suite (657 tests)
+uv sync --all-packages && uv run pytest -v   # full suite (669 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage, Anthropic, or ElevenLabs API keys.
@@ -246,11 +246,15 @@ concept-script draft "focus, calm, ~2 min, video essay"          # inline seeds
 **Curation — a verbatim dictation transcript → script.md:**
 ```bash
 concept-script shape transcript.txt -o script.md
+concept-script shape transcript.txt --clean      # resolve self-corrections away
 ```
 
-`shape` strips disfluencies, **keeps** natural stumbles/self-corrections as content, and
-resolves an in-band command channel: `director note, delete that last portion` is executed
-and removed, with each cut listed in a trailer. The logline, optional `Music:` hint, and the
+`shape` strips disfluencies and resolves an in-band command channel: `director note, delete
+that last portion` is executed and removed, with each executed cut listed in a trailer (a
+global note like "remove every 'young' descriptor" is one summarizing entry). Natural
+stumbles/self-corrections are **kept as content by default** — authentic texture the voiceover
+agent narrates; pass `--clean` to resolve them into final prose instead (`--clean` is
+shape-only and affects only self-corrections). The logline, optional `Music:` hint, and the
 cut trailer live in the pre-heading preamble, which the voiceover parser skips — so the file
 hands off to `voiceover-direction direct` with nothing leaking into narration.
 
@@ -261,7 +265,8 @@ from concept_script import draft_sync, shape_sync
 result = draft_sync("late-night focus, contemplative, ~2 min")    # ConceptResult
 print(result.script_path)                                         # the written script.md
 print(result.brief.logline, [s.heading for s in result.brief.sections])
-result = shape_sync(open("transcript.txt").read())               # ConceptResult
+result = shape_sync(open("transcript.txt").read())               # preserve corrections (default)
+result = shape_sync(open("transcript.txt").read(), clean=True)   # resolve corrections away
 print(result.brief.cut_trailer)                                  # executed director-note cuts
 ```
 

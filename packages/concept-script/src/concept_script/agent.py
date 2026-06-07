@@ -130,14 +130,19 @@ async def draft(
 async def shape(
     transcript: str,
     *,
+    clean: bool = False,
     budget: BudgetEnvelope | None = None,
     output: Path | None = None,
     dry_run: bool = False,
 ) -> ConceptResult:
-    """Curation mode: a verbatim dictation transcript -> script.md (with cut trailer)."""
+    """Curation mode: a verbatim dictation transcript -> script.md (with cut trailer).
+
+    `clean` resolves self-corrections into final prose; the default preserves them
+    verbatim as content (authentic spoken texture the voiceover agent narrates).
+    """
 
     async def produce(client: AsyncAnthropic) -> VideoBrief:
-        return await shape_brief(transcript, client)
+        return await shape_brief(transcript, client, clean=clean)
 
     return await _run("shape", produce, budget=budget, output=output, dry_run=dry_run)
 

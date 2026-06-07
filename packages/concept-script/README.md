@@ -26,10 +26,12 @@ concept-script draft "focus, calm, ~2min, video essay"          # inline seeds
 
 # Curation — a verbatim voice-dictation transcript -> script.md
 concept-script shape transcript.txt -o script.md
+concept-script shape transcript.txt --clean      # resolve self-corrections away
 ```
 
 Both verbs accept `--max-cost N` and `--dry-run` (plan only; no LLM call, no file
-written). Output defaults to `./script.md`.
+written). Output defaults to `./script.md`. `shape` additionally accepts `--clean`
+(see the curation channel below); `draft` does not.
 
 `cli-prompts/SEEDS_TEMPLATE.md` is a fill-in-the-blanks starting point for the
 generative mode — copy it, fill what you know, leave the rest blank.
@@ -68,17 +70,25 @@ The dictation tool captures verbatim; `shape` resolves an in-band channel inside
 the transcript:
 
 - **Verbatim content is preserved.** No paraphrasing.
-- **Disfluencies are stripped** — uh, um, dead-air, false starts.
-- **Natural stumbles and self-corrections are kept as content** (e.g. "you know
-  what, I'm wrong about that…"). They are authentic texture — the voiceover agent
-  will narrate them. This is intentional.
+- **Disfluencies are stripped** — uh, um, dead-air, false starts. (Both modes.)
+- **Natural stumbles and self-corrections are kept as content — this is the
+  default** (e.g. "you know what, I'm wrong about that…", "no actually it was more
+  like…"). They are authentic texture; the voiceover agent narrates them, and that
+  is the point of the agent. Pass **`--clean`** to instead resolve self-corrections
+  into clean final prose (keep only the corrected version, drop the abandoned
+  phrasing). `--clean` affects **only** self-corrections — disfluency stripping and
+  `director note` execution behave identically with or without it.
 - **`director note` is the wake phrase** — the one deliberate edit signal. It
   originates from your own dictation, so it is a legitimate instruction:
   `director note, delete that last portion` is executed, and the phrase plus its
-  instruction are removed from the script. Nothing else in the transcript is ever
-  treated as a command.
-- The output carries a **cut trailer** (in the preamble) listing each executed
-  `director note` cut, so you can verify the deletions.
+  instruction are removed from the script. A director note can be a single
+  deletion, a **global/repeated change** ("remove every 'young' descriptor"), a
+  replacement, or a reorder. Nothing else in the transcript is ever treated as a
+  command. (Both modes.)
+- **Every executed `director note` is recorded in a cut trailer** — written into
+  the preamble (before the first `#`, in the region the voiceover parser skips), so
+  it never leaks into narration. Each cut is one human-readable line you can verify;
+  a global change is summarized as a single entry. No director note → no trailer.
 
 ## Library API
 
@@ -86,7 +96,8 @@ the transcript:
 from concept_script import draft, draft_sync, shape, shape_sync, ConceptResult
 
 result = draft_sync("focus, calm, ~2 min", prior_script=None)   # ConceptResult
-result = shape_sync(open("transcript.txt").read())              # ConceptResult
+result = shape_sync(open("transcript.txt").read())              # preserve corrections (default)
+result = shape_sync(open("transcript.txt").read(), clean=True)  # resolve corrections away
 
 print(result.script_path)   # the written script.md
 print(result.brief.logline)
@@ -126,7 +137,7 @@ consume an approved brief later.
 ## Tests
 
 ```bash
-uv run pytest packages/concept-script/tests/ -v   # 33 tests
+uv run pytest packages/concept-script/tests/ -v   # 45 tests
 ```
 
 No test requires real Anthropic or Voyage API keys. The integration test imports

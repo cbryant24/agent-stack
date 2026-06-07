@@ -99,3 +99,27 @@ def test_shape_reads_transcript(tmp_path: Path) -> None:
 def test_shape_missing_file() -> None:
     result = CliRunner().invoke(cli, ["shape", "/nonexistent/file.txt"])
     assert result.exit_code != 0
+
+
+def test_shape_clean_flag_plumbs_through(tmp_path: Path) -> None:
+    t = tmp_path / "t.txt"
+    t.write_text("director note remove every young descriptor")
+    with patch("concept_script.cli.shape_sync", return_value=_result()) as mock:
+        result = CliRunner().invoke(cli, ["shape", str(t), "--clean"])
+    assert result.exit_code == 0
+    assert mock.call_args.kwargs["clean"] is True
+
+
+def test_shape_default_preserves(tmp_path: Path) -> None:
+    t = tmp_path / "t.txt"
+    t.write_text("no actually it was more like this")
+    with patch("concept_script.cli.shape_sync", return_value=_result()) as mock:
+        result = CliRunner().invoke(cli, ["shape", str(t)])
+    assert result.exit_code == 0
+    assert mock.call_args.kwargs["clean"] is False
+
+
+def test_draft_has_no_clean_flag(tmp_path: Path) -> None:
+    # --clean is shape-only; draft must reject it.
+    result = CliRunner().invoke(cli, ["draft", "seeds", "--clean"])
+    assert result.exit_code != 0

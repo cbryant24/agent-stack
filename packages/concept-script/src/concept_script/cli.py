@@ -102,18 +102,27 @@ def draft(
 @click.argument("transcript", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--output", "-o", type=click.Path(dir_okay=False, path_type=Path), default=None,
               help="Where to write the script (default: ./script.md).")
+@click.option("--clean", is_flag=True, default=False,
+              help="Resolve self-corrections into clean final prose "
+                   "(default: preserve them verbatim as content).")
 @click.option("--max-cost", type=float, default=None, help="Override max cost USD.")
 @click.option("--dry-run", is_flag=True, default=False, help="Plan only; no LLM call, no file written.")
 def shape(
     transcript: Path,
     output: Path | None,
+    clean: bool,
     max_cost: float | None,
     dry_run: bool,
 ) -> None:
-    """Shape a verbatim dictation TRANSCRIPT into an editable script.md."""
+    """Shape a verbatim dictation TRANSCRIPT into an editable script.md.
+
+    By default, natural self-corrections are preserved verbatim as content. Pass
+    --clean to resolve them into final prose instead.
+    """
     text = transcript.read_text(encoding="utf-8")
     result = shape_sync(
         text,
+        clean=clean,
         budget=_budget(max_cost),
         output=output,
         dry_run=dry_run,

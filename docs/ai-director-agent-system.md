@@ -134,7 +134,7 @@ Status reflects current state of the `agent-stack` workspace.
 
 ### Concept & Script Agent — `concept-script`
 
-**Status: Phase 2 complete (MVP).** 33 tests passing.
+**Status: Phase 2 complete (MVP).** 45 tests passing.
 
 **Purpose:** A structural/craft scriptwriting collaborator. It proposes craft scaffolding — section breakdown, pacing, an emotional arc, and candidate per-section emotion direction — and **surfaces, never decides** the creative core (theme, message, which references matter). The user owns every decision by editing the output. This isn't a forced workflow and it isn't a creative automator; it's a collaborator that turns decided inputs into the artifact the next agent ingests.
 
@@ -142,7 +142,7 @@ Status reflects current state of the `agent-stack` workspace.
 
 **Two input modes → one editable `script.md`:**
 - **`draft` (generative)** — sparse seeds (theme/topic, mood, target duration or a musical reference implying it, stylistic references, project type) plus an optional `--ref` prior-script reference. The agent *proposes* structure.
-- **`shape` (curation)** — a verbatim voice-dictation transcript. The agent *extracts* the structure latent in the stream-of-consciousness: it preserves verbatim content, strips disfluencies, keeps natural stumbles/self-corrections as content (the voiceover agent narrates them — intended), and resolves an in-band command channel where the `director note` wake phrase is the one deliberate edit signal (executed, then removed; each cut listed in a trailer).
+- **`shape` (curation)** — a verbatim voice-dictation transcript. The agent *extracts* the structure latent in the stream-of-consciousness across four distinct categories: it strips disfluencies; **preserves natural stumbles/self-corrections verbatim as content by default** (the voiceover agent narrates them — the point of the agent; `--clean` opts into resolving them into final prose instead, and is the only category that flag affects); executes and removes the `director note` wake phrase (the one deliberate edit signal — a single deletion, a global/repeated change, a replacement, or a reorder), recording each executed note in a cut trailer; and applies sectioning + inline emotion direction.
 
 **Output:** a single editable `script.md` — a logline, per-section script with **inline** emotion direction (literal `[tag]`s in the prose; there is no separate voice-direction field), and an optional music-hint block for Music Curation. The logline, music hint, and curation cut-trailer live in the pre-heading preamble, which the voiceover parser skips, so the same file is consumed by `direct` with nothing leaking into narration. No Obsidian note — the script file is the artifact the user edits and owns.
 
@@ -367,7 +367,7 @@ A rough current order, subject to revision based on what the user wants to use n
 1. **Tutorial Research** — done (52 tests passing)
 2. **Music Curation** — done (214 tests passing)
 3. **Voiceover Direction** — done, Phase 2 MVP (145 tests passing). Built ahead of Concept & Script: it consumes a markdown-with-headings script, which a human can author directly, so it doesn't block on the scriptwriting agent existing yet.
-4. **Concept & Script** — done, Phase 2 MVP (33 tests passing). Produces the `script.md` that Voiceover Direction consumes unchanged (and Edit Brief will consume later); the inline emotion-tag format aligns with the directed-script input contract already in place.
+4. **Concept & Script** — done, Phase 2 MVP (45 tests passing). Produces the `script.md` that Voiceover Direction consumes unchanged (and Edit Brief will consume later); the inline emotion-tag format aligns with the directed-script input contract already in place.
 5. **Technique Research** — useful in parallel with the above; not blocking
 6. **Edit Brief** — needs the upstream agents to produce its inputs
 7. **Feedback & Iteration** — needs Edit Brief to iterate on

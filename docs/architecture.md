@@ -527,7 +527,7 @@ guards the option-B re-direction Claude path.
 
 ### concept-script
 
-Structural/craft scriptwriting collaborator. **Status: Phase 2 complete (MVP).** 33 tests passing.
+Structural/craft scriptwriting collaborator. **Status: Phase 2 complete (MVP).** 45 tests passing.
 
 Turns sparse creative seeds or a verbatim dictation transcript into a single editable `script.md`
 that `voiceover-direction direct` consumes unchanged. It proposes craft scaffolding (section
@@ -550,21 +550,28 @@ runtime wiring (budget, tracing, run report) mirrors the rest of the stack minus
 - **`draft` (generative)** — `generate_brief(seeds, client, prior_script=...)` takes sparse seeds
   (theme, mood, duration or a musical reference implying it, stylistic references, project type) plus
   an optional prior-script reference, and asks Sonnet 4.6 (JSON) for a `VideoBrief`.
-- **`shape` (curation)** — `shape_brief(transcript, client)` resolves an in-band command channel
-  inside a verbatim dictation transcript (see below) and returns a `VideoBrief` plus a cut trailer.
+- **`shape` (curation)** — `shape_brief(transcript, client, *, clean=False)` resolves an in-band
+  command channel inside a verbatim dictation transcript (see below) and returns a `VideoBrief`
+  plus a cut trailer.
 
 Both share `_record_llm` (the cost-routing bridge through the active `BudgetTracker`, same pattern as
 music-curation) and a JSON→`VideoBrief` validator. `MODEL = claude-sonnet-4-6`, `MAX_TOKENS = 8192`.
 
 #### Curation command channel (`shape`)
 
-The dictation tool captures verbatim; the chain's system prompt resolves the channel: preserve
-verbatim content; strip disfluencies (uh/um/dead-air/false starts); **keep** natural stumbles and
-self-corrections as content (authentic texture the voiceover agent will narrate); detect the
-**`director note` wake phrase** — the one deliberate edit signal, legitimate because it originates in
-the user's own dictation — execute its instruction (e.g. delete a portion) and remove the phrase plus
-its instruction from the output; then apply sectioning and inline emotion direction. Every executed
-cut is recorded in `VideoBrief.cut_trailer`. Provenance rule: nothing in the transcript other than a
+The dictation tool captures verbatim; `_shape_system(clean)` builds the system prompt that resolves
+the channel across four distinct categories. (1) Strip disfluencies (uh/um/dead-air/false starts).
+(2) Self-corrections ("no actually it was more like…", "I'm wrong about that…"): **preserved
+verbatim by default** as content — authentic texture the voiceover agent narrates — and this is the
+**only** category the `clean` flag affects (`clean=True` resolves them into final prose: keep the
+corrected version, drop the abandoned phrasing). (3) The **`director note` wake phrase** — the one
+deliberate edit signal, legitimate because it originates in the user's own dictation — is executed
+and removed (phrase + instruction). A note can be a single deletion, a global/repeated change, a
+replacement, or a reorder; the prompt mandates one `cuts` entry per executed note (a global change
+is one summarizing entry), so the trailer is reliable even for transform-style notes. (4) Sectioning
++ inline emotion direction. Categories 1, 3, 4 are identical regardless of `clean`. Every executed
+cut lands in `VideoBrief.cut_trailer`; a deterministic safety net logs a warning if the wake phrase
+is present in the transcript but no cut was recorded. Provenance rule: nothing other than a
 `director note` is ever treated as a command.
 
 #### The script.md format (`models.py`, `serialize.py`)
@@ -589,7 +596,7 @@ via `to_script_md`. The format is dictated by the consumer, `voiceover_direction
 ```bash
 concept-script draft --seeds seeds.md [--ref prior-script.md] [-o script.md] [--max-cost N] [--dry-run]
 concept-script draft "inline seed text" [-o script.md]
-concept-script shape transcript.txt [-o script.md] [--max-cost N] [--dry-run]
+concept-script shape transcript.txt [-o script.md] [--clean] [--max-cost N] [--dry-run]
 ```
 
 #### Library API
@@ -598,7 +605,8 @@ concept-script shape transcript.txt [-o script.md] [--max-cost N] [--dry-run]
 from concept_script import draft, draft_sync, shape, shape_sync, ConceptResult
 
 result = draft_sync("focus, calm, ~2 min", prior_script=None)   # ConceptResult (.script_path, .brief, ...)
-result = shape_sync(open("transcript.txt").read())              # ConceptResult (.brief.cut_trailer)
+result = shape_sync(open("transcript.txt").read())              # preserve self-corrections (default)
+result = shape_sync(open("transcript.txt").read(), clean=True)  # resolve them into final prose
 ```
 
 #### Default budget (`constants.py`)
@@ -672,13 +680,13 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv sync --all-packages && uv run pytest -v               # full suite (657 tests)
+uv sync --all-packages && uv run pytest -v               # full suite (669 tests)
 uv run pytest packages/agent-runtime/tests/ -v          # 168 tests
 uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 45 tests
 uv run pytest packages/tutorial-research/tests/ -v      # 52 tests
 uv run pytest packages/music-curation/tests/ -v         # 214 tests
 uv run pytest packages/voiceover-direction/tests/ -v    # 145 tests
-uv run pytest packages/concept-script/tests/ -v         # 33 tests
+uv run pytest packages/concept-script/tests/ -v         # 45 tests
 ```
 
 Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage, Anthropic, or ElevenLabs API keys.
