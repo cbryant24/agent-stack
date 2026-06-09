@@ -50,10 +50,14 @@ from agent_runtime.reporting import (
     render_run_report,
 )
 from agent_runtime.knowledge import (
+    DocCandidate,
     Draft,
     KnowledgeEntry,
     KnowledgeHit,
     UserKnowledgeStore,
+    ingest_docs,
+    ingest_docs_sync,
+    parse_docs,
 )
 
 __all__ = [
@@ -114,4 +118,8 @@ __all__ = [
     "Draft",
     "KnowledgeEntry",
     "KnowledgeHit",
+    "DocCandidate",
+    "parse_docs",
+    "ingest_docs",
+    "ingest_docs_sync",
 ]

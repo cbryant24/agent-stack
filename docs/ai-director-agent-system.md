@@ -98,7 +98,7 @@ options.
 
 ## The Agents
 
-The agents specified below are the ones currently identified — they are not a closed set. The system is designed to grow: new agents will be added as new domains and needs emerge (image generation, thumbnail design, social media scheduling, analytics, and others not yet imagined). Each new agent follows the same pattern — standalone, runtime-backed, independently invokable — so adding one doesn't disturb the others. Treat the list as the current roster, not a ceiling.
+The agents specified below are the ones currently identified — they are not a closed set. The system is designed to grow: new agents will be added as new domains and needs emerge. Image generation, once an anticipated future agent, is now specified below as the Visual Generation Agent; others (thumbnail design, social media scheduling, analytics, and more not yet imagined) remain on the open roster. Each new agent follows the same pattern — standalone, runtime-backed, independently invokable — so adding one doesn't disturb the others. Treat the list as the current roster, not a ceiling.
 
 Status reflects current state of the `agent-stack` workspace.
 
@@ -222,6 +222,51 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 
 ---
 
+### Visual Generation Agent — `visual-generation`
+
+**Status: Phase 2 complete (MVP).** 152 tests passing.
+
+**Purpose:** A diffusion image/video generation collaborator. Like Music Curation and Voiceover Direction, it is a standalone, domain-agnostic capability that projects compose — it bakes in no single project. It fills three intertwined roles. **Prompt-craft** — translate creative intent into effective prompts and settings for the chosen models. **Platform tutor** — explain platform setup and every relevant setting in plain, step-by-step terms: what CFG, steps, sampler, the WAN 2.2 high-noise/low-noise split, shift, and LoRA strength actually do, and what to do next on the platform. **Generation + iteration** — drive the generation backend through its API, capture results, and iterate and curate toward the target. The tutor role is a genuine agent responsibility, not a side note: the director is an experienced programmer but a novice in *this* domain who learns by doing, not by reading concepts — which is exactly why generic ComfyUI/Udemy tutorials did not work for him.
+
+**Why it fits the system.** Same pattern as Music Curation (`music-curation`) and Voiceover Direction (`voiceover-direction`): a domain-specialized standalone agent that projects consume without being coupled to any of them. Two projects already consume it — the anime/AMV creative pipeline (character imagery, thumbnails) and a separate adult-content contractor engagement (`wardrobe-poc`: clothed wardrobe and scene variation on a consenting subject) — and it bakes in neither.
+
+**Platform (confirmed in Phase 1).** **RunPod** for pay-per-hour GPU, chosen because its content policy is permissive for legal adult content and it isolates cleanly from personal identity (Google Colab was ruled out — its content/identity policy is hostile to this use case regardless of paid tier). Confirmed **pod, not serverless** (serverless wraps the native endpoints and cold-starts each request — wrong for a warm session and the tutor role). **ComfyUI** as the generation backend, driven via its native pod API (`/prompt` → `/history` → `/view`, `/object_info`) rather than manual node clicks — the same orchestration pattern the other agents use against their backends; v1 **consumes** API-format graphs the user builds (graph authoring deferred). Pod lifecycle is **Tier-1 advisory** in v1 — the agent holds **no RunPod API key**, talks only to the user-supplied ComfyUI `--endpoint`, and prompts to stop on drain (real stop-automation is Tier-2, deferred). Models: **Flux.1 dev** for stills (v1 is stills-first); **WAN 2.2** (T2V / I2V / VACE) for video as a fast-follow on the same path; **SDXL** checkpoints where relevant; **character LoRAs** (trained via ai-toolkit, training itself deferred) for identity lock.
+
+**The central design decision (the cost inversion).** Visual Generation shares Voiceover Direction's cost structure, more extreme. **Prompt-craft and direction are free, infinitely iterable LLM loops.** The scarce, costly steps are **GPU compute** (RunPod per-hour pod uptime) and **generation runs** (minutes of GPU per image, far more per video clip). So the agent treats a generation run as a *deliberate, budgeted commitment* and surfaces cost before spending; pod start/stop discipline is part of what it tracks and advises on. Two budget axes mirror voiceover-direction: per-run **Claude** cost stays in `BudgetEnvelope`; **GPU/pod** spend is tracked and advised but is a separate axis from the Claude budget.
+
+**Inputs (starting points, not exhaustive):** creative intent (subject, style, mood, references); reference images (for IP-Adapter, img2img, or an I2V seed frame); a character LoRA or the intent to train one; target output (still vs. short video, resolution, count); and an optional brief from Concept & Script or Technique Research. As with the other agents, part of building it well is surfacing inputs the director hasn't thought of.
+
+**Outputs:**
+- Effective prompts plus a full **settings recipe** (model, sampler, steps, CFG, shift, LoRA stack and strengths, ControlNet / IP-Adapter config), each choice explained in plain language so the director learns as he goes
+- **Generated assets** via the ComfyUI API
+- A **generation record** (prompt + settings + workflow → result → director reaction) for reproducibility and iteration — the same prompt→result→reaction pattern Music Curation uses
+- **Step-by-step platform guidance** when the director operates the platform directly
+- **Iteration recommendations** — what to change to move output toward the target
+
+**Memory model.** Owns a `visual_generation_memory` Qdrant collection with three memory types (discriminated by `memory_type`): **`generation`** — the core record (prompt + full settings + model/LoRA stack + workflow → result → reaction + chain lineage), embedded from the **image/keyframe + caption** via `voyage-multimodal-3`; **`technique_lesson`** — settings/technique lessons learned by doing (`scope` ∈ prompt/settings/workflow/model, valence, confirmed); **`workflow_template`** — a reusable parameterized ComfyUI graph plus its **slot map** (semantic param → node input) and required models. Curated, not auto-harvested — the music-curation discipline. The model/LoRA **registry** is a *local JSON file*, not a vector type (the voice-registry analog: looked up by name, never searched), carrying the `identity_bearing` flag. Platform-mechanics facts (ComfyUI, RunPod, Flux, WAN settings) live in the shared `user_knowledge` collection under `comfyui_mechanics` and `runpod_mechanics`, seeded from the Stable Diffusion / ComfyUI / WAN / Veo course documents (via the shared `knowledge ingest-docs` mechanism) and refreshed via Tutorial Research — the same pattern voiceover-direction uses for `elevenlabs_mechanics`. This is the first agent whose own generation memory leans on the `voyage-multimodal-3` image+caption embedding, since its outputs are images.
+
+**Tools:** Claude (Sonnet) for prompt-craft, settings reasoning, and plain-language tutoring; the ComfyUI API (`/prompt` → `/history` → `/view`, `/object_info`) for generation and registry sync; the runtime memory layer (`visual_generation_memory`, plus `user_knowledge` ComfyUI/RunPod facts and `tutorial_research`, composed in parallel with the user-knowledge score boost — the voiceover-direction retrieval pattern); delegation to Tutorial Research for ComfyUI / Flux / WAN / LoRA technique gaps (the explicit `research` command, a Claude-only child budget). No RunPod API in v1 — pod lifecycle is Tier-1 advisory (above). The Stable Diffusion / ComfyUI / WAN / Veo course documents in the user's course project are a `user_knowledge` ingestion source.
+
+**Scope note.** The agent is content-agnostic at the platform layer: the chosen platform permits legal adult content, which the agent supports where that is the project (the `wardrobe-poc` engagement — clothed wardrobe and scene variation on a consenting subject, the subject being the user himself). It carries the hard line established in that work: clothing/scene variation and creative generation only — nude generation or clothed-to-unclothed transformation of real people is out of scope and is not a capability the agent builds. Operational security for sensitive artifacts (character LoRAs encode identity and preserve it through any prompted transformation) lives at the storage/access layer, not the model layer.
+
+**Cross-agent dynamics:** Concept & Script and Technique Research can inform *what* to generate (style, technique); the agent delegates to Tutorial Research for technique/settings knowledge gaps; and it feeds generated stills/clips downstream to Edit Brief as available assets (footage sourcing is otherwise director-handled).
+
+**Realized command surface (the built turn):**
+```bash
+visual-generation draft "<intent>" [-o batch.md] [--template <name>]                      # free Claude prompt-craft → batch file
+visual-generation generate <batch.md> (--section <id> | --all) --endpoint <url> [--max-session-cost N] [-y]  # warm-session GPU spend, soft-inform gate
+visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5]
+visual-generation model sync --endpoint <url>;  visual-generation model list             # registry from /object_info
+visual-generation workflow register <exported-api.json>;  visual-generation workflow list # slot-map propose→confirm
+visual-generation review-pending;  visual-generation recall "<query>";  visual-generation chain show <root_id>
+visual-generation lesson add "<statement>" --scope ... --valence ...;  visual-generation fact add "<statement>" --domain ...
+visual-generation explain "<concept>" [--level full|concise|quiet];  visual-generation research "<topic>"
+```
+
+**Deferred (the path is built to accept them):** video/WAN (a fast-follow on the same turn shape) · LoRA training (ai-toolkit) · RunPod stop-automation (Tier-2) · encryption-at-rest for identity artifacts · the `reference` memory type · the shared `ingest-docs` `--decisions`/`--url` refinements · graph authoring.
+
+---
+
 ### Technique Research Agent — `technique-research` *(planned)*
 
 **Status: not built.** This replaces what was originally framed as "Footage Research Agent" — the user clarified he sources clips himself and doesn't need clip discovery. What he does want is technique discovery: given a video type or theme, find out what makes videos like that work.
@@ -304,7 +349,11 @@ Technique Research ──delegates──> Tutorial Research
 
 Music Curation     ──may delegate to──> Tutorial Research (for music theory / Suno features)
 Voiceover Direction ──may delegate to──> Tutorial Research (for ElevenLabs features)
+Visual Generation   ──may delegate to──> Tutorial Research (for ComfyUI / Flux / WAN / LoRA technique)
 Edit Brief          ──may delegate to──> Tutorial Research (for editing techniques)
+
+Concept & Script / Technique Research ──inform──> Visual Generation (what to generate)
+Visual Generation                     ──feeds───> Edit Brief (generated stills/clips as assets)
 ```
 
 Tutorial Research is the only agent that gets delegated to by multiple others. It is the knowledge-acquisition arm of the system.
@@ -347,10 +396,11 @@ Each agent owns one or more Qdrant collections. The structure:
 
 | Collection | Owned by | Contents |
 |---|---|---|
-| `user_knowledge` | `agent-runtime` (`UserKnowledgeStore`) | User-authored first-party knowledge: verified facts, doc distillations, hand-written experience. Shared across all agents. Seeded with Suno-mechanics facts (music-curation seed ingestion) and ElevenLabs-mechanics facts (`domain=elevenlabs_mechanics`, via voiceover-direction's `knowledge ingest-docs` / `fact add`). |
+| `user_knowledge` | `agent-runtime` (`UserKnowledgeStore`) | User-authored first-party knowledge: verified facts, doc distillations, hand-written experience. Shared across all agents. Seeded with Suno-mechanics facts (music-curation seed ingestion), ElevenLabs-mechanics facts (`domain=elevenlabs_mechanics`, via voiceover-direction's `knowledge ingest-docs` / `fact add`), and ComfyUI/RunPod-mechanics facts (`domain=comfyui_mechanics`, `domain=runpod_mechanics`) seeded from the Stable Diffusion / ComfyUI / WAN / Veo course documents. |
 | `tutorial_research` | Tutorial Research | YouTube tutorial chunks + screenshot+caption multimodal points across all domains |
 | `music_curation_memory` | Music Curation | Generation history (prompts + reactions + chains), taste lessons, templates, sound references |
 | `voiceover_direction_memory` | Voiceover Direction | Takes (section text → voice/settings/reaction, section-scoped lineage) and direction lessons. The voice library is a local JSON registry, not a vector type; ElevenLabs-mechanics facts live in `user_knowledge` (`domain=elevenlabs_mechanics`). |
+| `visual_generation_memory` | Visual Generation | Generation history (prompt + settings + workflow → result → reaction), settings/technique lessons, reusable ComfyUI workflow templates, reference notes. ComfyUI/RunPod-mechanics facts live in `user_knowledge` (`domain=comfyui_mechanics`, `domain=runpod_mechanics`). |
 | `technique_research_outputs` | Technique Research | Curated technique findings per domain |
 | `project_archive` | Cross-agent | Final artifacts and decisions from completed projects (planned, low priority) |
 
@@ -359,6 +409,8 @@ Cross-collection reads are fine. Tutorial Research's collection is *the* tutoria
 ### Runtime-owned shared knowledge layer
 
 `user_knowledge` is special: it is owned by the runtime, not by any single agent. Any agent can read from it; only `UserKnowledgeStore` writes to it (via a propose → confirm workflow for individual entries, or `bulk_load_verified` for seed ingestion). This prevents multiple agents from independently writing conflicting facts to the same shared collection. The propose/confirm workflow makes human review practical — entries can be inspected as drafts before committing to Qdrant. Drafts live in `~/agent-data/drafts/user_knowledge/` and expire after 7 days.
+
+Ingesting a folder of local docs into `user_knowledge` is itself a **shared runtime mechanism** — `agent_runtime.knowledge.docs_ingest` (`ingest_docs`), domain-agnostic and parameterized by `domain` + source folder (no LLM; `##`+ heading → candidate → y/n/edit/defer → `bulk_load_verified`). voiceover-direction's `knowledge ingest-docs` command was refactored onto it (behavior-preserving), and visual-generation uses it for ComfyUI/RunPod docs.
 
 ## Build Order
 
@@ -369,11 +421,12 @@ A rough current order, subject to revision based on what the user wants to use n
 3. **Voiceover Direction** — done, Phase 2 MVP (145 tests passing). Built ahead of Concept & Script: it consumes a markdown-with-headings script, which a human can author directly, so it doesn't block on the scriptwriting agent existing yet.
 4. **Concept & Script** — done, Phase 2 MVP (45 tests passing). Produces the `script.md` that Voiceover Direction consumes unchanged (and Edit Brief will consume later); the inline emotion-tag format aligns with the directed-script input contract already in place.
 5. **Technique Research** — useful in parallel with the above; not blocking
-6. **Edit Brief** — needs the upstream agents to produce its inputs
-7. **Feedback & Iteration** — needs Edit Brief to iterate on
-8. **Project Organizer** — possibly never built if Cowork covers it
+6. **Visual Generation** — done, Phase 2 MVP (152 tests passing). ComfyUI-backed diffusion collaborator with multimodal own-memory (`voyage-multimodal-3`), the dual Claude/GPU budget separation, slot-map workflow templates, and a first-class tutor role (`explain`/`research`). Independently useful and not blocking on the editing-pipeline agents.
+7. **Edit Brief** — needs the upstream agents to produce its inputs
+8. **Feedback & Iteration** — needs Edit Brief to iterate on
+9. **Project Organizer** — possibly never built if Cowork covers it
 
-Beyond these, the roster is open — image generation, thumbnail design, social scheduling, analytics, and others will be added as the need becomes concrete.
+Beyond these, the roster is open — thumbnail design, social scheduling, analytics, and others will be added as the need becomes concrete (image generation, once on this list, is now the planned Visual Generation agent above).
 
 Each agent build follows the same shape: scaffold the package, design the data models, build the chains, build the invocation surface(s), integrate into the runtime, write tests, document.
 
@@ -452,6 +505,7 @@ The three-phase pattern is specifically for new agent builds — the case where 
 | Tavily | Free tier sufficient for current scale | |
 | Suno | Paid Pro account | Manual workflow; agent generates prompts only |
 | ElevenLabs | Free plan | Cost-conscious VO agent design |
+| RunPod | Pay-per-hour GPU rental; content-permissive for legal adult content | GPU/compute platform for the Visual Generation agent; pod start/stop discipline tracked and advised |
 | Qdrant | Local Docker | No account |
 | Jaeger | Local Docker | No account |
 

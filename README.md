@@ -6,12 +6,13 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 
 | Package | Description | Status |
 |---|---|---|
-| `agent-runtime` | Shared base types, clients, and utilities used by all agents | Complete (168 tests) |
+| `agent-runtime` | Shared base types, clients, and utilities used by all agents (incl. the shared `docs_ingest` knowledge mechanism) | Complete (178 tests) |
 | `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (45 tests) |
 | `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (52 tests) |
 | `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (214 tests) |
 | `voiceover-direction` | Director for ElevenLabs voiceover — free LLM direction, deliberate paid generation, persistent takes + direction lessons | Complete (145 tests) |
 | `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (45 tests) |
+| `visual-generation` | ComfyUI-backed diffusion collaborator + platform tutor — free offline prompt-craft, deliberate warm-session GPU generation, persistent generations/technique-lessons/workflow-templates | Complete (152 tests) |
 
 ## Setup
 
@@ -51,7 +52,8 @@ agent-stack/
 │   ├── tutorial-research/          # tutorial agent
 │   ├── music-curation/             # music agent
 │   ├── voiceover-direction/        # ElevenLabs voiceover director
-│   └── concept-script/             # scriptwriting collaborator (→ script.md)
+│   ├── concept-script/             # scriptwriting collaborator (→ script.md)
+│   └── visual-generation/          # ComfyUI diffusion collaborator
 ├── infrastructure/                 # docker-compose.yml (Qdrant + Jaeger)
 └── docs/
     └── architecture.md             # detailed design and API reference
@@ -60,7 +62,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv sync --all-packages && uv run pytest -v   # full suite (669 tests)
+uv sync --all-packages && uv run pytest -v   # full suite (831 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage, Anthropic, or ElevenLabs API keys.
@@ -273,6 +275,61 @@ print(result.brief.cut_trailer)                                  # executed dire
 concept-script is **stateless** — it owns no Qdrant collection; prior work is reused via
 `--ref`. See `packages/concept-script/README.md` and `docs/v2-refinements-concept-script.md`.
 
+## Visual Generation Agent
+
+A ComfyUI-backed diffusion collaborator and platform tutor. It inherits voiceover-direction's
+cost inversion, more extreme: **prompt-craft is free, infinitely iterable LLM work; GPU is the
+scarce, paid step.** So a turn is **settle the specs offline (free), spin up the pod, drain a
+batch in one warm session, spin down** — `draft` → `generate` → `report`. Two budgets stay
+orthogonal: per-run Claude cost rides agent-runtime's `BudgetEnvelope`; **GPU/pod spend lives on
+a separate agent-local tracker** and is *advised, never enforced* (soft-inform gate, optional
+`--max-session-cost` ceiling). v1 holds **no RunPod credential** — you spin the pod up and pass
+the agent your ComfyUI `--endpoint`; it advises stop-on-drain. Stills-first (Flux); video (WAN)
+is a fast-follow on the same path.
+
+**Craft offline** (free — Claude only, no GPU; appends to an editable batch file):
+```bash
+visual-generation draft "<intent>" [-o batch.md] [--template <name>]
+```
+
+**Generate in one warm session** (spends GPU — soft-inform gate; you spin the pod up):
+```bash
+visual-generation generate batch.md --section <id> --endpoint <url>   # one spec
+visual-generation generate batch.md --all --endpoint <url> [--max-session-cost N] [-y]
+```
+
+**React after viewing** (flips the generation pending → complete):
+```bash
+visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5]
+```
+
+**Backend + templates:**
+```bash
+visual-generation model sync --endpoint <url>        # registry from ComfyUI /object_info
+visual-generation model list
+visual-generation workflow register <exported-api.json>   # infer slot map, propose→confirm
+visual-generation workflow list
+```
+
+**Inspect, direct-write, and tutor:**
+```bash
+visual-generation review-pending                          # generations awaiting a reaction
+visual-generation recall "<query>"                        # search your own generations + lessons + templates
+visual-generation chain show <root_id>                    # a lineage tree
+visual-generation lesson add "<statement>" --scope settings --valence negative
+visual-generation fact add "<statement>" --domain comfyui_mechanics
+visual-generation explain "<concept>" [--level full|concise|quiet]   # grounded deep-dive (Claude)
+visual-generation research "<topic>"                      # delegate to tutorial-research (Claude)
+```
+
+**As a library:**
+```python
+from visual_generation import draft_sync, generate_sync
+
+result = draft_sync("a cinematic neon wolf in the rain")          # DraftResult (.spec, .batch_path)
+result = generate_sync("batch.md", all_sections=True, endpoint="http://pod:8188")  # GenerationResult
+```
+
 ## Qdrant Collections
 
 | Collection | Contents |
@@ -281,6 +338,7 @@ concept-script is **stateless** — it owns no Qdrant collection; prior work is 
 | `tutorial_research` | YouTube tutorial transcripts + screenshots (populated by tutorial-research) |
 | `music_curation_memory` | Generation history, taste lessons, templates, sound references (music-curation) |
 | `voiceover_direction_memory` | Takes (text → voice/settings/reaction) and direction lessons (voiceover-direction) |
+| `visual_generation_memory` | Generations (image+caption multimodal), technique lessons, workflow templates (visual-generation) |
 
 ## Required Environment Variables
 
@@ -292,3 +350,6 @@ concept-script is **stateless** — it owns no Qdrant collection; prior work is 
 | `ELEVENLABS_API_KEY` | Required for voiceover-direction (voice sync, usage query, TTS generation) |
 | `TAVILY_API_KEY` | Optional — web search for research agents |
 | `LANGSMITH_API_KEY` | Optional — LangSmith tracing for pipeline chains |
+
+visual-generation needs no new key: it talks to a user-supplied ComfyUI `--endpoint` (the pod
+you spin up) and holds no RunPod credential in v1.

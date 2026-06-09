@@ -8,7 +8,7 @@
 
 ### agent-runtime
 
-The shared infrastructure layer. All other packages import from here. **Status: complete.** 168 tests passing.
+The shared infrastructure layer. All other packages import from here. **Status: complete.** 178 tests passing.
 
 #### Layer 1 — Config & Models
 
@@ -98,6 +98,12 @@ Runtime-owned wrapper around `MemoryStore` that owns the `user_knowledge` Qdrant
 **Exported types:** `UserKnowledgeStore`, `Draft`, `KnowledgeEntry`, `KnowledgeHit` — all available from `agent_runtime`.
 
 **Draft persistence:** `~/agent-data/drafts/user_knowledge/<draft_id>.json`; 7-day expiry enforced lazily by `list_drafts()`.
+
+#### Layer 4c — Shared docs-ingest mechanism
+
+`agent_runtime.knowledge.docs_ingest` — `ingest_docs(folder, *, domain, ...)` / `ingest_docs_sync`. A domain-agnostic, no-LLM flow for turning a folder of local markdown docs into verified `user_knowledge` entries: each `##`+ heading becomes a candidate (`statement` = body, `topic_tags` = heading hierarchy, `source_ref` = `file://` or a frontmatter `url`), confirmed at end of run via a y/n/edit/defer pass, then loaded through `UserKnowledgeStore.bulk_load_verified` under the caller-supplied `domain` (`source_type="documentation"`, `confidence="high"` by default). The **`domain` tag and the source folder are the only domain-specific inputs**; everything else is generic. The docs folder is the durable queue — deferred/skipped sections reappear on the next run — and a re-run dedups against existing active entries keyed on `source_ref + topic_tags + statement` (`bulk_load_verified` itself is not idempotent).
+
+Promoted to the runtime once a second consumer appeared: **voiceover-direction's `knowledge ingest-docs` command calls this** (a behavior-preserving refactor — its CLI is unchanged), and visual-generation uses it for ComfyUI/RunPod docs. The deferred `--decisions` / `--url` refinements, now that the flow is shared, land here once for every agent.
 
 #### Layer 5 — Reporting
 
@@ -620,6 +626,85 @@ max_items=1, max_depth=0, max_cost_usd=1.00, max_wall_time_sec=300
 
 ---
 
+### visual-generation
+
+ComfyUI-backed diffusion image/video collaborator with a first-class platform-tutor role. **Status: Phase 2 complete (MVP).** 152 tests passing.
+
+A standalone, domain-agnostic generation agent modeled on voiceover-direction (cost inversion) and music-curation (curated memory). It inherits by reasoning, not template — three genuine differences (an extreme two-axis cost inversion, a running pod that costs money during otherwise-free prompt-craft, and a node-graph backend plus a tutor role) shaped the decisions below.
+
+#### The turn shape (cost inversion, more extreme than voiceover)
+
+A generation turn is **settle offline (free) → spin up → drain a batch in one warm session → spin down**: `draft` → `generate` → `report`. Prompt-craft (`draft`) is free, infinitely iterable Claude work that appends settled specs to an **editable batch file** (the voiceover `.directed.md` pattern extended to hold multiple specs, lossless round-trip via per-spec HTML-comment JSON). The deliberate paid act is opening and holding the **warm session**; runs inside it are expected iteration. Session-granularity (not per-run) is the deliberate choice because diffusion iteration needs renders to settle a prompt, and RunPod bills per-second of uptime *including* cold-start — so the discipline is "minimize spin-ups," which is exactly draft-offline → drain-a-batch.
+
+#### Two orthogonal budgets
+
+Per-run **Claude** cost stays in agent-runtime's `BudgetEnvelope`. **GPU/pod spend is a separate, agent-local tracker** (`GpuLedger` / `SessionMeter`) — a different currency (GPU-seconds × user-supplied rate + standing storage; nothing caps it underneath beyond RunPod's global default). It is **soft-inform only**: a gate at spin-up estimates session cost from the batch, a running total accrues, and a stop-prompt fires on drain — advise, never block, with an optional `--max-session-cost` hard ceiling. GPU cost is recorded as span attributes and as per-run `cost_usd` in the `generation` payload; it **never enters `BudgetEnvelope`**. v1 holds **no RunPod credential** — pod lifecycle is *advisory*: the user spins the pod up and passes the agent its ComfyUI `--endpoint`; the agent issues no RunPod calls, prompts to stop on batch-drain, and surfaces idle warnings.
+
+#### Collection & memory model
+
+`visual_generation_memory` (1024-dim cosine), three memory types discriminated by `memory_type`:
+
+- **`generation`** — embed target: the image/keyframe at `asset_path` **plus** the caption, via the **multimodal `voyage-multimodal-3`** surface. This is the first agent to lean on multimodal embedding for its own memory. Payload: full `settings` (model-agnostic dict), `model`/checkpoint, `lora_stack` + strengths, `workflow_ref`, `seed`, dimensions, `asset_path`, per-run `cost_usd`, `identity_bearing`, `reaction`, `rating`, `status`, chain lineage (`chain_root_id`/`parent_id`), `project`.
+- **`technique_lesson`** — embed target: the `statement`. A lesson learned by doing ("CFG>7 washed skin on this checkpoint"); `scope` ∈ `prompt|settings|workflow|model`, `valence`, `confirmed`.
+- **`workflow_template`** — embed target: the `descriptor`. A reusable parameterized ComfyUI graph: the API-format `graph`, a **`slot_map`** (semantic param → `{node_id, input_key}`), and `required_models`.
+
+The text-embedded types coexist with the multimodal `generation` type in one collection because every search filters by `memory_type` and never compares vectors across types (a text-query for generations is embedded through the multimodal surface text-only, so it shares the same vector space). **Reaction vocabulary** mirrors voiceover-direction's aesthetic/technical split: `loved` / `liked` / `liked_with_changes` / `disliked` (ComfyUI rendered the spec faithfully but it's not to taste — weighs against the settings) / `render_failed` (the intent didn't render — artifacts/ignored prompt; the direction stays open, the prior generation surfaces as structure to learn from) / `pending`.
+
+#### Model/LoRA registry (not a vector type)
+
+The voice-registry analog: a local JSON file holding checkpoints, LoRAs, VAEs, etc., enumerated and looked up **by name, never semantically searched**. `model sync` reconciles the registry from a pod's ComfyUI `/object_info` (merge-aware: manual metadata — chiefly the `identity_bearing` flag — survives a sync; a manually-registered asset absent from a given pod is kept and flagged, a previously-synced asset gone absent is dropped). Character LoRAs live here; the `identity_bearing` flag drives the opsec storage decision below.
+
+#### ComfyUI backend + templates
+
+`ComfyUIClient` speaks the native pod API: POST `/prompt` → `prompt_id` → poll `/history/{id}` for outputs → fetch assets from `/view`; `/object_info` enumerates installed models. Workflows are in **API format** (node id → `{class_type, inputs}`). `workflow register` walks an exported graph to **infer a candidate slot map** and required models, then **propose → confirm** (you correct once). The slot map is the right primitive because parameterizing a graph is literally writing values into node inputs by id, and positive vs. negative prompts are distinguishable only by which sampler input they feed. **v1 scope line: consume graphs the user builds in ComfyUI, don't author them** (graph authoring deferred). Flux's parameterization differs from SDXL (CFG≈1.0, a separate flux-guidance slot, no negative prompt) — a per-template slot-map detail the draft chain honors.
+
+#### Retrieval (`retrieval.py`)
+
+`retrieve_context(query, store, memory_store, ...)` composes three collections in parallel via `asyncio.gather`, mirroring music/voiceover: own `visual_generation_memory` (generations through the multimodal query-space, technique_lessons, workflow_templates) + `user_knowledge` (`comfyui_mechanics` and `runpod_mechanics`, 1.25× score boost — `USER_KNOWLEDGE_SCORE_MULTIPLIER`) + `tutorial_research`. Each leg degrades silently to an empty bucket, so the agent stays useful from a cold start. The standing distinction: `user_knowledge` = documented platform/vendor facts; `technique_lesson` = lessons learned by doing; `tutorial_research` = tutorial-derived technique.
+
+#### Asset storage + identity opsec
+
+Assets are **disk files referenced by `asset_path`, never stored in Qdrant and never in the obsidian vault** — the vector point embeds the image/keyframe + caption and references the file by path. Non-identity assets live under `~/agent-data/visual-generation/assets/`; **identity-bearing assets (and the generations that use them) live in a secured, isolated path, write-guarded** against the vault, `agent-reports`, and any synced location (extending the clean-directory-separation rule). Encryption-at-rest for identity artifacts is deferred. Distinct from this is the **content hard line** — no nude generation, no clothed→unclothed transformation of real people — enforced at the capability level (not a capability the agent builds).
+
+#### Tutor role (`explain`, `research`)
+
+- **`explain <concept> [--level full|concise|quiet]`** — a grounded Sonnet deep-dive (`MODEL_DIRECTOR`, Claude budget, **no GPU**). It always runs the three-collection retrieval and **always surfaces the user's own relevant `technique_lesson`s back to them**; the `--level` dial (config-defaulted to `concise`) changes only how much *generic* explanation rides along, never whether own-lessons appear.
+- **`research <topic>`** — the explicit, deliberate path `draft` only offers on a gap. A standard `delegate()` to tutorial-research with a **Claude-cost-only child budget** (research touches no GPU — it never enters the agent-local tracker). Two-step with a cheap fallback: tutorial-research writes to the `tutorial_research` collection, already one of the three retrieval legs, so subsequent `draft`/`explain`/`recall` retrieve it cheaply with no re-delegation. (visual-generation registers the tutorial-research delegate handler at its own CLI bootstrap, guarded against double-registration.)
+
+Inline tutoring also rides the free `draft` call (a concise rationale citing retrieved own-lessons).
+
+#### CLI subcommands
+
+```bash
+visual-generation draft "<intent>" [-o batch.md] [--template <name>]
+visual-generation generate <batch.md> (--section <id> | --all) --endpoint <url> [--gpu-rate N] [--max-session-cost N] [-y]
+visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5] [--notes ...] [--context ...]
+visual-generation model sync --endpoint <url>;  visual-generation model list
+visual-generation workflow register <exported-api.json>;  visual-generation workflow list
+visual-generation review-pending;  visual-generation recall "<query>";  visual-generation chain show <root_id>
+visual-generation lesson add "<statement>" --scope <prompt|settings|workflow|model> --valence <positive|negative>
+visual-generation fact add "<statement>" --domain <comfyui_mechanics|runpod_mechanics>
+visual-generation explain "<concept>" [--level full|concise|quiet]
+visual-generation research "<topic>"
+```
+
+#### Default budgets (`constants.py`)
+
+```
+DRAFT_BUDGET    (draft):    max_items=1,    max_depth=1, max_cost_usd=1.50, max_wall_time_sec=300
+GENERATE_BUDGET (generate): max_items=None, max_depth=0, max_cost_usd=0.50, max_wall_time_sec=1800
+EXPLAIN_BUDGET  (explain):  max_items=1,    max_depth=1, max_cost_usd=1.00, max_wall_time_sec=300
+RESEARCH_BUDGET (research): max_items=3,    max_depth=2, max_cost_usd=2.00, max_wall_time_sec=600
+```
+
+These are the **Claude** axis only. `generate`'s envelope is tiny because the spend phase makes no LLM call — GPU spend is orthogonal and tracked separately. `research` hands tutorial-research a Claude-only child budget derived from `RESEARCH_BUDGET`.
+
+#### Deferred (the path is built to accept them)
+
+video/WAN (a fast-follow on the same turn shape — a generation already embeds a representative keyframe + caption and lineage spans output types) · LoRA training (ai-toolkit — a separate subsystem) · RunPod stop-automation (Tier-2: the agent holds a key and auto-stops on drain/idle) · encryption-at-rest for identity artifacts · the `reference` memory type · the shared `ingest-docs` `--decisions`/`--url` refinements · graph authoring.
+
+---
+
 ## Storage Layer (Qdrant)
 
 - Runs locally via Docker Compose on `localhost:6333`
@@ -636,6 +721,7 @@ Key collections:
 | `user_knowledge` | User-authored first-party knowledge (verified facts, doc distillations) | `UserKnowledgeStore` (agent-runtime) |
 | `music_curation_memory` | Generation history, taste lessons, templates, sound references | `MusicCurationStore` (music-curation) |
 | `voiceover_direction_memory` | Takes (text → voice/settings/reaction, section-scoped lineage) and direction lessons | `VoiceoverDirectionStore` (voiceover-direction) |
+| `visual_generation_memory` | Generations (image+caption multimodal), technique lessons, workflow templates | `VisualGenerationStore` (visual-generation) |
 
 ---
 
@@ -680,13 +766,14 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv sync --all-packages && uv run pytest -v               # full suite (669 tests)
-uv run pytest packages/agent-runtime/tests/ -v          # 168 tests
+uv sync --all-packages && uv run pytest -v               # full suite (831 tests)
+uv run pytest packages/agent-runtime/tests/ -v          # 178 tests
 uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 45 tests
 uv run pytest packages/tutorial-research/tests/ -v      # 52 tests
 uv run pytest packages/music-curation/tests/ -v         # 214 tests
 uv run pytest packages/voiceover-direction/tests/ -v    # 145 tests
 uv run pytest packages/concept-script/tests/ -v         # 45 tests
+uv run pytest packages/visual-generation/tests/ -v      # 152 tests
 ```
 
 Tests that require Qdrant running on `localhost:6333` are marked with `@requires_qdrant` and skipped automatically if unreachable. No test requires real Voyage, Anthropic, or ElevenLabs API keys.

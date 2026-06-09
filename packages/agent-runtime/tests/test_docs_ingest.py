@@ -3,11 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
-from voiceover_direction.cli import cli
-from voiceover_direction.docs_ingest import ingest_docs, parse_docs
+from agent_runtime.knowledge.docs_ingest import ingest_docs, ingest_docs_sync, parse_docs
+
+DOMAIN = "comfyui_mechanics"
 
 
 @pytest.fixture
@@ -25,22 +27,22 @@ def _write(folder: Path, name: str, text: str) -> None:
 
 def test_parse_docs_hierarchy_to_topic_tags(tmp_path: Path) -> None:
     _write(tmp_path, "guide.md", (
-        "# ElevenLabs Guide\n\n"
-        "## Track Actions\n\nOverview of track actions.\n\n"
-        "### Cover\n\nCover regenerates a track in a new style.\n\n"
-        "### Extend\n\nExtend adds time to the end.\n"
+        "# ComfyUI Guide\n\n"
+        "## Nodes\n\nOverview of nodes.\n\n"
+        "### KSampler\n\nKSampler denoises latents.\n\n"
+        "### VAEDecode\n\nVAEDecode turns latents into pixels.\n"
     ))
     cands = parse_docs(tmp_path)
     by_heading = {c.heading: c for c in cands}
 
     # H2 with a body of its own is a candidate; H1 is not (page title / ancestor only).
-    assert "ElevenLabs Guide" not in by_heading
-    assert by_heading["Track Actions"].topic_tags == ["track_actions"]
-    assert by_heading["Track Actions"].statement == "Overview of track actions."
+    assert "ComfyUI Guide" not in by_heading
+    assert by_heading["Nodes"].topic_tags == ["nodes"]
+    assert by_heading["Nodes"].statement == "Overview of nodes."
     # H3 carries the H2 ancestor in its topic_tags.
-    assert by_heading["Cover"].topic_tags == ["track_actions", "cover"]
-    assert by_heading["Cover"].statement == "Cover regenerates a track in a new style."
-    assert by_heading["Extend"].topic_tags == ["track_actions", "extend"]
+    assert by_heading["KSampler"].topic_tags == ["nodes", "ksampler"]
+    assert by_heading["KSampler"].statement == "KSampler denoises latents."
+    assert by_heading["VAEDecode"].topic_tags == ["nodes", "vaedecode"]
 
 
 def test_parse_docs_skips_empty_body_headings(tmp_path: Path) -> None:
@@ -53,18 +55,18 @@ def test_parse_docs_skips_empty_body_headings(tmp_path: Path) -> None:
 
 def test_parse_docs_source_ref_file_vs_url(tmp_path: Path) -> None:
     _write(tmp_path, "plain.md", "## A\n\nbody.\n")
-    _write(tmp_path, "fronted.md", "---\nurl: https://elevenlabs.io/docs/x\n---\n\n## B\n\nbody.\n")
+    _write(tmp_path, "fronted.md", "---\nurl: https://docs.comfy.org/x\n---\n\n## B\n\nbody.\n")
     cands = {c.heading: c for c in parse_docs(tmp_path)}
     assert cands["A"].source_ref.startswith("file://")
     assert cands["A"].source_ref.endswith("plain.md")
-    assert cands["B"].source_ref == "url://https://elevenlabs.io/docs/x"
+    assert cands["B"].source_ref == "url://https://docs.comfy.org/x"
 
 
 # ── ingest_docs (library) ────────────────────────────────────────────────────
 
 
 def _docs_folder(tmp_path: Path) -> Path:
-    _write(tmp_path, "a.md", "## Voices\n\nv3 reads inline audio tags.\n")
+    _write(tmp_path, "a.md", "## Sampler\n\nKSampler denoises in latent space.\n")
     return tmp_path
 
 
@@ -74,17 +76,30 @@ async def test_ingest_writes_verified_schema(tmp_path: Path) -> None:
     uks = MagicMock()
     uks.bulk_load_verified = AsyncMock(return_value=["e1"])
     with patch("agent_runtime.knowledge.docs_ingest._existing_keys", AsyncMock(return_value=set())):
-        await ingest_docs(folder, auto_confirm=True, uks=uks)
+        await ingest_docs(folder, domain=DOMAIN, auto_confirm=True, uks=uks)
 
     entries = uks.bulk_load_verified.call_args.args[0]
     source_ref = uks.bulk_load_verified.call_args.kwargs["source_ref"]
     entry = entries[0]
-    assert entry["statement"] == "v3 reads inline audio tags."
-    assert entry["domain"] == "elevenlabs_mechanics"
+    assert entry["statement"] == "KSampler denoises in latent space."
+    assert entry["domain"] == DOMAIN
     assert entry["source_type"] == "documentation"
     assert entry["confidence"] == "high"
-    assert entry["topic_tags"] == ["voices"]
+    assert entry["topic_tags"] == ["sampler"]
     assert source_ref.startswith("file://")
+
+
+@pytest.mark.asyncio
+async def test_ingest_domain_flows_to_dedup_filter(tmp_path: Path) -> None:
+    # The caller's domain must reach _existing_keys (the dedup query is domain-scoped).
+    folder = _docs_folder(tmp_path)
+    uks = MagicMock()
+    uks.bulk_load_verified = AsyncMock(return_value=["e1"])
+    spy = AsyncMock(return_value=set())
+    with patch("agent_runtime.knowledge.docs_ingest._existing_keys", spy):
+        await ingest_docs(folder, domain=DOMAIN, auto_confirm=True, uks=uks)
+    # _existing_keys(uks, domain, source_ref) — domain is the second positional arg.
+    assert spy.call_args.args[1] == DOMAIN
 
 
 @pytest.mark.asyncio
@@ -94,7 +109,7 @@ async def test_ingest_one_call_per_file(tmp_path: Path) -> None:
     uks = MagicMock()
     uks.bulk_load_verified = AsyncMock(return_value=["e"])
     with patch("agent_runtime.knowledge.docs_ingest._existing_keys", AsyncMock(return_value=set())):
-        await ingest_docs(tmp_path, auto_confirm=True, uks=uks)
+        await ingest_docs(tmp_path, domain=DOMAIN, auto_confirm=True, uks=uks)
     # One bulk_load_verified per file (per-file source_ref).
     assert uks.bulk_load_verified.await_count == 2
 
@@ -107,11 +122,20 @@ async def test_ingest_no_duplicate_on_rerun(tmp_path: Path) -> None:
     uks = MagicMock()
     uks.bulk_load_verified = AsyncMock(return_value=[])
     with patch("agent_runtime.knowledge.docs_ingest._existing_keys", AsyncMock(return_value=existing)):
-        await ingest_docs(folder, auto_confirm=True, uks=uks)
+        await ingest_docs(folder, domain=DOMAIN, auto_confirm=True, uks=uks)
     uks.bulk_load_verified.assert_not_called()   # all deduped → no write
 
 
-# ── ingest-docs CLI (confirmation flow, dry-run, yes) ────────────────────────
+# ── ingest_docs orchestration via a click harness (confirm flow, dry-run, yes) ──
+
+
+@click.command()
+@click.argument("folder", type=click.Path(exists=True, file_okay=False))
+@click.option("--dry-run", is_flag=True, default=False)
+@click.option("--yes", is_flag=True, default=False)
+def _harness(folder: str, dry_run: bool, yes: bool) -> None:
+    """Throwaway CLI to drive ingest_docs_sync through CliRunner (input/output capture)."""
+    ingest_docs_sync(folder, domain=DOMAIN, dry_run=dry_run, auto_confirm=yes)
 
 
 def _four_section_folder(tmp_path: Path) -> Path:
@@ -138,7 +162,7 @@ def test_ingest_docs_dry_run_writes_nothing(runner: CliRunner, tmp_path: Path) -
     folder = _four_section_folder(tmp_path)
     uks, (p1, p2, p3) = _patch_uks()
     with p1, p2, p3:
-        result = runner.invoke(cli, ["knowledge", "ingest-docs", str(folder), "--dry-run"])
+        result = runner.invoke(_harness, [str(folder), "--dry-run"])
     assert result.exit_code == 0, result.output
     assert "dry run" in result.output
     uks.bulk_load_verified.assert_not_called()
@@ -148,7 +172,7 @@ def test_ingest_docs_yes_writes_all(runner: CliRunner, tmp_path: Path) -> None:
     folder = _four_section_folder(tmp_path)
     uks, (p1, p2, p3) = _patch_uks()
     with p1, p2, p3:
-        result = runner.invoke(cli, ["knowledge", "ingest-docs", str(folder), "--yes"])
+        result = runner.invoke(_harness, [str(folder), "--yes"])
     assert result.exit_code == 0, result.output
     entries = uks.bulk_load_verified.call_args.args[0]
     assert len(entries) == 4   # all four sections written, no prompt
@@ -161,7 +185,7 @@ def test_ingest_docs_confirm_flow_y_n_e_d(runner: CliRunner, tmp_path: Path) -> 
     # One=y(confirm), Two=n(skip), Three=e+edit(confirm), Four=d(defer).
     feed = "y\nn\ne\nedited three\nd\n"
     with p1, p2, p3:
-        result = runner.invoke(cli, ["knowledge", "ingest-docs", str(folder)], input=feed)
+        result = runner.invoke(_harness, [str(folder)], input=feed)
 
     assert result.exit_code == 0, result.output
     entries = uks.bulk_load_verified.call_args.args[0]
