@@ -112,6 +112,10 @@ Promoted to the runtime once a second consumer appeared: **voiceover-direction's
 - **`notify_budget_threshold(agent, consumption, envelope)`** — fires above 75%
 - **`notify_run_complete(agent, run_id, status, cost_usd)`**
 
+#### Layer 6 — Schema migrations *(planned, not built)*
+
+A runtime-owned, domain-agnostic migration runner versioning structural and data changes across both Qdrant and the relational checkpointer. Applied migrations are recorded in a single SQLite ledger (`~/agent-data/agent-stack.db`, table `schema_migrations`), tagged by target store. Migrations are per-package and runner-discovered with timestamp-prefixed IDs for deterministic global ordering; cross-cutting ones (the `0001_baseline`, `user_knowledge`) live in `agent-runtime`. The baseline wraps the existing `ensure_collection` calls rather than replacing them — a fresh environment runs it to reach current structure, while the already-populated DB is stamped as applied. Forward-only, idempotent (no cross-store atomicity), explicit CLI (`migrate status | up | stamp`) with no startup auto-apply. Full design and rationale: the "Schema migrations (planned)" section of `ai-director-agent-system.md`.
+
 ---
 
 ### yt-intelligence-pipeline

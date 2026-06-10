@@ -28,7 +28,7 @@ This document specifies the agent ecosystem at the system level. Implementation 
 
 **Budget governance from day one.** Every agent invocation carries a `BudgetEnvelope` with hard caps on items, cost, depth, and wall time. Delegated calls derive child budgets capped against parents. This is built into the runtime; agents inherit it for free.
 
-**Standalone over orchestrated.** Each agent is independently invokable and individually useful. The current invocation surfaces are CLI and library entry point, with MCP server exposure planned — but the invocation layer is deliberately open. Future surfaces (Telegram or other messaging triggers, voice input, a scheduled trigger on a Raspberry Pi, a web endpoint) are all on the table where they're the better fit for how the user wants to reach a given agent. The point is that agents are standalone capabilities, not that there's only one way to call them. Composition happens when the user (or a thin orchestrator) chooses to chain them — not as a forced workflow.
+**Standalone over orchestrated.** Each agent is independently invokable and individually useful. The current invocation surfaces are CLI and library entry point, with MCP server exposure planned — but the invocation layer is deliberately open. Future surfaces (Telegram or other messaging triggers, voice input, a scheduled trigger on a Raspberry Pi, a web endpoint) are all on the table where they're the better fit for how the user wants to reach a given agent. The point is that agents are standalone capabilities, not that there's only one way to call them. Composition happens when the user — or the planned Orchestrator Agent acting on the user's behalf — chooses to chain them, not as a forced workflow. The Orchestrator is that composition layer made explicit: it sits above the standalone agents and invokes them as tools, without making any of them depend on it.
 
 ## Tech Stack
 
@@ -46,6 +46,7 @@ This document specifies the agent ecosystem at the system level. Implementation 
 | Voiceover | ElevenLabs API |
 | Video editing | DaVinci Resolve (manual; possible Tier 1 advisory agent later) |
 | Knowledge base storage | Qdrant collections per domain |
+| Schema migrations | Custom runtime runner + SQLite ledger across Qdrant and relational *(planned)* |
 | Agent-readable references | Obsidian vault `agent-reports/` (separate from user's personal vault) |
 | Source documents | `~/agent-data/sources/` on disk |
 
@@ -57,7 +58,7 @@ This document specifies the agent ecosystem at the system level. Implementation 
 
 **Current choices, open to revision.** The stack above reflects what's been chosen for the current build, not permanent commitments. Several tools were considered and set aside for now but remain viable if the situation changes:
 
-- **LangGraph** — not currently used because sequential LangChain reasoning has been sufficient for the agents built so far. If an agent emerges that genuinely needs stateful, branching, looping multi-step control flow (a meta-orchestrator coordinating other agents, for example), LangGraph is the right tool and should be brought in for that agent.
+- **LangGraph** — not used by any agent built so far, because sequential LangChain reasoning has been sufficient for them. It now has a concrete home: the planned **Orchestrator Agent**, the meta-orchestrator coordinating the other agents, which genuinely needs stateful, branching, looping control flow and a conversation checkpointer. LangGraph is the chosen tool for that agent (the Claude Agent SDK was the considered alternative — see the Orchestrator Agent section).
 - **n8n** — not currently used because CLI/library/MCP invocation covers present needs. If integration-heavy workflows arise (scheduled triggers, multi-app data shuffling, visual workflows the user wants to inspect and edit), n8n is a strong fit. It may also be the natural home if agents are ported to run on a Raspberry Pi.
 - **Raspberry Pi** — everything currently runs on the M1, but the user may port some or all agents to a Pi in the future, or run dedicated agents there. The architecture (local Qdrant, local Docker infra, Python packages) ports cleanly; this is a deployment decision deferred, not foreclosed.
 - **Google Sheets** — not currently used because Qdrant + filesystem covers the data layer. For genuinely tabular, human-reviewable logging (generation logs, project status tracking) where Qdrant would be overkill or over-complicate things, Google Sheets is a reasonable choice and not ruled out.
@@ -284,15 +285,45 @@ visual-generation explain "<concept>" [--level full|concise|quiet];  visual-gene
 
 ---
 
-### Project Organizer Agent — `project-organizer` *(planned, possibly minimal)*
+### Orchestrator Agent — `orchestrator` *(planned)*
 
-**Status: not built. May be replaced by Cowork for most use cases.**
+**Status: not built.** Supersedes the previously-planned "Project Organizer Agent." That agent was scoped to file scaffolding and manifest/status tracking, and was flagged as largely redundant with Cowork — which the user does plan to use for project scaffolding. The remaining file-organization gap is small and stays with Cowork; what the user actually wants in this slot is a different kind of agent, specified below.
 
-**Purpose:** Standardized scaffolding for project working directories. Creates folder structures, renames incoming files consistently, generates project manifests, tracks what's ready vs. missing.
+**Purpose:** A single conversational meta-agent that is an expert in *this* system. It knows what every agent does, answers questions about the system, retrieves from the shared knowledge bases, reads the live codebase and docs, remembers the conversation across sessions, and can invoke the other agents as tools. It is the "director's console" — one place to talk to the whole system rather than invoking each agent's CLI separately. New capabilities are added by registering a tool or wrapping a sub-agent, not by rewriting the orchestrator.
 
-**Open question:** Cowork (Anthropic's file-management product) does most of this natively. The user already plans to use Cowork for project scaffolding. A custom Project Organizer agent may only be needed for the manifest/status tracking piece, or to bridge between Cowork-managed folders and the other agents' inputs/outputs.
+**Central design question (Phase 1):** what is the orchestration control-flow graph, and where does each kind of state live? The agent must keep two memories strictly separate — conflating them is the most common way to build this wrong:
 
-**Decision deferred until other agents are built and the actual gap is clear.**
+- **Conversation memory (continuity)** — the running thread, so the agent knows what was said earlier and across sessions. This is a LangGraph checkpointer keyed by thread ID (SQLite locally; Postgres only if it ever needs sharing), **not** the vector DB. Embedding raw chat turns for continuity yields fuzzy semantic recall instead of accurate turn-by-turn history.
+- **Long-term knowledge (semantic recall)** — the system's facts, docs, and distilled experience. This is the existing Qdrant layer, queried across the namespaced per-domain collections.
+
+**Technology — LangGraph (chosen over the Claude Agent SDK).** This is the agent the rest of this spec anticipated when it said "bring in LangGraph if a genuine meta-orchestrator appears." The Claude Agent SDK was evaluated as the alternative — it ships session persistence, live file access, and MCP support out of the box, and would hand those three hard parts over for free. LangGraph is chosen deliberately anyway: the user wants explicit control over the orchestration graph (nodes, branching, looping, tool routing, checkpointer wiring) and provider portability, rather than an opinionated built-in loop. The accepted cost is that the code-access tools, checkpointer wiring, and retrieval plumbing are built here instead of inherited. This is consistent with the rest of the stack, which already reasons through `langchain-anthropic`.
+
+**The layers it needs:**
+
+- **Orchestration loop** — a LangGraph graph that reasons, retrieves, routes to tools, and loops. Carries a runtime `BudgetEnvelope` like every other agent; delegated calls derive child budgets against the parent (the existing delegation pattern). The reserved `MODEL_ORCHESTRATOR` runtime constant is its model slot.
+- **Conversation store** — LangGraph checkpointer (SQLite locally), one thread per conversation, resumable across sessions.
+- **Knowledge retrieval** — cross-collection reads over the existing Qdrant collections (`user_knowledge`, `tutorial_research`, each agent's `*_memory`, `technique_research_outputs`, `project_archive`), scoped per query by collection/metadata so domains don't blur. No new collection required; the orchestrator is a reader, not an owner.
+- **Live codebase + docs access** — read + grep over the `agent-stack` packages and `docs/`, the way Claude Code itself works. The codebase is actively developed, so it is read live, never summarized-and-embedded — embedding code answers from stale snapshots and forces re-indexing on every change. Only stable prose (architecture docs, READMEs, design notes) is worth embedding, and that already lives in the knowledge layer where appropriate.
+- **Capabilities as tools** — each existing agent is exposed to the orchestrator as a tool, via its library API now and its planned MCP server later. "Add a capability" = register a tool or wrap an agent, not rewrite the orchestrator. This is the extensibility seam.
+
+**Inputs (starting points, not exhaustive):** a natural-language message from the user; the conversation thread ID (for continuity); and, implicitly, read access to the codebase, docs, and Qdrant collections. More to be discovered during the build.
+
+**Outputs:**
+- Conversational responses grounded in the system's knowledge and code
+- Tool/agent invocations (delegated runs of the other agents) and their results
+- Persisted, resumable conversation threads
+- Diagnostic reports to `~/obsidian/agent-reports/diagnostics/` (see "Vector-DB diagnostics" below)
+- Optionally, run reports to the agent-reports vault for substantive sessions
+
+**Tools (starting points):** Claude (via `langchain-anthropic`) for reasoning; the runtime memory layer for cross-collection retrieval; a read-only Qdrant inspection tool (collection metadata, counts, payload sampling — wrapping the `AsyncQdrantClient` primitives the runtime's `MemoryStore` already holds) for diagnostics; filesystem read + grep tools for live code/doc access; and each agent (Tutorial Research, Music Curation, Voiceover Direction, Concept & Script, Visual Generation, and others as built) exposed as an invokable tool. Additional tools as they prove useful — the set is meant to grow.
+
+**Cross-agent dynamics:** the Orchestrator sits *above* every other agent. Where Tutorial Research is the agent delegated *to* by many, the Orchestrator is the one agent that can delegate to *any* other. It does not replace direct CLI/library invocation of individual agents — those stay independently useful — it adds a conversational layer over the whole system for when the user wants to reach the system as a whole rather than one agent at a time.
+
+**Vector-DB diagnostics (diagnose-only).** The Orchestrator can audit the Qdrant layer but never writes to it — it is a reader, not an owner, the same rule that governs its knowledge retrieval. Diagnosis combines three things it already has: the read-only Qdrant inspection tool (collection metadata, counts, payload sampling via `scroll`/`count`/`get_collection`); live code access (an agent's target collection, metadata filters, score threshold, and embedding model, read from source); and — where a structural read can't decide — a behavioral probe (embed a query that *should* hit and check whether the expected point returns above threshold). The probe is the only way to catch a cross-model embedding-space mismatch, since `voyage-3-large` and `voyage-multimodal-3` vectors are both 1024-dim and structurally valid but semantically incompatible, so the data is present yet never retrieves.
+
+When it finds an issue it does two things and then stops: (1) it writes a **diagnostic report** to `~/obsidian/agent-reports/diagnostics/` — a markdown file with frontmatter naming the affected collection, the owning agent, the symptom, the root-cause diagnosis, the supporting evidence (filter/threshold/model read from code, plus the actual payloads/scores found in Qdrant), and a proposed fix, with a `status` field that moves `open → delegated → fixed`; and (2) it **delegates the fix to the owning agent**, invoking that agent's remediation path as a tool and handing it the report. The owning agent performs the actual write — re-embed, re-tag payload, move points — under its existing ownership, which preserves the rule that only an owner writes to its own collection (and only `UserKnowledgeStore` writes to `user_knowledge`, via propose→confirm). The Orchestrator diagnoses and documents; it does not fix.
+
+**Dependency this surfaces:** delegating the fix assumes each owning agent exposes a remediation/maintenance entry point. Most agents don't have one yet — so until they do, the diagnostic report doubles as a human- or Claude-Code-actionable work order the user runs manually, and building per-agent remediation surfaces becomes a follow-up that this capability will drive out as it's used.
 
 ---
 
@@ -358,6 +389,8 @@ Visual Generation                     ──feeds───> Edit Brief (generate
 
 Tutorial Research is the only agent that gets delegated to by multiple others. It is the knowledge-acquisition arm of the system.
 
+The map above is the *agent-to-agent* graph. The planned **Orchestrator Agent** sits above all of it: it can invoke any agent as a tool on the user's behalf, but no agent depends on it. It is an additional conversational entry point into the system, not a node in the production pipeline — so it is deliberately left out of the diagram above to keep that diagram about how the production agents relate to each other.
+
 ## Director Tasks (What the User Handles)
 
 | Task | Why the user, not an agent |
@@ -383,7 +416,7 @@ Two different categories here, worth keeping distinct.
 
 **Deferred but open (not now, but viable if the situation changes):**
 
-- **LangGraph.** Not used yet because sequential LangChain reasoning suffices for current agents. The right tool if a future agent needs genuine stateful/branching/looping control flow (e.g., a meta-orchestrator). Bring it in for that agent if/when it appears.
+- **LangGraph.** Not used by current agents because sequential LangChain reasoning suffices for them — but no longer purely hypothetical: it is the chosen orchestration framework for the planned **Orchestrator Agent**, which needs genuine stateful/branching/looping control flow and a conversation checkpointer. Scoped to that agent; the existing standalone agents stay on plain LangChain.
 - **n8n.** Not used yet because CLI/library/MCP invocation covers current needs. A strong fit if integration-heavy or scheduled workflows arise, and a natural home if agents move to a Raspberry Pi. On the table.
 - **Raspberry Pi deployment.** Everything runs on the M1 today, but porting some or all agents to a Pi — or running dedicated agents there — is a real future possibility. The architecture ports cleanly. Deferred, not foreclosed.
 - **Google Sheets (or similar) as a logging/data layer.** Not used yet because Qdrant + filesystem covers it. For tabular, human-reviewable data (generation logs, project status) where Qdrant would be overkill, a spreadsheet is a reasonable choice. Open.
@@ -412,6 +445,21 @@ Cross-collection reads are fine. Tutorial Research's collection is *the* tutoria
 
 Ingesting a folder of local docs into `user_knowledge` is itself a **shared runtime mechanism** — `agent_runtime.knowledge.docs_ingest` (`ingest_docs`), domain-agnostic and parameterized by `domain` + source folder (no LLM; `##`+ heading → candidate → y/n/edit/defer → `bulk_load_verified`). voiceover-direction's `knowledge ingest-docs` command was refactored onto it (behavior-preserving), and visual-generation uses it for ComfyUI/RunPod docs.
 
+### Schema migrations (planned)
+
+**Status: not built.** A runtime-owned, domain-agnostic migration mechanism — same shape as `docs_ingest` and `UserKnowledgeStore` — that versions structural and data changes across *both* the Qdrant collections and the relational store the Orchestrator brings in (its LangGraph conversation checkpointer). It is the shared home for the migration-shaped work the system already does by hand today: the music-curation `approved → liked` one-shot, the `user_note → notes` shim, and the re-tag / re-embed fixes the Orchestrator's diagnostics flow will generate (this is the per-agent "remediation entry point" that diagnostics delegates to).
+
+**Why a small custom runner, not Alembic.** Alembic only understands relational schemas; it has no concept of Qdrant collections, vectors, or payloads — and nearly all of this system's migrations live on the Qdrant side. So Alembic would manage only the relational slice, leaving the majority untracked or forcing a second system. A small custom runner speaks both stores and records applied migrations in one ledger. Alembic stays in reserve only if first-party relational tables are ever added beyond what LangGraph manages its own.
+
+**Migrations are the source of truth for structure — by wrapping, not replacing, `ensure_collection`.** An idempotent `0001_baseline` brings a fresh environment (a new machine, the planned Raspberry Pi) to the current structure by calling the same `ensure_collection` each agent already calls, plus any standardized payload indexes. The existing populated DB is *stamped* as having `0001` applied without re-running it; future structural and data changes are `0002`, `0003`… on top. `ensure_collection` stays as a startup safety net in each agent — untouched — so this adds reproducibility and an audit trail without an invasive rewrite of the five built, tested agents.
+
+Resolved design defaults (each open to revision):
+
+- **Ledger storage — a single SQLite file (`~/agent-data/agent-stack.db`, table `schema_migrations`), recording migrations for both stores, each tagged by target.** Introduced now (it's useful for the built agents immediately) rather than waiting on the Orchestrator; it's the same SQLite the checkpointer will reuse, so it isn't throwaway. The known cost is no cross-store atomicity — a migration can touch Qdrant and crash before the ledger row is written — so every migration must be idempotent/re-runnable. If the system ever goes multi-machine against one Qdrant, the ledger moves to Postgres (SQLite is single-writer).
+- **Discovery — per-package, runner-discovered, with timestamp-prefixed IDs for a deterministic global order.** Agents own their migrations the same way they own their collections; cross-cutting migrations (the baseline, `user_knowledge`) live in `agent-runtime`. Timestamped IDs give total ordering without a central registry.
+- **Execution — explicit `migrate status | up | stamp` CLI only; no auto-apply at agent startup.** Terminal-first, and Qdrant re-embeds can be expensive or destructive, so they must not fire silently on boot. (`ensure_collection` already covers "collection must exist" at startup; LangGraph's own checkpointer `.setup()` is the library managing its tables, separate from this.)
+- **Reversibility — forward-only.** Matches the already-irreversible `approved → liked` migration; most Qdrant data migrations (re-embed, re-tag, drop) can't be cleanly reversed. Recovery is restore-from-backup then roll forward, not `down()`. An optional `down()` is permitted where it's genuinely cheap, never required.
+
 ## Build Order
 
 A rough current order, subject to revision based on what the user wants to use next. This covers the agents identified so far; new agents will slot in wherever they make sense.
@@ -424,7 +472,7 @@ A rough current order, subject to revision based on what the user wants to use n
 6. **Visual Generation** — done, Phase 2 MVP (152 tests passing). ComfyUI-backed diffusion collaborator with multimodal own-memory (`voyage-multimodal-3`), the dual Claude/GPU budget separation, slot-map workflow templates, and a first-class tutor role (`explain`/`research`). Independently useful and not blocking on the editing-pipeline agents.
 7. **Edit Brief** — needs the upstream agents to produce its inputs
 8. **Feedback & Iteration** — needs Edit Brief to iterate on
-9. **Project Organizer** — possibly never built if Cowork covers it
+9. **Orchestrator** — the conversational meta-agent over the whole system (LangGraph); supersedes the old "Project Organizer" slot, whose file-scaffolding scope stays with Cowork
 
 Beyond these, the roster is open — thumbnail design, social scheduling, analytics, and others will be added as the need becomes concrete (image generation, once on this list, is now the planned Visual Generation agent above).
 
