@@ -300,7 +300,7 @@ visual-generation explain "<concept>" [--level full|concise|quiet];  visual-gene
 
 **The layers it needs:**
 
-- **Orchestration loop** — a LangGraph graph that reasons, retrieves, routes to tools, and loops. Carries a runtime `BudgetEnvelope` like every other agent; delegated calls derive child budgets against the parent (the existing delegation pattern). The reserved `MODEL_ORCHESTRATOR` runtime constant is its model slot.
+- **Orchestration loop** — a LangGraph graph that reasons, retrieves, routes to tools, and loops. Carries a runtime `BudgetEnvelope` like every other agent; delegated calls derive child budgets against the parent (the existing delegation pattern). Its model slot is `MODEL_ORCHESTRATOR` (= `claude-sonnet-4-6`), defined in the orchestrator package (`orchestrator/constants.py`) per the per-package convention — not in `agent-runtime`.
 - **Conversation store** — LangGraph checkpointer (SQLite locally), one thread per conversation, resumable across sessions.
 - **Knowledge retrieval** — cross-collection reads over the existing Qdrant collections (`user_knowledge`, `tutorial_research`, each agent's `*_memory`, `technique_research_outputs`, `project_archive`), scoped per query by collection/metadata so domains don't blur. No new collection required; the orchestrator is a reader, not an owner.
 - **Live codebase + docs access** — read + grep over the `agent-stack` packages and `docs/`, the way Claude Code itself works. The codebase is actively developed, so it is read live, never summarized-and-embedded — embedding code answers from stale snapshots and forces re-indexing on every change. Only stable prose (architecture docs, READMEs, design notes) is worth embedding, and that already lives in the knowledge layer where appropriate.
