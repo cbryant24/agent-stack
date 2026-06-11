@@ -121,7 +121,7 @@ class BudgetTracker:
         self, dimension: str, current: float, maximum: float | int | None
     ) -> None:
         """Fire notify_budget_threshold once when usage first exceeds 75% on a dimension."""
-        if maximum is None or dimension in self._threshold_fired:
+        if not maximum or maximum <= 0 or dimension in self._threshold_fired:
             return
         if current / maximum > 0.75:
             notify_budget_threshold(self.agent_name, self._consumption, self.envelope)

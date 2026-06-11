@@ -127,6 +127,26 @@ class TestBudgetTrackerEnforcement:
 
         asyncio.run(run())
 
+    def test_zero_max_items_raises_not_zerodivision(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0, max_items=0)
+            async with BudgetTracker(envelope, "test-agent") as t:
+                with pytest.raises(BudgetExhaustedError) as exc_info:
+                    t.check_budget()
+                assert exc_info.value.dimension == "max_items"
+
+        asyncio.run(run())
+
+    def test_zero_max_cost_raises_not_zerodivision(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0, max_cost_usd=0)
+            async with BudgetTracker(envelope, "test-agent") as t:
+                with pytest.raises(BudgetExhaustedError) as exc_info:
+                    t.check_budget()
+                assert exc_info.value.dimension == "max_cost_usd"
+
+        asyncio.run(run())
+
     def test_check_can_afford_unlimited(self) -> None:
         async def run() -> None:
             envelope = BudgetEnvelope(max_depth=0)

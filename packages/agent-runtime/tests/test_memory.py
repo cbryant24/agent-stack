@@ -180,6 +180,69 @@ class TestEmbeddingClientMocked:
         asyncio.run(run())
 
 
+class TestMemoryStoreInspection:
+    """Read-only inspection surface (get_collection_info / count_points /
+    sample_points) used by the orchestrator's diagnose-only diagnostics. The Qdrant
+    client is fully mocked — these never touch a live server."""
+
+    def _store(self) -> Any:
+        from agent_runtime.memory.store import MemoryStore
+        store = MemoryStore("http://localhost:6333")
+        store._client = MagicMock()
+        return store
+
+    def test_get_collection_info_returns_structure(self) -> None:
+        async def run() -> None:
+            store = self._store()
+            # name= is a reserved MagicMock kwarg, so set the attribute explicitly
+            coll = MagicMock()
+            coll.name = "mem"
+            store._client.get_collections = AsyncMock(return_value=MagicMock(collections=[coll]))
+            vectors = MagicMock(size=1024)
+            vectors.distance = MagicMock(value="Cosine")
+            info = MagicMock(
+                points_count=7, indexed_vectors_count=7,
+                config=MagicMock(params=MagicMock(vectors=vectors)),
+            )
+            info.status = MagicMock(value="green")
+            store._client.get_collection = AsyncMock(return_value=info)
+
+            result = await store.get_collection_info("mem")
+            assert result is not None
+            assert result["points_count"] == 7
+            assert result["vector_size"] == 1024
+            assert result["distance"] == "Cosine"
+            assert result["status"] == "green"
+
+        asyncio.run(run())
+
+    def test_get_collection_info_missing_returns_none(self) -> None:
+        async def run() -> None:
+            store = self._store()
+            store._client.get_collections = AsyncMock(return_value=MagicMock(collections=[]))
+            assert await store.get_collection_info("absent") is None
+
+        asyncio.run(run())
+
+    def test_count_points(self) -> None:
+        async def run() -> None:
+            store = self._store()
+            store._client.count = AsyncMock(return_value=MagicMock(count=99))
+            assert await store.count_points("mem") == 99
+
+        asyncio.run(run())
+
+    def test_sample_points_returns_id_payload_pairs(self) -> None:
+        async def run() -> None:
+            store = self._store()
+            rec = MagicMock(id="pt-1", payload={"memory_type": "take"})
+            store._client.scroll = AsyncMock(return_value=([rec], None))
+            sample = await store.sample_points("mem", limit=3)
+            assert sample == [("pt-1", {"memory_type": "take"})]
+
+        asyncio.run(run())
+
+
 @requires_qdrant
 class TestMemoryStoreLive:
     def _collection_name(self) -> str:

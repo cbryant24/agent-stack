@@ -6,14 +6,14 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 
 | Package | Description | Status |
 |---|---|---|
-| `agent-runtime` | Shared base types, clients, and utilities used by all agents (incl. the shared `docs_ingest` knowledge mechanism) | Complete (178 tests) |
+| `agent-runtime` | Shared base types, clients, and utilities used by all agents (incl. the shared `docs_ingest` knowledge mechanism) | Complete (184 tests) |
 | `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (45 tests) |
 | `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (52 tests) |
 | `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (214 tests) |
 | `voiceover-direction` | Director for ElevenLabs voiceover — free LLM direction, deliberate paid generation, persistent takes + direction lessons | Complete (145 tests) |
 | `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (45 tests) |
 | `visual-generation` | ComfyUI-backed diffusion collaborator + platform tutor — free offline prompt-craft, deliberate warm-session GPU generation, persistent generations/technique-lessons/workflow-templates | Complete (152 tests) |
-| `orchestrator` | Conversational meta-agent over the system — a LangGraph ReAct loop that retrieves from the knowledge bases, reads the live code/docs, and invokes the other agents as tools; thread-keyed SQLite checkpointer for resumable chat | Phase 2 first slice (14 tests) |
+| `orchestrator` | Conversational meta-agent over the system — a LangGraph ReAct loop that retrieves from the knowledge bases, reads the live code/docs, invokes all five built agents as tools (free/non-side-effecting ops only), and runs read-only vector-DB diagnostics (diagnose + report, never writes); thread-keyed SQLite checkpointer for resumable chat | Phase 2 first slice + Phase 3 sub-agent surface + diagnostics (42 tests) |
 
 ## Setup
 
@@ -64,7 +64,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv sync --all-packages && uv run pytest -v   # full suite (845 tests)
+uv sync --all-packages && uv run pytest -v   # full suite (879 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage, Anthropic, or ElevenLabs API keys.

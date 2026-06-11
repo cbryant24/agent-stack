@@ -1973,22 +1973,28 @@ source = { editable = "packages/orchestrator" }
 dependencies = [
     { name = "agent-runtime" },
     { name = "click" },
+    { name = "concept-script" },
     { name = "langchain-anthropic" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "music-curation" },
     { name = "tutorial-research" },
+    { name = "visual-generation" },
+    { name = "voiceover-direction" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "agent-runtime", editable = "packages/agent-runtime" },
     { name = "click", specifier = ">=8.0" },
+    { name = "concept-script", editable = "packages/concept-script" },
     { name = "langchain-anthropic", specifier = ">=1.0" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
     { name = "music-curation", editable = "packages/music-curation" },
     { name = "tutorial-research", editable = "packages/tutorial-research" },
+    { name = "visual-generation", editable = "packages/visual-generation" },
+    { name = "voiceover-direction", editable = "packages/voiceover-direction" },
 ]
 
 [[package]]

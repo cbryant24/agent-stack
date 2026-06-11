@@ -88,6 +88,59 @@ class TestUserKnowledgeBoost:
         assert results[0].collection == "music_curation_memory"
 
 
+class TestNewAgentDomains:
+    """The voiceover-direction and visual-generation memory domains route through
+    the generic collection path and apply the boosted user_knowledge co-query."""
+
+    @pytest.mark.parametrize(
+        "domain", ["voiceover_direction_memory", "visual_generation_memory"]
+    )
+    def test_user_knowledge_boost_applied(self, domain: str) -> None:
+        raw_uk_score = 0.60
+        mock_store = MagicMock()
+        mock_store.search = AsyncMock(return_value=[])  # no primary collection hits
+        mock_store.embedding_client = MagicMock()
+        mock_store.embedding_client.embed = AsyncMock(return_value=[[0.1] * 1024])
+        mock_store.query_by_vector = AsyncMock(
+            return_value=[_uk_raw("uk-1", "an authored fact", raw_uk_score)]
+        )
+
+        results = asyncio.run(search_knowledge("delivery", domain, store=mock_store))  # type: ignore[arg-type]
+
+        uk = [r for r in results if r.collection == USER_KNOWLEDGE_COLLECTION]
+        assert len(uk) == 1
+        assert uk[0].score == pytest.approx(raw_uk_score * USER_KNOWLEDGE_SCORE_MULTIPLIER)
+
+    @pytest.mark.parametrize(
+        "domain", ["voiceover_direction_memory", "visual_generation_memory"]
+    )
+    def test_merges_primary_and_user_knowledge(self, domain: str) -> None:
+        mock_store = MagicMock()
+        mock_store.search = AsyncMock(return_value=[_search_result("own-1", "prior work", 0.82)])
+        mock_store.embedding_client = MagicMock()
+        mock_store.embedding_client.embed = AsyncMock(return_value=[[0.1] * 1024])
+        mock_store.query_by_vector = AsyncMock(return_value=[_uk_raw("uk-2", "fact", 0.5)])
+
+        results = asyncio.run(search_knowledge("q", domain, store=mock_store))  # type: ignore[arg-type]
+
+        collections = {r.collection for r in results}
+        assert domain in collections
+        assert USER_KNOWLEDGE_COLLECTION in collections
+
+    @pytest.mark.parametrize(
+        "domain", ["voiceover_direction_memory", "visual_generation_memory"]
+    )
+    def test_graceful_degrade(self, domain: str) -> None:
+        mock_store = MagicMock()
+        mock_store.search = AsyncMock(side_effect=RuntimeError("collection missing"))
+        mock_store.embedding_client = MagicMock()
+        mock_store.embedding_client.embed = AsyncMock(side_effect=RuntimeError("voyage down"))
+        mock_store.query_by_vector = AsyncMock(side_effect=RuntimeError("unreachable"))
+
+        results = asyncio.run(search_knowledge("anything", domain, store=mock_store))  # type: ignore[arg-type]
+        assert results == []
+
+
 class TestDomainRouting:
     def test_tutorial_research_reuses_retrieve_chunks(self) -> None:
         fake_chunk = MagicMock()

@@ -31,7 +31,13 @@ logger = logging.getLogger(__name__)
 # Sentinel used by UserKnowledgeStore to mark active (non-superseded) entries.
 _ACTIVE_SENTINEL = ""
 
-Domain = Literal["tutorial_research", "music_curation_memory", "langgraph_mechanics"]
+Domain = Literal[
+    "tutorial_research",
+    "music_curation_memory",
+    "voiceover_direction_memory",
+    "visual_generation_memory",
+    "langgraph_mechanics",
+]
 
 
 @dataclass
@@ -52,12 +58,15 @@ class _DomainSpec:
     uk_domain: str | None = None
 
 
-# All three v1 domains are text (voyage-3-large) spaces — one embedding space per call.
+# All domains are text (voyage-3-large) spaces — one embedding space per call.
+# (concept-script is stateless and owns no collection, so it has no domain here.)
 DOMAINS: dict[str, _DomainSpec] = {
     # Literal reuse of tutorial-research's retrieve_chunks (source_type filter +
     # boosted user_knowledge co-query + graceful degrade already baked in).
     "tutorial_research": _DomainSpec(collection="tutorial_research", source_type="youtube_tutorial"),
     "music_curation_memory": _DomainSpec(collection="music_curation_memory"),
+    "voiceover_direction_memory": _DomainSpec(collection="voiceover_direction_memory"),
+    "visual_generation_memory": _DomainSpec(collection="visual_generation_memory"),
     # This domain *is* user_knowledge, so there is no separate co-query / boost.
     "langgraph_mechanics": _DomainSpec(uk_domain="langgraph_mechanics", co_query_user_knowledge=False),
 }

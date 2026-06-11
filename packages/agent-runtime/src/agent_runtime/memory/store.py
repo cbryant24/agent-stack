@@ -117,6 +117,58 @@ class MemoryStore:
             for hit in results.points
         ]
 
+    # ── Read-only inspection surface ─────────────────────────────────────────
+    # Read-only Qdrant introspection used by the orchestrator's diagnose-only
+    # vector-DB diagnostics. These never write; they wrap get_collection / count /
+    # scroll so callers don't reach into the private AsyncQdrantClient.
+
+    async def get_collection_info(self, name: str) -> dict[str, Any] | None:
+        """Structural metadata for one collection, or None if it does not exist.
+
+        Returns {name, status, points_count, indexed_vectors_count, vector_size,
+        distance}. vector_size/distance are best-effort (None for named-vector
+        configs, which this system does not use)."""
+        existing = await self._client.get_collections()
+        if name not in {c.name for c in existing.collections}:
+            return None
+        info = await self._client.get_collection(collection_name=name)
+        vector_size: int | None = None
+        distance: str | None = None
+        params = getattr(getattr(info, "config", None), "params", None)
+        vectors = getattr(params, "vectors", None)
+        if vectors is not None and not isinstance(vectors, dict):
+            vector_size = getattr(vectors, "size", None)
+            dist = getattr(vectors, "distance", None)
+            distance = str(getattr(dist, "value", dist)) if dist is not None else None
+        return {
+            "name": name,
+            "status": str(getattr(getattr(info, "status", None), "value", info.status)),
+            "points_count": info.points_count,
+            "indexed_vectors_count": info.indexed_vectors_count,
+            "vector_size": vector_size,
+            "distance": distance,
+        }
+
+    async def count_points(self, name: str, *, filters: Filter | None = None) -> int:
+        """Exact point count for a collection (optionally filtered)."""
+        result = await self._client.count(
+            collection_name=name, count_filter=filters, exact=True
+        )
+        return result.count
+
+    async def sample_points(
+        self, name: str, *, limit: int = 5, filters: Filter | None = None
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Sample up to `limit` points (payload only) via scroll. Read-only."""
+        records, _next = await self._client.scroll(
+            collection_name=name,
+            scroll_filter=filters,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [(str(r.id), r.payload or {}) for r in records]
+
     # ────────────────────────────────────────────────────────────────────────
 
     async def ensure_collection(self, name: str, vector_size: int = 1024) -> None:

@@ -12,10 +12,14 @@ section of `docs/ai-director-agent-system.md` for the system-level spec and
 
 ## Status
 
-**Phase 2 — first build slice.** Chat + knowledge retrieval + live code/doc access + two
-seed sub-agents (tutorial-research, music-curation) as tools. Deferred: vector-DB
-diagnostics, the other three agents as tools, MCP, additional surfaces, Haiku utility, a
-per-session hard ceiling, the schema-migration runner.
+**Phase 2 first build slice + Phase 3 sub-agent surface + diagnose-only diagnostics.** Chat +
+knowledge retrieval + live code/doc access + all five built agents wrapped as tools
+(tutorial-research, music-curation, voiceover-direction, concept-script, visual-generation) —
+free / non-side-effecting ops only, so the autonomous loop never triggers paid generation —
+plus read-only vector-DB diagnostics that diagnose and write a report but never write to
+Qdrant. Deferred: per-agent remediation entry points (the diagnostics delegation seam is built
+but its registry is empty — see `docs/v2-refinements-orchestrator.md`), MCP, additional
+surfaces, Haiku utility, a per-session hard ceiling, the schema-migration runner.
 
 ## Usage
 
@@ -55,10 +59,25 @@ async with AsyncSqliteSaver.from_conn_string("agent-stack.db") as saver:
   answer when exhausted; `max_items` is the per-turn tool-call ceiling. `record_tool_call`
   and `record_delegation_decision` trace each step.
 - **Tools (`tools.py`)** — `search_knowledge(query, domain)` (domain-scoped, one embedding
-  space per call, with the 1.25× `user_knowledge` boost); `read_file` + `grep` over the repo
-  (also how the orchestrator answers system-introspection questions); and in-process
-  sub-agent tools: `tutorial_retrieve` / `research_tutorials` and `music_recall` /
-  `music_generate`.
+  space per call, with the 1.25× `user_knowledge` boost; domains: `tutorial_research`,
+  `music_curation_memory`, `voiceover_direction_memory`, `visual_generation_memory`,
+  `langgraph_mechanics`); `read_file` + `grep` over the repo (also how the orchestrator
+  answers system-introspection questions); and in-process sub-agent tools wrapping all five
+  built agents — each with a derived child budget, recorded delegation, and output
+  truncation. Only **FREE / non-side-effecting** ops are wrapped; the costly paid ops
+  (visual-generation `generate` = GPU/RunPod spend, voiceover-direction TTS = ElevenLabs
+  money) are deliberately kept out of the autonomous tool set:
+  `tutorial_retrieve` / `research_tutorials`, `music_recall` / `music_generate`,
+  `voiceover_direct` / `voiceover_recall`, `concept_draft` / `concept_shape` (stateless),
+  and `visual_draft` / `visual_recall`.
+- **Vector-DB diagnostics (`diagnostics.py`, diagnose-only)** — `inspect_collection`
+  (read-only structural metadata via `MemoryStore.get_collection_info` / `count_points` /
+  `sample_points`), `probe_collection` (behavioral probe that catches cross-model
+  embedding-space mismatches), and `write_diagnostic_report` (a report to
+  `~/obsidian/agent-reports/diagnostics/`, status `open → delegated → fixed`). The orchestrator
+  **never writes to Qdrant**: the remediation delegation seam (`RemediationHandler` + registry +
+  `delegate_remediation`) is built but ships with an empty registry, so reports are manual work
+  orders until an owning agent registers a handler (deferred — `docs/v2-refinements-orchestrator.md`).
 - **Model** — Sonnet only (`MODEL_ORCHESTRATOR`, defined here per the per-package
   convention). `MODEL_UTILITY` (Haiku) is reserved, not wired in.
 - **Checkpointer** — LangGraph `AsyncSqliteSaver` at `~/agent-data/agent-stack.db`,
@@ -73,5 +92,11 @@ uv run pytest packages/orchestrator -q
 
 Covers the graph loop (tool call routes to `tools` and loops back; no tool call ends the
 turn), the budget guard (an exhausted envelope short-circuits before the next tool runs),
-`search_knowledge` (user-knowledge boost + graceful degradation), and the checkpointer (two
-turns on one thread resume accumulated state, surviving across saver instances).
+`search_knowledge` (user-knowledge boost + graceful degradation, including the
+voiceover-direction and visual-generation domains), the in-process sub-agent tools (each
+calls its agent's entry point with a derived child budget and records the delegation), the
+diagnostics (report round-trip, structural inspection, behavioral-probe shaping incl. the
+cross-model-mismatch flag, and the remediation seam's `open → delegated → fixed` transition
+via a stub handler — with one live-Qdrant probe test that auto-skips when Qdrant is down),
+and the checkpointer (two turns on one thread resume accumulated state, surviving across
+saver instances).

@@ -8,7 +8,7 @@
 
 ### agent-runtime
 
-The shared infrastructure layer. All other packages import from here. **Status: complete.** 178 tests passing.
+The shared infrastructure layer. All other packages import from here. **Status: complete.** 184 tests passing.
 
 #### Layer 1 — Config & Models
 
@@ -29,7 +29,7 @@ The shared infrastructure layer. All other packages import from here. **Status: 
 
 - **`BudgetTracker`** — async context manager; tracks cost (USD), tool calls, items processed, wall time; raises `BudgetExhaustedError` when any dimension is exceeded; emits summary `TraceEvent` on exit. `check_budget()` should be called at the **start** of each loop iteration (before doing work), not after — calling it after the last `add_item_processed()` would spuriously mark a fully-successful run as `partial`. Accepts optional `time_source: Callable[[], float]` (default: `time.monotonic`) for clock injection in tests.
   - `check_budget()` automatically fires `notify_budget_threshold` the first time usage crosses 75% on any of three dimensions: `max_cost_usd`, `max_items`, `max_wall_time_sec`. Fires once per dimension per run (no repeat). There is no `max_tool_calls` dimension in `BudgetEnvelope`, so tool calls are not threshold-checked.
-  - **Known gap (flagged for a dedicated runtime change):** the 75% threshold check (`_maybe_notify_threshold`) computes `current / maximum` with no zero-guard, so a `BudgetEnvelope` with any `max_*` dimension set to `0` raises `ZeroDivisionError` inside `check_budget()`. Surfaced during the orchestrator build (its budget-guard test exhausts via `max_items=1`, not `0`, to avoid it). The fix wants its own change with a `max_*=0` regression test, not a drive-by.
+  - **Resolved (zero-ceiling guard):** the 75% threshold check (`_maybe_notify_threshold`) now short-circuits when a `max_*` ceiling is falsy/`<= 0` instead of computing `current / maximum`, so a `BudgetEnvelope` with any dimension set to `0` no longer raises `ZeroDivisionError` inside `check_budget()` — a `0` ceiling is treated as "no headroom" and the hard checks still raise `BudgetExhaustedError`. Covered by `max_items=0` / `max_cost_usd=0` regression tests.
   - **LLM-cost accounting — agent-author note.** An agent that makes its own LLM calls must route cost through `tracker.add_llm_cost(model, input_tokens, output_tokens)` (which computes cost, increments `consumption.cost_usd` / `consumption.llm_calls`, and calls `record_llm_call` internally). Calling `record_llm_call` directly emits the per-call trace event but does **not** touch the tracker's consumption, so every aggregate read (run-report frontmatter, summary line, LLM-usage total, CLI cost line) shows `$0.0` while the per-model table shows the real cost. music-curation hit exactly this trap (Session 2, Bugs A/C) and fixed it with a `_record_llm` bridge in `chains.py` that routes through the active tracker via the `_current_tracker` ContextVar (mirroring how `record_tool_call` bridges to `add_tool_call`), falling back to a direct `record_llm_call` only when no tracker is active.
 - **Pricing table** (2026-05-26): `claude-opus-4-7/4-6` $15/$75, `claude-sonnet-4-6` $3/$15, `claude-haiku-4-5` $0.80/$4 per 1M tokens
 - **`_current_tracker`** ContextVar — lets nested code access the active `BudgetTracker` without explicit passing
@@ -60,6 +60,10 @@ The shared infrastructure layer. All other packages import from here. **Status: 
     - `set_payload(collection, point_id, payload)` — partial payload update without re-embedding
     - `retrieve_points(collection, point_ids)` — fetch by ID; returns raw qdrant `Record` objects
     - `query_by_vector(collection, vector, *, limit, filters)` — search with a pre-computed vector; returns `list[tuple[str, float, dict]]` (point_id, score, payload)
+  - **Read-only inspection surface** (used by the orchestrator's diagnose-only vector-DB diagnostics; never writes):
+    - `get_collection_info(name)` — structural metadata (status, point/indexed counts, vector size, distance) or `None` if absent
+    - `count_points(name, *, filters)` — exact point count
+    - `sample_points(name, *, limit, filters)` — sampled `(id, payload)` pairs via `scroll`, payload-only
 
 #### Layer 4b — UserKnowledgeStore
 
@@ -713,7 +717,7 @@ video/WAN (a fast-follow on the same turn shape — a generation already embeds 
 
 ### orchestrator
 
-The conversational meta-agent over the whole system — the "director's console." **Status: Phase 2 — first build slice shipped.** 14 tests passing. The first agent in the stack to use **LangGraph** (hand-rolled ReAct loop) over `langchain-anthropic`, with a thread-keyed SQLite checkpointer for resumable conversations; the other five agents remain on plain sequential LangChain. It is a reader/router over the rest of the system — it owns no Qdrant collection.
+The conversational meta-agent over the whole system — the "director's console." **Status: Phase 2 first build slice + Phase 3 sub-agent surface + diagnose-only vector-DB diagnostics shipped.** 42 tests passing. The first agent in the stack to use **LangGraph** (hand-rolled ReAct loop) over `langchain-anthropic`, with a thread-keyed SQLite checkpointer for resumable conversations; the other five agents remain on plain sequential LangChain. It is a reader/router over the rest of the system — it owns no Qdrant collection.
 
 #### Graph (hand-rolled ReAct, `graph.py`)
 
@@ -729,9 +733,19 @@ LangGraph `AsyncSqliteSaver` (`langgraph.checkpoint.sqlite.aio`) at `~/agent-dat
 
 #### Tools (v1 set, `tools.py`)
 
-- **`search_knowledge(query, domain)`** (`retrieval.py`) — domain-scoped semantic retrieval over a registry (`tutorial_research`, `music_curation_memory`, `langgraph_mechanics`). Each call targets exactly **one embedding space** (text / `voyage-3-large`) so scores never merge across spaces, and co-queries `user_knowledge` with the 1.25× boost (`USER_KNOWLEDGE_SCORE_MULTIPLIER`) capped at 30%, degrading gracefully to `[]` when a collection is absent. Generalized from `tutorial-research/retrieval.py` (the `tutorial_research` domain reuses `retrieve_chunks` verbatim; the `langgraph_mechanics` domain *is* `user_knowledge`, queried by domain filter with no separate co-query).
+- **`search_knowledge(query, domain)`** (`retrieval.py`) — domain-scoped semantic retrieval over a registry (`tutorial_research`, `music_curation_memory`, `voiceover_direction_memory`, `visual_generation_memory`, `langgraph_mechanics`). Each call targets exactly **one embedding space** (text / `voyage-3-large`) so scores never merge across spaces, and co-queries `user_knowledge` with the 1.25× boost (`USER_KNOWLEDGE_SCORE_MULTIPLIER`) capped at 30%, degrading gracefully to `[]` when a collection is absent. Generalized from `tutorial-research/retrieval.py` (the `tutorial_research` domain reuses `retrieve_chunks` verbatim; the `langgraph_mechanics` domain *is* `user_knowledge`, queried by domain filter with no separate co-query). Concept-script is stateless and owns no collection, so it has no domain here.
 - **`read_file` + `grep`** — live repo access scoped to `packages/` and `docs/` (Claude-Code style), sandboxed to the workspace root (path-escape guarded; `grep` shells to `rg` with a Python-walk fallback). Also how the orchestrator answers system-introspection questions ("what does agent X do / how is it built / how do I use it") — by reading source and `ai-director-agent-system.md`.
-- **In-process sub-agent tools**, each calling the agent's existing async library entry point with a child budget derived from the per-turn envelope: `tutorial_retrieve` / `research_tutorials` (tutorial-research retrieve vs. research) and `music_recall` / `music_generate` (music-curation dry-run recall vs. generate).
+- **In-process sub-agent tools**, each calling the agent's existing async library entry point with a child budget derived from the per-turn envelope and recording the delegation. Only **FREE / non-side-effecting** ops are wrapped — the costly paid ops (visual-generation `generate` = GPU/RunPod spend; voiceover-direction TTS = ElevenLabs money) are deliberately kept out of the autonomous tool set:
+  - `tutorial_retrieve` / `research_tutorials` (tutorial-research retrieve vs. research)
+  - `music_recall` / `music_generate` (music-curation dry-run recall vs. prompt generation)
+  - `voiceover_direct` / `voiceover_recall` (voiceover-direction free LLM direction over a `script.md` vs. embedding-only context recall)
+  - `concept_draft` / `concept_shape` (concept-script draft-from-seeds vs. shape-from-transcript; stateless agent, no recall)
+  - `visual_draft` / `visual_recall` (visual-generation free prompt-craft vs. embedding-only own-memory recall)
+- **Vector-DB diagnostics (diagnose-only, `diagnostics.py`)** — the orchestrator audits the Qdrant layer but **never writes to it**. Three tools the Sonnet loop composes with `read_file`/`grep` (which it uses to read an agent's collection / filter / score-threshold / embedding model from source):
+  - `inspect_collection(collection)` — read-only structural metadata (existence, point count, vector size/distance, sampled payload keys) via the new `MemoryStore.get_collection_info` / `count_points` / `sample_points`.
+  - `probe_collection(collection, query, expected_point_id?, multimodal?, threshold?)` — a **behavioral probe**: embeds a query that *should* hit (text `voyage-3-large`, or `voyage-multimodal-3` when `multimodal=True`) and checks whether the expected point returns above threshold. The only way to catch a **cross-model embedding-space mismatch** — when the expected point exists in the collection but the probe can't surface it, the stored vectors were written in a different Voyage space.
+  - `write_diagnostic_report(...)` — writes a markdown report (YAML frontmatter: collection, owning agent, symptom, diagnosis, evidence = filter/threshold/model-from-code + payloads/scores-from-Qdrant, proposed fix, `status`) to `~/obsidian/agent-reports/diagnostics/`, status `open`.
+  The **remediation delegation seam** (`RemediationHandler` protocol + registry + `delegate_remediation`, status `open → delegated → fixed`) is built and tested with a stub, but **ships with an empty registry**: no agent exposes a remediation write path yet, so reports stay `open` as manual work orders. Per-agent remediation entry points are deferred to `docs/v2-refinements-orchestrator.md` — keeping the orchestrator a pure reader and the autonomous loop unable to trigger any Qdrant write.
 
 #### CLI (`cli.py`) + library API
 
@@ -765,14 +779,14 @@ DEFAULT_BUDGET (per turn): max_items=12, max_depth=2, max_cost_usd=1.50, max_wal
 #### Tests
 
 ```bash
-uv run pytest packages/orchestrator/tests/ -v   # 14 tests
+uv run pytest packages/orchestrator/tests/ -v   # 42 tests
 ```
 
 Covers the graph loop (a tool call routes to `tools` and loops back; no tool call ends the turn), the budget guard (an exhausted per-turn envelope short-circuits to a partial answer before the next tool runs), `search_knowledge` (user-knowledge boost applied + graceful degradation when a collection is absent), and the checkpointer (two turns on one `thread_id` resume accumulated state, surviving across saver instances). Stubs the chat model (injected into `build_graph`) so no real LLM/Qdrant is required.
 
 #### Deferred (first slice)
 
-vector-DB diagnostics + per-agent remediation delegation · the other three agents as tools (`voiceover-direction`, `concept-script`, `visual-generation`) · MCP (wrapping agents and exposing the orchestrator) · additional surfaces (Telegram/voice/web/scheduled) · Haiku utility (output compression, thread summarization) · the per-session hard ceiling (v1 is a soft tally) · the schema-migration runner/ledger.
+per-agent remediation entry points (the owning-agent write paths the diagnostics delegation seam will call — see `docs/v2-refinements-orchestrator.md`) · MCP (wrapping agents and exposing the orchestrator) · additional surfaces (Telegram/voice/web/scheduled) · Haiku utility (output compression, thread summarization) · the per-session hard ceiling (v1 is a soft tally) · the schema-migration runner/ledger. *(Now shipped: all five built agents wrapped as tools — free/non-side-effecting ops only — and diagnose-only vector-DB diagnostics.)*
 
 ---
 
@@ -837,8 +851,8 @@ The `delegate()` function:
 All tests run from the workspace root:
 
 ```bash
-uv sync --all-packages && uv run pytest -v               # full suite (831 tests)
-uv run pytest packages/agent-runtime/tests/ -v          # 178 tests
+uv sync --all-packages && uv run pytest -v               # full suite (879 tests)
+uv run pytest packages/agent-runtime/tests/ -v          # 184 tests
 uv run pytest packages/yt-intelligence-pipeline/tests/ -v  # 45 tests
 uv run pytest packages/tutorial-research/tests/ -v      # 52 tests
 uv run pytest packages/music-curation/tests/ -v         # 214 tests
