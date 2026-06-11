@@ -29,6 +29,7 @@ The shared infrastructure layer. All other packages import from here. **Status: 
 
 - **`BudgetTracker`** — async context manager; tracks cost (USD), tool calls, items processed, wall time; raises `BudgetExhaustedError` when any dimension is exceeded; emits summary `TraceEvent` on exit. `check_budget()` should be called at the **start** of each loop iteration (before doing work), not after — calling it after the last `add_item_processed()` would spuriously mark a fully-successful run as `partial`. Accepts optional `time_source: Callable[[], float]` (default: `time.monotonic`) for clock injection in tests.
   - `check_budget()` automatically fires `notify_budget_threshold` the first time usage crosses 75% on any of three dimensions: `max_cost_usd`, `max_items`, `max_wall_time_sec`. Fires once per dimension per run (no repeat). There is no `max_tool_calls` dimension in `BudgetEnvelope`, so tool calls are not threshold-checked.
+  - **Known gap (flagged for a dedicated runtime change):** the 75% threshold check (`_maybe_notify_threshold`) computes `current / maximum` with no zero-guard, so a `BudgetEnvelope` with any `max_*` dimension set to `0` raises `ZeroDivisionError` inside `check_budget()`. Surfaced during the orchestrator build (its budget-guard test exhausts via `max_items=1`, not `0`, to avoid it). The fix wants its own change with a `max_*=0` regression test, not a drive-by.
   - **LLM-cost accounting — agent-author note.** An agent that makes its own LLM calls must route cost through `tracker.add_llm_cost(model, input_tokens, output_tokens)` (which computes cost, increments `consumption.cost_usd` / `consumption.llm_calls`, and calls `record_llm_call` internally). Calling `record_llm_call` directly emits the per-call trace event but does **not** touch the tracker's consumption, so every aggregate read (run-report frontmatter, summary line, LLM-usage total, CLI cost line) shows `$0.0` while the per-model table shows the real cost. music-curation hit exactly this trap (Session 2, Bugs A/C) and fixed it with a `_record_llm` bridge in `chains.py` that routes through the active tracker via the `_current_tracker` ContextVar (mirroring how `record_tool_call` bridges to `add_tool_call`), falling back to a direct `record_llm_call` only when no tracker is active.
 - **Pricing table** (2026-05-26): `claude-opus-4-7/4-6` $15/$75, `claude-sonnet-4-6` $3/$15, `claude-haiku-4-5` $0.80/$4 per 1M tokens
 - **`_current_tracker`** ContextVar — lets nested code access the active `BudgetTracker` without explicit passing
@@ -115,6 +116,8 @@ Promoted to the runtime once a second consumer appeared: **voiceover-direction's
 #### Layer 6 — Schema migrations *(planned, not built)*
 
 A runtime-owned, domain-agnostic migration runner versioning structural and data changes across both Qdrant and the relational checkpointer. Applied migrations are recorded in a single SQLite ledger (`~/agent-data/agent-stack.db`, table `schema_migrations`), tagged by target store. Migrations are per-package and runner-discovered with timestamp-prefixed IDs for deterministic global ordering; cross-cutting ones (the `0001_baseline`, `user_knowledge`) live in `agent-runtime`. The baseline wraps the existing `ensure_collection` calls rather than replacing them — a fresh environment runs it to reach current structure, while the already-populated DB is stamped as applied. Forward-only, idempotent (no cross-store atomicity), explicit CLI (`migrate status | up | stamp`) with no startup auto-apply. Full design and rationale: the "Schema migrations (planned)" section of `ai-director-agent-system.md`.
+
+The `~/agent-data/agent-stack.db` file already exists: the orchestrator's checkpointer creates and uses it via LangGraph's own `AsyncSqliteSaver.setup()` (managing its `checkpoints`/`writes` tables), called at startup. That is the library managing its own tables — **independent of** this (unbuilt) migration runner, which will add a `schema_migrations` table to the same file when built.
 
 ---
 
@@ -264,7 +267,6 @@ uv run tutorial-research "python asyncio patterns" --type retrieve --no-synthesi
 |---|---|---|
 | `MODEL_SCORER` | `claude-haiku-4-5` | Candidate scoring (tool-use) |
 | `MODEL_SYNTHESIZER` | `claude-sonnet-4-6` | Research synthesis |
-| `MODEL_ORCHESTRATOR` | `claude-sonnet-4-6` | (reserved) |
 | `MAX_SYNTHESIS_TOKENS` | `8192` | Output token ceiling for synthesis calls (Sonnet 4.6 max); scoring calls are not affected |
 
 #### Default budget
@@ -706,6 +708,71 @@ These are the **Claude** axis only. `generate`'s envelope is tiny because the sp
 #### Deferred (the path is built to accept them)
 
 video/WAN (a fast-follow on the same turn shape — a generation already embeds a representative keyframe + caption and lineage spans output types) · LoRA training (ai-toolkit — a separate subsystem) · RunPod stop-automation (Tier-2: the agent holds a key and auto-stops on drain/idle) · encryption-at-rest for identity artifacts · the `reference` memory type · the shared `ingest-docs` `--decisions`/`--url` refinements · graph authoring.
+
+---
+
+### orchestrator
+
+The conversational meta-agent over the whole system — the "director's console." **Status: Phase 2 — first build slice shipped.** 14 tests passing. The first agent in the stack to use **LangGraph** (hand-rolled ReAct loop) over `langchain-anthropic`, with a thread-keyed SQLite checkpointer for resumable conversations; the other five agents remain on plain sequential LangChain. It is a reader/router over the rest of the system — it owns no Qdrant collection.
+
+#### Graph (hand-rolled ReAct, `graph.py`)
+
+One `agent` node (Sonnet, all tools bound via `bind_tools`) + one custom `tools` node (wraps LangGraph's `ToolNode` for execution), joined by a conditional edge: an AI message with tool calls routes to `tools` and loops back to `agent`; no tool calls ends the turn. Hand-rolled rather than the prebuilt `create_react_agent` so the runtime hooks are explicit insertion points. `MessagesState`-style state (`messages` via the `add_messages` reducer) extended with a `budget_exhausted` flag. The `BudgetTracker` is **not** stored in state (the checkpointer must serialize state) — nodes reach the active tracker via the runtime `get_current_tracker()` ContextVar; each turn re-seeds `budget_exhausted=False` on input (last-write-wins) while messages accumulate through the reducer.
+
+#### Per-turn budget guard + tracing hooks
+
+One turn = one top-level `graph.ainvoke`, governed by a per-turn `BudgetEnvelope`/`BudgetTracker` (the **parent** for any in-turn sub-agent delegation via `derive_child`). The custom `tools` node runs `tracker.check_budget()` **before** executing the step's tool calls; on `BudgetExhaustedError` it short-circuits — appends a skip `ToolMessage` per pending call, sets `budget_exhausted`, and the conditional edge ends the turn with a partial answer rather than letting the exception escape. Per executed tool it calls `record_tool_call` (which bridges to `BudgetTracker.add_tool_call()`) **and** `tracker.add_item_processed()` — so `max_items` is the per-turn tool-call ceiling. Sub-agent tools additionally emit `record_delegation_decision` and `tracker.add_delegation(child_cost)`. Agent-node LLM cost is routed through `tracker.add_llm_cost` from the response's `usage_metadata`.
+
+#### Checkpointer
+
+LangGraph `AsyncSqliteSaver` (`langgraph.checkpoint.sqlite.aio`) at `~/agent-data/agent-stack.db`, thread-keyed and resumable across sessions; `.setup()` is called at startup. This is the library managing its own `checkpoints`/`writes` tables — **not** the (unbuilt) schema-migration runner, which will later add its ledger table to the same file (see Layer 6).
+
+#### Tools (v1 set, `tools.py`)
+
+- **`search_knowledge(query, domain)`** (`retrieval.py`) — domain-scoped semantic retrieval over a registry (`tutorial_research`, `music_curation_memory`, `langgraph_mechanics`). Each call targets exactly **one embedding space** (text / `voyage-3-large`) so scores never merge across spaces, and co-queries `user_knowledge` with the 1.25× boost (`USER_KNOWLEDGE_SCORE_MULTIPLIER`) capped at 30%, degrading gracefully to `[]` when a collection is absent. Generalized from `tutorial-research/retrieval.py` (the `tutorial_research` domain reuses `retrieve_chunks` verbatim; the `langgraph_mechanics` domain *is* `user_knowledge`, queried by domain filter with no separate co-query).
+- **`read_file` + `grep`** — live repo access scoped to `packages/` and `docs/` (Claude-Code style), sandboxed to the workspace root (path-escape guarded; `grep` shells to `rg` with a Python-walk fallback). Also how the orchestrator answers system-introspection questions ("what does agent X do / how is it built / how do I use it") — by reading source and `ai-director-agent-system.md`.
+- **In-process sub-agent tools**, each calling the agent's existing async library entry point with a child budget derived from the per-turn envelope: `tutorial_retrieve` / `research_tutorials` (tutorial-research retrieve vs. research) and `music_recall` / `music_generate` (music-curation dry-run recall vs. generate).
+
+#### CLI (`cli.py`) + library API
+
+```bash
+orchestrator chat [--thread <id>]   # checkpointed REPL: read → run the graph for the thread → print → loop
+```
+
+A new thread per launch unless `--thread` resumes a checkpointed one. The per-session cumulative cost is surfaced as a **soft tally** (informational, never a hard cap — a checkpointed thread is meant to resume across sessions).
+
+```python
+from orchestrator import build_app, run_turn
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+async with AsyncSqliteSaver.from_conn_string("agent-stack.db") as saver:
+    await saver.setup()
+    graph = build_app(saver)
+    result = await run_turn(graph, "what does the music-curation agent do?", thread_id="t1")
+    # result.response, result.status ("completed"|"partial"), result.consumption
+```
+
+#### Model constants (`constants.py`) & default budget
+
+`MODEL_ORCHESTRATOR = claude-sonnet-4-6` — defined here per the per-package convention, **not** in agent-runtime. `MODEL_UTILITY = claude-haiku-4-5` is reserved (the Haiku utility roles — tool-output compression, long-thread summarization — are not wired in for v1).
+
+```
+DEFAULT_BUDGET (per turn): max_items=12, max_depth=2, max_cost_usd=1.50, max_wall_time_sec=300
+```
+
+`max_items` is the per-turn tool-call ceiling; `max_depth=2` permits orchestrator → sub-agent → tutorial-research.
+
+#### Tests
+
+```bash
+uv run pytest packages/orchestrator/tests/ -v   # 14 tests
+```
+
+Covers the graph loop (a tool call routes to `tools` and loops back; no tool call ends the turn), the budget guard (an exhausted per-turn envelope short-circuits to a partial answer before the next tool runs), `search_knowledge` (user-knowledge boost applied + graceful degradation when a collection is absent), and the checkpointer (two turns on one `thread_id` resume accumulated state, surviving across saver instances). Stubs the chat model (injected into `build_graph`) so no real LLM/Qdrant is required.
+
+#### Deferred (first slice)
+
+vector-DB diagnostics + per-agent remediation delegation · the other three agents as tools (`voiceover-direction`, `concept-script`, `visual-generation`) · MCP (wrapping agents and exposing the orchestrator) · additional surfaces (Telegram/voice/web/scheduled) · Haiku utility (output compression, thread summarization) · the per-session hard ceiling (v1 is a soft tally) · the schema-migration runner/ledger.
 
 ---
 

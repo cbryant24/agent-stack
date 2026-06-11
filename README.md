@@ -13,6 +13,7 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 | `voiceover-direction` | Director for ElevenLabs voiceover — free LLM direction, deliberate paid generation, persistent takes + direction lessons | Complete (145 tests) |
 | `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (45 tests) |
 | `visual-generation` | ComfyUI-backed diffusion collaborator + platform tutor — free offline prompt-craft, deliberate warm-session GPU generation, persistent generations/technique-lessons/workflow-templates | Complete (152 tests) |
+| `orchestrator` | Conversational meta-agent over the system — a LangGraph ReAct loop that retrieves from the knowledge bases, reads the live code/docs, and invokes the other agents as tools; thread-keyed SQLite checkpointer for resumable chat | Phase 2 first slice (14 tests) |
 
 ## Setup
 
@@ -53,7 +54,8 @@ agent-stack/
 │   ├── music-curation/             # music agent
 │   ├── voiceover-direction/        # ElevenLabs voiceover director
 │   ├── concept-script/             # scriptwriting collaborator (→ script.md)
-│   └── visual-generation/          # ComfyUI diffusion collaborator
+│   ├── visual-generation/          # ComfyUI diffusion collaborator
+│   └── orchestrator/               # conversational meta-agent (LangGraph) over the whole system
 ├── infrastructure/                 # docker-compose.yml (Qdrant + Jaeger)
 └── docs/
     └── architecture.md             # detailed design and API reference
@@ -62,7 +64,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv sync --all-packages && uv run pytest -v   # full suite (831 tests)
+uv sync --all-packages && uv run pytest -v   # full suite (845 tests)
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage, Anthropic, or ElevenLabs API keys.
