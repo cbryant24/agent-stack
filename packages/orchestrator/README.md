@@ -17,9 +17,11 @@ knowledge retrieval + live code/doc access + all five built agents wrapped as to
 (tutorial-research, music-curation, voiceover-direction, concept-script, visual-generation) —
 free / non-side-effecting ops only, so the autonomous loop never triggers paid generation —
 plus read-only vector-DB diagnostics that diagnose and write a report but never write to
-Qdrant. Deferred: per-agent remediation entry points (the diagnostics delegation seam is built
-but its registry is empty — see `docs/v2-refinements-orchestrator.md`), MCP, additional
-surfaces, Haiku utility, a per-session hard ceiling, the schema-migration runner.
+Qdrant, with the **first remediation handler** wired (music-curation re-tag, behind the explicit
+`orchestrator remediate` CLI command — never the autonomous loop). Deferred: the re-embed
+remediation and the other agents' handlers (the seam is built; see
+`docs/v2-refinements-orchestrator.md`), MCP, additional surfaces, Haiku utility, a per-session
+hard ceiling, the schema-migration runner.
 
 ## Usage
 
@@ -29,6 +31,9 @@ uv run orchestrator chat
 
 # Resume a prior thread by id
 uv run orchestrator chat --thread <thread-id>
+
+# Delegate a diagnosed report's re-tag remediation to its owning agent
+uv run orchestrator remediate "~/obsidian/agent-reports/diagnostics/<date> <collection>.md" [-y]
 ```
 
 The REPL surfaces the per-session cumulative cost as a **soft tally** (informational, not a
@@ -75,9 +80,16 @@ async with AsyncSqliteSaver.from_conn_string("agent-stack.db") as saver:
   `sample_points`), `probe_collection` (behavioral probe that catches cross-model
   embedding-space mismatches), and `write_diagnostic_report` (a report to
   `~/obsidian/agent-reports/diagnostics/`, status `open → delegated → fixed`). The orchestrator
-  **never writes to Qdrant**: the remediation delegation seam (`RemediationHandler` + registry +
-  `delegate_remediation`) is built but ships with an empty registry, so reports are manual work
-  orders until an owning agent registers a handler (deferred — `docs/v2-refinements-orchestrator.md`).
+  **never writes to Qdrant** — the owning agent does. The remediation delegation seam
+  (`RemediationHandler` + registry + `delegate_remediation`; shared report types live in
+  `agent_runtime.diagnostics`) has its first handler: **music-curation**'s re-tag path
+  (`MusicCurationStore.remediate`, executing a report's machine-readable `RemediationSpec`),
+  registered (`register_remediation_handlers()` in `tools.py`) only for the explicit
+  `orchestrator remediate <report-path>` CLI command — **not** an autonomous-loop tool, so the
+  loop can never trigger a write. A report carrying a `RemediationSpec` round-trips through the
+  report markdown (`load_diagnostic_report`); a handler that refuses (wrong collection /
+  unsupported kind / malformed spec) leaves the report at `open` as a manual work order. The
+  re-embed fix and other agents' handlers are deferred (`docs/v2-refinements-orchestrator.md`).
 - **Model** — Sonnet only (`MODEL_ORCHESTRATOR`, defined here per the per-package
   convention). `MODEL_UTILITY` (Haiku) is reserved, not wired in.
 - **Checkpointer** — LangGraph `AsyncSqliteSaver` at `~/agent-data/agent-stack.db`,
@@ -95,8 +107,10 @@ turn), the budget guard (an exhausted envelope short-circuits before the next to
 `search_knowledge` (user-knowledge boost + graceful degradation, including the
 voiceover-direction and visual-generation domains), the in-process sub-agent tools (each
 calls its agent's entry point with a derived child budget and records the delegation), the
-diagnostics (report round-trip, structural inspection, behavioral-probe shaping incl. the
-cross-model-mismatch flag, and the remediation seam's `open → delegated → fixed` transition
-via a stub handler — with one live-Qdrant probe test that auto-skips when Qdrant is down),
-and the checkpointer (two turns on one thread resume accumulated state, surviving across
-saver instances).
+diagnostics (report round-trip incl. the `RemediationSpec` markdown round-trip, structural
+inspection, behavioral-probe shaping incl. the cross-model-mismatch flag, and the remediation
+seam's `open → delegated → fixed` transition via both a stub handler and the real
+music-curation handler over a mocked store — plus the `open → delegated → open` refusal path —
+with one live-Qdrant probe test that auto-skips when Qdrant is down), the `remediate` CLI
+refusal gates (`test_cli.py`), and the checkpointer (two turns on one thread resume accumulated
+state, surviving across saver instances).

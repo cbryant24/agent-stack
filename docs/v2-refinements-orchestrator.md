@@ -24,40 +24,46 @@ move points) under its own ownership — preserving the rule that only an owner 
 its own collection, and only `UserKnowledgeStore` writes to `user_knowledge`. The
 orchestrator never writes to Qdrant.
 
-**What shipped.** The **delegation seam** is built and stub-tested:
-`diagnostics.RemediationHandler` (a `Protocol` with `async remediate(report) ->
-RemediationOutcome`), a module-level registry (`register_remediation_handler` /
-`get_remediation_handler`), and `delegate_remediation(report)` which transitions the
-report `open → delegated`, invokes the registered handler (which flips it to `fixed`),
-and rewrites the report file. The registry **ships empty** — no agent registers a
-handler — and `delegate_remediation` is **not** exposed as an orchestrator tool, so the
-autonomous loop cannot trigger any write. With no handler, each diagnostic report stays
-`open` and doubles as a human/Claude-Code-actionable work order.
+**What shipped.** The **delegation seam**: `diagnostics.RemediationHandler` (a `Protocol`
+with `async remediate(report) -> RemediationOutcome`), a module-level registry
+(`register_remediation_handler` / `get_remediation_handler`), and
+`delegate_remediation(report)` which transitions the report `open → delegated`, invokes the
+registered handler, sets the report to the handler's achieved status, and rewrites the
+report file at each transition. The shared report types (`DiagnosticReport` /
+`RemediationSpec` / `RemediationOutcome` / `Status`) live in `agent_runtime.diagnostics`
+(re-exported from `orchestrator.diagnostics`) so an owning agent can implement a handler
+without importing the orchestrator. `delegate_remediation` is **not** an orchestrator tool,
+so the autonomous loop can never trigger a write.
 
-**Why deferred.** Wiring a real remediation entry point into every owning agent exceeds
-Phase 3's smaller-touch bar. The highest-value remediation — re-embedding a whole
+**What's built now (re-tag).** **music-curation** has the first real handler:
+`MusicCurationStore.remediate(report)` executes a machine-readable `RemediationSpec`
+(`kind="retag"`, a `match` payload filter, and the `set` payload changes) as a
+filter-parameterized generalization of its one-shot `migrate_approved_to_liked()` — scroll
+the matched points, `set_payload` on each, no re-embedding, idempotent. It validates first
+(own collection, supported kind, well-formed spec) and **refuses by returning
+`status="open"`** so a refused report lands back as a manual work order rather than
+stranding at `delegated`. The handler is registered (`register_remediation_handlers()` in
+`orchestrator/tools.py`) only for the explicit **`orchestrator remediate <report-path>`**
+CLI command (load → refuse-unless-open-with-spec → show spec → confirm (`-y` to skip) →
+`delegate_remediation`). The spec round-trips through the report markdown (rendered as a
+`## Remediation spec` YAML block; parsed back by `load_diagnostic_report`). Reports with no
+registered handler still stay `open` as a human/Claude-Code-actionable work order.
+
+**Still deferred — re-embed.** The highest-value remediation — re-embedding a whole
 collection to fix a cross-model embedding-space mismatch (`voyage-3-large` vs
-`voyage-multimodal-3`) — is a bulk, irreversible-in-practice Qdrant write that is risky
-to ship under-tested, and it needs careful validation against live data. Building it
-deliberately (one agent at a time, well-tested) is the right shape, not a Phase 3
-drive-by.
+`voyage-multimodal-3`) — is a bulk, irreversible-in-practice Qdrant write that is risky to
+ship under-tested and needs careful validation against live data. It slots into the same
+seam as a new `RemediationSpec.kind` (`"reembed"`) + handler branch, built deliberately
+once the re-tag path is proven. Remediation handlers for the **other owning agents**
+(voiceover-direction, visual-generation, …) are likewise follow-ups on the same seam.
 
-**How it lands later (the seam).** For each owning agent, in v2:
-1. Add a remediation entry point on the agent (a method on its store / a library
-   function) that accepts a `DiagnosticReport` and performs the write under the agent's
-   ownership, returning a `RemediationOutcome`.
-2. `register_remediation_handler("<agent-name>", handler)` at agent/orchestrator wiring
-   time.
-3. Add a `delegate_remediation` orchestrator tool (or a CLI/admin path) so a diagnosed
-   report can be handed off; the seam already handles the status transitions and report
-   rewrite.
-
-**Cheapest first candidate.** **music-curation** already has the simplest write surface:
-`MusicCurationStore` owns `scroll` + `MemoryStore.set_payload`, and there's precedent in
-its one-shot `migrate_approved_to_liked()` (`music_curation/store.py`). A **re-tag**
-remediation (rewrite a payload field, no re-embedding) is the smallest proof of the
-end-to-end `open → delegated → fixed` path. The riskier **re-embed** remediation (the
-actual cross-model fix) should follow once the re-tag path is proven.
+**How another handler lands (the seam).** For each owning agent:
+1. Add `async remediate(self, report) -> RemediationOutcome` on the agent's store
+   (matching the `RemediationHandler` protocol structurally), executing the report's
+   `RemediationSpec` under the agent's ownership; validate-and-refuse before writing.
+2. Register it in `register_remediation_handlers()` (`orchestrator/tools.py`).
+3. The `orchestrator remediate` CLI path already handles load → confirm → status
+   transitions → report rewrite.
 
 ## Per-session cost ceiling
 

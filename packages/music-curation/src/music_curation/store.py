@@ -4,6 +4,7 @@ from typing import Any
 
 from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
 
+from agent_runtime.diagnostics import DiagnosticReport, RemediationOutcome
 from agent_runtime.memory.store import MemoryStore
 from agent_runtime.tracing.decorators import record_memory_query, record_memory_write
 
@@ -316,6 +317,74 @@ class MusicCurationStore:
             if offset is None:
                 break
         return migrated
+
+    # ── Remediation (orchestrator diagnostics delegation) ──────────────────────
+
+    async def remediate(self, report: DiagnosticReport) -> RemediationOutcome:
+        """Execute a diagnostic report's remediation spec against this store's own
+        collection — the music-curation side of the orchestrator's diagnose →
+        delegate seam. The orchestrator diagnoses but never writes to Qdrant; this
+        method performs the write under music-curation's ownership, with the report
+        (its status transitions + evidence) as the audit record.
+
+        Implemented as a filter-parameterized generalization of
+        migrate_approved_to_liked(): scroll the points matching `spec.match` and
+        `set_payload(spec.set)` on each (no re-embedding, idempotent). Returns the
+        number of points rewritten in the outcome detail.
+
+        Validates before writing and *refuses* (returning status="open", so a report
+        delegate_remediation already flipped to "delegated" lands back as a manual
+        work order rather than stranding at "delegated") when the report isn't for
+        this collection, carries no spec, or the spec is unsupported/malformed."""
+        if report.collection != self._collection:
+            return RemediationOutcome(
+                status="open",
+                detail=(
+                    f"refused: report targets '{report.collection}', but this store owns "
+                    f"'{self._collection}'"
+                ),
+            )
+        spec = report.remediation
+        if spec is None:
+            return RemediationOutcome(
+                status="open", detail="refused: report carries no remediation spec"
+            )
+        if spec.kind != "retag":
+            return RemediationOutcome(
+                status="open",
+                detail=f"refused: unsupported remediation kind '{spec.kind}' (only 'retag')",
+            )
+        if not spec.match or not spec.set:
+            return RemediationOutcome(
+                status="open",
+                detail="refused: malformed retag spec (both 'match' and 'set' are required)",
+            )
+
+        filters = Filter(
+            must=[
+                FieldCondition(key=key, match=MatchValue(value=value))
+                for key, value in spec.match.items()
+            ]
+        )
+        rewritten = 0
+        offset = None
+        while True:
+            records, offset = await self._store._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=filters,
+                limit=100,
+                offset=offset,
+                with_payload=False,
+            )
+            for r in records:
+                await self._store.set_payload(self._collection, str(r.id), spec.set)
+                rewritten += 1
+            if offset is None:
+                break
+        return RemediationOutcome(
+            status="fixed",
+            detail=f"re-tagged {rewritten} point(s): {spec.match} → {spec.set}",
+        )
 
     async def count_by_reaction(self, reaction: str) -> int:
         """Count generation points with a given reaction value (used for migration verification)."""

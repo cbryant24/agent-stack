@@ -15,10 +15,13 @@ On finding an issue the orchestrator does two things and stops: it writes a
 ``open → delegated → fixed``), and — by design — it *delegates* the fix to the owning
 agent, which performs the actual write under its own ownership. That delegation
 **seam** is defined here (a ``RemediationHandler`` protocol + registry +
-``delegate_remediation``), but **no agent registers a handler in this slice**: with an
-empty registry every report stays ``open`` and serves as a human/Claude-Code work
-order. Per-agent remediation entry points are deferred (see
-``docs/v2-refinements-orchestrator.md``).
+``delegate_remediation``). The first handler is **music-curation**'s re-tag path
+(``MusicCurationStore.remediate``), registered for the explicit ``orchestrator
+remediate`` CLI command — never the autonomous loop. Reports without a registered
+handler stay ``open`` and serve as a human/Claude-Code work order; remaining agents
+and the re-embed fix are deferred (see ``docs/v2-refinements-orchestrator.md``). The
+shared report types (``DiagnosticReport`` / ``RemediationSpec`` / ``RemediationOutcome``
+/ ``Status``) live in ``agent_runtime.diagnostics`` and are re-exported here.
 """
 from __future__ import annotations
 
@@ -26,13 +29,39 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import yaml
-from pydantic import BaseModel, Field
 
 from agent_runtime import MemoryStore, get_memory_store
 from agent_runtime.config import get_config
+
+# Shared cross-package types live in agent-runtime so an owning agent can implement a
+# remediation handler without importing the orchestrator. Re-exported here so existing
+# `orchestrator.diagnostics.DiagnosticReport` (etc.) imports keep resolving.
+from agent_runtime.diagnostics import (
+    DiagnosticReport,
+    RemediationOutcome,
+    RemediationSpec,
+    Status,
+)
+
+__all__ = [
+    "DiagnosticReport",
+    "RemediationOutcome",
+    "RemediationSpec",
+    "Status",
+    "ProbeResult",
+    "RemediationHandler",
+    "behavioral_probe",
+    "delegate_remediation",
+    "diagnostics_dir",
+    "get_remediation_handler",
+    "load_diagnostic_report",
+    "register_remediation_handler",
+    "render_report_markdown",
+    "write_diagnostic_report",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -44,37 +73,17 @@ MULTIMODAL_MODEL = "voyage-multimodal-3"
 # Below this score a probe hit is treated as "did not retrieve" for the expected point.
 DEFAULT_PROBE_THRESHOLD = 0.5
 
-Status = Literal["open", "delegated", "fixed"]
 
-
-# ── Diagnostic report ───────────────────────────────────────────────────────────
-
-
-class DiagnosticReport(BaseModel):
-    """A diagnose-only finding about one collection. Written to the reports vault as
-    markdown with YAML frontmatter; `status` moves open → delegated → fixed."""
-
-    collection: str
-    owning_agent: str
-    symptom: str
-    diagnosis: str
-    # filter/threshold/model read from code + actual payloads/scores from Qdrant.
-    evidence: dict[str, Any] = Field(default_factory=dict)
-    proposed_fix: str
-    status: Status = "open"
-    created_at: str = ""
-    run_id: str = ""
-
-    def stamp(self) -> DiagnosticReport:
-        """Fill created_at if unset (kept separate so callers can inject a fixed
-        timestamp in tests). Returns self for chaining."""
-        if not self.created_at:
-            self.created_at = datetime.now(UTC).isoformat()
-        return self
+# ── Diagnostic report render / load ───────────────────────────────────────────────
+# DiagnosticReport / RemediationSpec / RemediationOutcome / Status are defined in
+# agent_runtime.diagnostics and re-exported above; the markdown round-trip lives here.
 
 
 def render_report_markdown(report: DiagnosticReport) -> str:
-    """YAML frontmatter + a readable body, matching the repo's report convention."""
+    """YAML frontmatter + a readable body, matching the repo's report convention.
+
+    A `remediation` spec, when present, renders as a fenced YAML block so the report
+    round-trips back through `load_diagnostic_report`."""
     front = {
         "type": "vector-db-diagnostic",
         "collection": report.collection,
@@ -85,6 +94,12 @@ def render_report_markdown(report: DiagnosticReport) -> str:
     }
     fm = yaml.safe_dump(front, sort_keys=False, default_flow_style=False).strip()
     evidence = yaml.safe_dump(report.evidence, sort_keys=False, default_flow_style=False).strip()
+    remediation_section = ""
+    if report.remediation is not None:
+        spec_yaml = yaml.safe_dump(
+            report.remediation.model_dump(), sort_keys=False, default_flow_style=False
+        ).strip()
+        remediation_section = f"## Remediation spec\n\n```yaml\n{spec_yaml}\n```\n\n"
     return (
         f"---\n{fm}\n---\n\n"
         f"# Diagnostic: `{report.collection}`\n\n"
@@ -93,7 +108,63 @@ def render_report_markdown(report: DiagnosticReport) -> str:
         f"## Symptom\n\n{report.symptom}\n\n"
         f"## Root-cause diagnosis\n\n{report.diagnosis}\n\n"
         f"## Supporting evidence\n\n```yaml\n{evidence}\n```\n\n"
+        f"{remediation_section}"
         f"## Proposed fix\n\n{report.proposed_fix}\n"
+    )
+
+
+def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Return (frontmatter dict, body) for a `---`-fenced markdown report."""
+    if not text.startswith("---"):
+        return {}, text
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+    front = yaml.safe_load(parts[1]) or {}
+    return front, parts[2]
+
+
+def _section_text(body: str, heading: str) -> str:
+    """Extract the prose under a `## {heading}` section, up to the next `## ` header."""
+    marker = f"## {heading}\n"
+    start = body.find(marker)
+    if start == -1:
+        return ""
+    start += len(marker)
+    rest = body[start:]
+    end = rest.find("\n## ")
+    section = rest if end == -1 else rest[:end]
+    return section.strip()
+
+
+def _yaml_block(body: str, heading: str) -> Any:
+    """Parse the ```yaml fenced block under a `## {heading}` section, or None."""
+    section = _section_text(body, heading)
+    if "```yaml" not in section:
+        return None
+    inner = section.split("```yaml", 1)[1]
+    inner = inner.split("```", 1)[0]
+    return yaml.safe_load(inner)
+
+
+def load_diagnostic_report(path: Path) -> DiagnosticReport:
+    """Parse a report markdown file back into a DiagnosticReport (the inverse of
+    `render_report_markdown`). Used when handing a report to `delegate_remediation`
+    via the CLI; reconstructs every field so a rewrite preserves the report."""
+    text = Path(path).read_text(encoding="utf-8")
+    front, body = _split_frontmatter(text)
+    remediation_raw = _yaml_block(body, "Remediation spec")
+    return DiagnosticReport(
+        collection=front.get("collection", ""),
+        owning_agent=front.get("owning_agent", ""),
+        symptom=_section_text(body, "Symptom"),
+        diagnosis=_section_text(body, "Root-cause diagnosis"),
+        evidence=_yaml_block(body, "Supporting evidence") or {},
+        proposed_fix=_section_text(body, "Proposed fix"),
+        remediation=RemediationSpec(**remediation_raw) if remediation_raw else None,
+        status=front.get("status", "open"),
+        created_at=front.get("created_at", "") or "",
+        run_id=front.get("run_id", "") or "",
     )
 
 
@@ -195,24 +266,16 @@ async def behavioral_probe(
     return result
 
 
-# ── Remediation delegation seam (empty registry in this slice) ────────────────────
-
-
-@dataclass
-class RemediationOutcome:
-    """Returned by a RemediationHandler. `status` is the new report status the handler
-    achieved (typically "fixed"); `detail` is a human-readable note for the report."""
-
-    status: Status
-    detail: str
+# ── Remediation delegation seam ───────────────────────────────────────────────────
 
 
 @runtime_checkable
 class RemediationHandler(Protocol):
     """An owning agent's remediation entry point. The agent performs the actual write
     (re-embed / re-tag payload / move points) under its own ownership — the
-    orchestrator never writes to Qdrant. No agent implements this in the current
-    slice; per-agent handlers are deferred to docs/v2-refinements-orchestrator.md."""
+    orchestrator never writes to Qdrant. music-curation registers a re-tag handler
+    (see `MusicCurationStore.remediate`); other agents are deferred to
+    docs/v2-refinements-orchestrator.md."""
 
     async def remediate(self, report: DiagnosticReport) -> RemediationOutcome: ...
 

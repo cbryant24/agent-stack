@@ -277,6 +277,26 @@ async def music_generate(request: str) -> str:
     return _truncate("\n".join(parts))
 
 
+# ── music-curation remediation handler (CLI-only, NOT an autonomous-loop tool) ───
+# Registers music-curation's re-tag remediation entry point on the orchestrator's
+# delegation registry so `orchestrator remediate` can hand a diagnosed report to the
+# owning agent. Deliberately NOT in all_tools(): the autonomous loop never gets a
+# Qdrant write path — delegate_remediation stays CLI-explicit (same reasoning as the
+# planned migrations).
+
+
+def register_remediation_handlers() -> None:
+    """Populate the diagnostics remediation registry with the per-agent handlers the
+    CLI's `remediate` command can delegate to. Lazy (mirrors the sub-agent tools'
+    in-function imports) and idempotent."""
+    from agent_runtime import get_memory_store
+    from music_curation.store import MusicCurationStore
+
+    from orchestrator.diagnostics import register_remediation_handler
+
+    register_remediation_handler("music-curation", MusicCurationStore(get_memory_store()))
+
+
 # ── Sub-agent tools: voiceover-direction ────────────────────────────────────────
 
 

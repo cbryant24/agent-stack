@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agent_runtime.diagnostics import DiagnosticReport, RemediationSpec
 from music_curation.constants import (
     COLLECTION_NAME,
     MEMORY_TYPE_GENERATION,
@@ -288,3 +289,81 @@ class TestApprovedToLikedMigration:
         store, mock_memory = _make_store()
         count = await store.count_by_reaction("approved")
         assert count == 0
+
+
+class TestRemediation:
+    """The music-curation side of the orchestrator's diagnose → delegate seam: a
+    filter-parameterized re-tag handler that validates before writing."""
+
+    @staticmethod
+    def _report(**overrides) -> DiagnosticReport:
+        base = dict(
+            collection=COLLECTION_NAME,
+            owning_agent="music-curation",
+            symptom="s",
+            diagnosis="d",
+            proposed_fix="re-tag",
+            remediation=RemediationSpec(
+                kind="retag", match={"reaction": "approvd"}, set={"reaction": "approved"}
+            ),
+        )
+        base.update(overrides)
+        return DiagnosticReport(**base)
+
+    @pytest.mark.asyncio
+    async def test_refuses_wrong_collection(self):
+        store, mock_memory = _make_store()
+        outcome = await store.remediate(self._report(collection="some_other_memory"))
+        assert outcome.status == "open"
+        assert "this store owns" in outcome.detail
+        mock_memory.set_payload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refuses_missing_spec(self):
+        store, mock_memory = _make_store()
+        outcome = await store.remediate(self._report(remediation=None))
+        assert outcome.status == "open"
+        assert "no remediation spec" in outcome.detail
+        mock_memory.set_payload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refuses_unsupported_kind(self):
+        store, mock_memory = _make_store()
+        # model_construct bypasses Literal validation to simulate a future/unknown kind
+        spec = RemediationSpec.model_construct(kind="reembed", match={"a": "b"}, set={"c": "d"})
+        outcome = await store.remediate(self._report(remediation=spec))
+        assert outcome.status == "open"
+        assert "unsupported remediation kind" in outcome.detail
+        mock_memory.set_payload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refuses_malformed_spec(self):
+        store, mock_memory = _make_store()
+        spec = RemediationSpec(kind="retag", match={}, set={"reaction": "approved"})
+        outcome = await store.remediate(self._report(remediation=spec))
+        assert outcome.status == "open"
+        assert "malformed retag spec" in outcome.detail
+        mock_memory.set_payload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_retag(self):
+        store, mock_memory = _make_store()
+        recs = [MagicMock(id="g1"), MagicMock(id="g2")]
+        mock_memory._client.scroll = AsyncMock(return_value=(recs, None))
+
+        outcome = await store.remediate(self._report())
+
+        assert outcome.status == "fixed"
+        assert "re-tagged 2 point(s)" in outcome.detail
+        assert mock_memory.set_payload.await_count == 2
+        for call in mock_memory.set_payload.await_args_list:
+            # set_payload(collection, point_id, {"reaction": "approved"})
+            assert call[0][2] == {"reaction": "approved"}
+
+    @pytest.mark.asyncio
+    async def test_retag_noop_when_no_matches(self):
+        store, mock_memory = _make_store()  # scroll returns ([], None) by default
+        outcome = await store.remediate(self._report())
+        assert outcome.status == "fixed"
+        assert "re-tagged 0 point(s)" in outcome.detail
+        mock_memory.set_payload.assert_not_called()

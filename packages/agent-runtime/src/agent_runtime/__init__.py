@@ -30,6 +30,12 @@ from agent_runtime.tracing import (
     traced,
 )
 from agent_runtime.budget import BudgetTracker
+from agent_runtime.diagnostics import (
+    DiagnosticReport,
+    RemediationOutcome,
+    RemediationSpec,
+    Status,
+)
 from agent_runtime.registry import get_agent, list_agents, register_agent
 from agent_runtime.delegation import delegate
 from agent_runtime.memory import (
@@ -93,6 +99,11 @@ __all__ = [
     "load_trace",
     # budget
     "BudgetTracker",
+    # diagnostics (shared cross-package types)
+    "DiagnosticReport",
+    "RemediationSpec",
+    "RemediationOutcome",
+    "Status",
     # registry & delegation
     "register_agent",
     "get_agent",

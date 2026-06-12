@@ -16,8 +16,10 @@ from orchestrator import diagnostics, tools
 from orchestrator.diagnostics import (
     DiagnosticReport,
     RemediationOutcome,
+    RemediationSpec,
     behavioral_probe,
     delegate_remediation,
+    load_diagnostic_report,
     register_remediation_handler,
     render_report_markdown,
     write_diagnostic_report,
@@ -83,6 +85,41 @@ class TestDiagnosticReport:
         p2 = write_diagnostic_report(r, vault=tmp_path)
         assert p1 == p2  # rewrites the same file, not a duplicate
         assert "status: delegated" in p2.read_text(encoding="utf-8")
+
+
+class TestReportRoundTrip:
+    """render_report_markdown ↔ load_diagnostic_report — incl. the remediation spec."""
+
+    def test_remediation_spec_round_trips(self, tmp_path: Path) -> None:
+        spec = RemediationSpec(
+            kind="retag", match={"reaction": "approvd"}, set={"reaction": "approved"}
+        )
+        report = _report(created_at="2026-06-11T00:00:00+00:00", remediation=spec)
+        path = write_diagnostic_report(report, vault=tmp_path)
+
+        text = path.read_text(encoding="utf-8")
+        assert "## Remediation spec" in text
+
+        loaded = load_diagnostic_report(path)
+        assert loaded.remediation is not None
+        assert loaded.remediation.kind == "retag"
+        assert loaded.remediation.match == {"reaction": "approvd"}
+        assert loaded.remediation.set == {"reaction": "approved"}
+        # the rest of the report survives so a rewrite preserves it
+        assert loaded.collection == report.collection
+        assert loaded.owning_agent == report.owning_agent
+        assert loaded.symptom == report.symptom
+        assert loaded.diagnosis == report.diagnosis
+        assert loaded.proposed_fix == report.proposed_fix
+        assert loaded.evidence == report.evidence
+        assert loaded.status == "open"
+
+    def test_no_remediation_block_when_absent(self, tmp_path: Path) -> None:
+        path = write_diagnostic_report(_report(), vault=tmp_path)
+        text = path.read_text(encoding="utf-8")
+        assert "## Remediation spec" not in text
+        loaded = load_diagnostic_report(path)
+        assert loaded.remediation is None
 
 
 # ── inspect_collection tool ───────────────────────────────────────────────────────
@@ -219,6 +256,60 @@ class TestRemediationSeam:
         text = _only_report_text(tmp_path)
         assert "status: fixed" in text
         assert "re-embedded 42 points" in text
+
+    def test_real_music_curation_handler_open_to_fixed(self, tmp_path: Path) -> None:
+        # the real MusicCurationStore.remediate over a mocked MemoryStore, registered
+        # as the handler — the genuine cross-package open → delegated → fixed path.
+        from music_curation.constants import COLLECTION_NAME
+        from music_curation.store import MusicCurationStore
+
+        ms = MagicMock()
+        ms.set_payload = AsyncMock()
+        ms._client = MagicMock()
+        ms._client.scroll = AsyncMock(
+            return_value=([MagicMock(id="g1"), MagicMock(id="g2")], None)
+        )
+        register_remediation_handler("music-curation", MusicCurationStore(ms))
+
+        report = _report(
+            collection=COLLECTION_NAME,
+            remediation=RemediationSpec(
+                kind="retag", match={"reaction": "approvd"}, set={"reaction": "approved"}
+            ),
+        )
+        write_diagnostic_report(report, vault=tmp_path)
+        result = asyncio.run(delegate_remediation(report, vault=tmp_path))
+
+        assert result.status == "fixed"
+        assert ms.set_payload.await_count == 2
+        text = _only_report_text(tmp_path)
+        assert "status: fixed" in text
+        assert "re-tagged 2 point(s)" in text
+
+    def test_refusal_lands_report_back_at_open(self, tmp_path: Path) -> None:
+        # a handler that refuses (here: wrong-collection report) must leave the file at
+        # open — NOT stranded at delegated, which delegate_remediation set pre-handoff.
+        from music_curation.store import MusicCurationStore
+
+        ms = MagicMock()
+        ms.set_payload = AsyncMock()
+        ms._client = MagicMock()
+        ms._client.scroll = AsyncMock(return_value=([], None))
+        register_remediation_handler("music-curation", MusicCurationStore(ms))
+
+        # report targets a different collection than the store owns → refusal
+        report = _report(
+            collection="not_music_curation_memory",
+            remediation=RemediationSpec(kind="retag", match={"a": "b"}, set={"c": "d"}),
+        )
+        write_diagnostic_report(report, vault=tmp_path)
+        result = asyncio.run(delegate_remediation(report, vault=tmp_path))
+
+        assert result.status == "open"
+        ms.set_payload.assert_not_called()
+        text = _only_report_text(tmp_path)
+        assert "status: open" in text
+        assert "status: delegated" not in text
 
     def test_write_tool_notes_no_handler(self, tmp_path: Path) -> None:
         # point the report at the tmp vault via config (the tool uses get_config())
