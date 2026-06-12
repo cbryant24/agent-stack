@@ -178,6 +178,148 @@ class TestVisualTools:
         assert out == "RENDERED"
 
 
+# ── edit-brief (stateless) ──────────────────────────────────────────────────────
+
+
+class TestEditBriefTools:
+    def _result(self, *, dry_run: bool, cost: float = 0.0) -> MagicMock:
+        music = MagicMock(file=None, bpm=None, bpm_source="none")
+        provenance = MagicMock(project_id="script-draft", vo_takes=[], music=music, assets=[])
+        brief = MagicMock(
+            provenance=provenance,
+            timeline=[MagicMock(), MagicMock()],
+            beat_grid=None,
+            sections=([] if dry_run else [MagicMock(), MagicMock()]),
+            notations=["No voiceover takes discovered — timestamps are estimates."],
+        )
+        return MagicMock(
+            brief=brief,
+            brief_path=(None if dry_run else "script-draft.edit-brief.md"),
+            status="completed",
+            cost_usd=cost,
+            dry_run=dry_run,
+        )
+
+    def test_edit_brief_discover_is_free_and_records(self) -> None:
+        fake = AsyncMock(return_value=self._result(dry_run=True))
+        with patch("edit_brief.draft", fake), \
+             patch("orchestrator.tools.record_delegation_decision") as rec:
+            out, delegations = _run_tool(
+                lambda: tools.edit_brief_discover.ainvoke({"script_path": "seed/script.md"})
+            )
+
+        fake.assert_awaited_once()
+        # The free op runs in dry-run mode and passes NO budget (it spends nothing).
+        assert fake.await_args.kwargs == {"dry_run": True}
+        assert delegations == 1
+        assert rec.call_args.kwargs["collection"] == "edit_brief"
+        assert "Discovery (dry-run)" in out
+        assert "project_id=script-draft" in out
+        assert "⚠ No voiceover takes" in out
+
+    def test_edit_brief_draft_uses_child_budget_and_records(self) -> None:
+        fake = AsyncMock(return_value=self._result(dry_run=False, cost=0.04))
+        with patch("edit_brief.draft", fake), \
+             patch("orchestrator.tools.record_delegation_decision") as rec:
+            out, delegations = _run_tool(
+                lambda: tools.edit_brief_draft.ainvoke({"script_path": "seed/script.md"})
+            )
+
+        fake.assert_awaited_once()
+        _assert_child_budget(fake.await_args.kwargs["budget"])
+        assert delegations == 1
+        assert rec.call_args.kwargs["collection"] == "edit_brief"
+        assert "status=completed" in out
+        assert "brief: script-draft.edit-brief.md" in out
+
+    def test_edit_brief_draft_failure_returns_message_not_raises(self) -> None:
+        fake = AsyncMock(side_effect=RuntimeError("ffprobe missing"))
+        with patch("edit_brief.draft", fake):
+            out, _ = _run_tool(
+                lambda: tools.edit_brief_draft.ainvoke({"script_path": "x.md"})
+            )
+        assert "edit-brief draft failed" in out
+
+
+# ── feedback-iteration (stateless) ──────────────────────────────────────────────
+
+
+class TestFeedbackIterationTools:
+    def _inspect_result(self) -> MagicMock:
+        return MagicMock(
+            project_id="script-draft",
+            section_ids=["opening-image", "close"],
+            feedback_items=["tighten the calm underneath by 2 seconds", "the drop feels too slow"],
+            version_from=1,
+            version_to=2,
+            validation_findings=[],
+            snapshot_path="versions/script-draft.edit-brief.v1.md",
+        )
+
+    def _revise_result(self, *, cost: float) -> MagicMock:
+        return MagicMock(
+            status="completed",
+            cost_usd=cost,
+            version_from=1,
+            version_to=2,
+            brief_path="script-draft.edit-brief.md",
+            snapshot_path="versions/script-draft.edit-brief.v1.md",
+            applied=['"tighten the calm underneath by 2 seconds" → #the-calm-underneath adjust_duration'],
+            unresolved=['"the drop feels too slow" — no drop anchor in this brief'],
+            lesson_draft_ids=["draft-abc"],
+        )
+
+    def test_feedback_inspect_is_free_and_records(self) -> None:
+        fake = AsyncMock(return_value=self._inspect_result())
+        with patch("feedback_iteration.revise", fake), \
+             patch("orchestrator.tools.record_delegation_decision") as rec:
+            out, delegations = _run_tool(
+                lambda: tools.feedback_inspect.ainvoke(
+                    {"brief_path": "seed/script-draft.edit-brief.md", "feedback": "tighten the calm"}
+                )
+            )
+
+        fake.assert_awaited_once()
+        # The free op runs in dry-run mode and passes NO budget (it spends nothing).
+        assert fake.await_args.kwargs == {"dry_run": True}
+        assert "budget" not in fake.await_args.kwargs
+        assert delegations == 1
+        assert rec.call_args.kwargs["collection"] == "feedback_iteration"
+        assert "Inspect (dry-run)" in out
+        assert "project_id=script-draft" in out
+        assert "version=1→2(planned)" in out
+        assert "[1] the drop feels too slow" in out
+
+    def test_feedback_revise_uses_child_budget_and_records(self) -> None:
+        fake = AsyncMock(return_value=self._revise_result(cost=0.04))
+        with patch("feedback_iteration.revise", fake), \
+             patch("orchestrator.tools.record_delegation_decision") as rec:
+            out, delegations = _run_tool(
+                lambda: tools.feedback_revise.ainvoke(
+                    {"brief_path": "seed/script-draft.edit-brief.md", "feedback": "tighten the calm"}
+                )
+            )
+
+        fake.assert_awaited_once()
+        _assert_child_budget(fake.await_args.kwargs["budget"])
+        assert delegations == 1
+        assert rec.call_args.kwargs["collection"] == "feedback_iteration"
+        assert "status=completed" in out
+        assert "version=1→2" in out
+        assert "brief: script-draft.edit-brief.md" in out
+        assert "snapshot: versions/script-draft.edit-brief.v1.md" in out
+        assert "✗ unresolved:" in out
+        assert "lesson drafts (confirm separately): draft-abc" in out
+
+    def test_feedback_revise_failure_returns_message_not_raises(self) -> None:
+        fake = AsyncMock(side_effect=RuntimeError("brief not found"))
+        with patch("feedback_iteration.revise", fake):
+            out, _ = _run_tool(
+                lambda: tools.feedback_revise.ainvoke({"brief_path": "x.md", "feedback": "y"})
+            )
+        assert "feedback-iteration revise failed" in out
+
+
 # ── graceful degrade (no crash) ────────────────────────────────────────────────
 
 

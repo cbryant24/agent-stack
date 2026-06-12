@@ -495,6 +495,172 @@ async def technique_identify(goal: str) -> str:
     return _truncate("\n".join(parts))
 
 
+# ── Sub-agent tools: edit-brief (stateless — no collection) ──────────────────────
+# edit-brief is a Tier-1 knowledge consultant: it assembles the director's
+# DaVinci execution checklist from already-produced artifacts (script, VO, music,
+# assets, technique findings). It owns no collection (stateless — reads
+# user_knowledge + the foreign collections generically), so there is no
+# search_knowledge domain for it. `draft` spends only Claude (one synthesis call,
+# no DaVinci API, no external money) → child-budgeted. `--dry-run` discovery is
+# free (collection reads + the pure time engine, no LLM, no file) → the free op.
+
+
+def _render_discovery(result) -> str:
+    """The discovery picture shared by both edit-brief tools: what was found per
+    input and the missing-input notations (the degradation story)."""
+    brief = result.brief
+    inputs = brief.provenance
+    n_vo = sum(1 for t in inputs.vo_takes if t.duration_sec is not None)
+    parts = [
+        f"project_id={inputs.project_id} sections={len(brief.timeline)} "
+        f"vo_measured={n_vo} music={inputs.music.file or '(none)'} "
+        f"bpm={inputs.music.bpm if inputs.music.bpm is not None else '(none)'}"
+        f"({inputs.music.bpm_source}) assets={len(inputs.assets)} "
+        f"beat_grid={'yes' if brief.beat_grid is not None else 'no'}"
+    ]
+    for n in brief.notations:
+        parts.append(f"⚠ {n}")
+    return "\n".join(parts)
+
+
+@tool
+async def edit_brief_discover(script_path: str) -> str:
+    """Run the edit-brief agent's FREE discovery pass over a script.md (the
+    `--dry-run`): discover the project's VO takes, music, and generated assets by
+    project_id and compute the timeline + beat grid in code. NO Claude call, NO
+    file written, no money spent. Returns the degradation picture — what was found
+    per input and the missing-input notations — so you can see what a full brief
+    would have to work with before spending. Pass a repo-relative or absolute path
+    to a script.md."""
+    from edit_brief import draft
+
+    try:
+        result = await draft(script_path, dry_run=True)
+    except Exception as exc:
+        logger.warning("edit_brief_discover failed: %s", exc)
+        return f"edit-brief discover failed: {exc}"
+    _record_delegation("edit_brief_discover", "edit_brief", str(script_path), 0.0)
+    return _truncate("Discovery (dry-run):\n" + _render_discovery(result))
+
+
+@tool
+async def edit_brief_draft(script_path: str) -> str:
+    """Run the edit-brief agent to draft the director's DaVinci Resolve execution
+    checklist for a script.md: discover the project's artifacts, compute the
+    timeline + beat grid (all timing is arithmetic, never LLM-estimated), retrieve
+    technique findings + the editing toolset, and synthesize per-section ordered
+    steps. This SPENDS budget (one Claude synthesis call) but touches NO external
+    money and NO DaVinci API — it writes a director-owned `edit-brief.md` next to
+    the script. Inputs degrade gracefully: missing VO/music/assets become explicit
+    notations, never a failure. Returns the run status, the brief path, and the
+    missing-input notations."""
+    from edit_brief import draft
+
+    try:
+        result = await draft(script_path, budget=_child_budget())
+    except Exception as exc:
+        logger.warning("edit_brief_draft failed: %s", exc)
+        return f"edit-brief draft failed: {exc}"
+    _record_delegation("edit_brief_draft", "edit_brief", str(script_path), result.cost_usd)
+    parts = [
+        f"status={result.status} cost=${result.cost_usd:.4f} "
+        f"sections={len(result.brief.sections)}"
+    ]
+    if result.brief_path:
+        parts.append(f"brief: {result.brief_path}")
+    parts.append(_render_discovery(result))
+    return _truncate("\n".join(parts))
+
+
+# ── Sub-agent tools: feedback-iteration (stateless — no collection) ──────────────
+# feedback-iteration revises a director-owned edit-brief.md from natural-language
+# feedback: it maps each perceptual note to a brief anchor, recomputes any timing
+# in code (the LLM never produces a number), and patches the brief IN PLACE —
+# preserving the director's checked boxes and hand-edits — then snapshots the prior
+# version, bumps the version, and logs the change. Durable craft preferences are
+# PROPOSED as user_knowledge lessons (propose-only). It owns no collection (lessons
+# live in user_knowledge), so there is no search_knowledge domain for it. `revise`
+# spends only Claude (one mapping/diagnosis call) → child-budgeted. The dry-run
+# parse + validate is free (no LLM, no writes) → the free op.
+
+
+def _render_revise_inspect(result) -> str:
+    """The parse/validate/echo picture for the free inspect op."""
+    parts = [
+        f"project_id={result.project_id} sections={len(result.section_ids)} "
+        f"version={result.version_from}→{result.version_to}(planned)"
+    ]
+    if result.feedback_items:
+        parts.append("feedback items:")
+        for i, item in enumerate(result.feedback_items):
+            parts.append(f"  [{i}] {item}")
+    else:
+        parts.append("feedback items: (none provided)")
+    for f in result.validation_findings:
+        parts.append(f"⚠ {f}")
+    parts.append(f"snapshot plan: {result.snapshot_path}")
+    return "\n".join(parts)
+
+
+@tool
+async def feedback_inspect(brief_path: str, feedback: str = "") -> str:
+    """Run the feedback-iteration agent's FREE inspection pass over an
+    edit-brief.md (the `--dry-run`): parse + validate the brief (anchors,
+    frontmatter, version state, snapshot plan) and echo how the feedback splits
+    into items. NO Claude call, NO file written, no money spent. Use this to see
+    what a revision would target — the brief's sections, the planned version bump,
+    any validation issues — before spending. Pass the path to an edit-brief.md and
+    optionally the feedback text to preview how it parses."""
+    from feedback_iteration import revise
+
+    try:
+        result = await revise(brief_path, feedback or None, dry_run=True)
+    except Exception as exc:
+        logger.warning("feedback_inspect failed: %s", exc)
+        return f"feedback-iteration inspect failed: {exc}"
+    _record_delegation("feedback_inspect", "feedback_iteration", str(brief_path), 0.0)
+    return _truncate("Inspect (dry-run):\n" + _render_revise_inspect(result))
+
+
+@tool
+async def feedback_revise(brief_path: str, feedback: str) -> str:
+    """Run the feedback-iteration agent to revise a director-owned edit-brief.md
+    from natural-language feedback: map each perceptual note ("the drop feels too
+    slow", "the close fade is too long") to a brief anchor, diagnose the change,
+    recompute any timing in code (the LLM never produces a number), and patch the
+    brief IN PLACE — preserving the director's checked boxes and hand-edits. This
+    SPENDS budget (one Claude mapping/diagnosis call) but touches NO external money
+    and NO DaVinci API — it snapshots the prior version, bumps the version, and
+    appends a version-log entry. Unmappable or numberless-timing items are surfaced
+    as unresolved, never guessed; durable craft preferences are PROPOSED as lessons
+    (confirm them separately). Returns the status, cost, version bump, snapshot
+    path, applied/unresolved items, and lesson draft ids."""
+    from feedback_iteration import revise
+
+    try:
+        result = await revise(brief_path, feedback, budget=_child_budget())
+    except Exception as exc:
+        logger.warning("feedback_revise failed: %s", exc)
+        return f"feedback-iteration revise failed: {exc}"
+    _record_delegation("feedback_revise", "feedback_iteration", str(brief_path), result.cost_usd)
+    parts = [
+        f"status={result.status} cost=${result.cost_usd:.4f} "
+        f"version={result.version_from}→{result.version_to} "
+        f"applied={len(result.applied)} unresolved={len(result.unresolved)}"
+    ]
+    if result.brief_path:
+        parts.append(f"brief: {result.brief_path}")
+    if result.snapshot_path:
+        parts.append(f"snapshot: {result.snapshot_path}")
+    for a in result.applied:
+        parts.append(f"✓ {a}")
+    for u in result.unresolved:
+        parts.append(f"✗ unresolved: {u}")
+    if result.lesson_draft_ids:
+        parts.append("lesson drafts (confirm separately): " + ", ".join(result.lesson_draft_ids))
+    return _truncate("\n".join(parts))
+
+
 # ── Vector-DB diagnostics (diagnose-only) ────────────────────────────────────────
 # The orchestrator audits the Qdrant layer but NEVER writes to it. These tools do
 # read-only structural inspection + a behavioral probe, then write a diagnostic
@@ -644,6 +810,10 @@ def all_tools() -> list:
         visual_recall,
         technique_recall,
         technique_identify,
+        edit_brief_discover,
+        edit_brief_draft,
+        feedback_inspect,
+        feedback_revise,
         inspect_collection,
         probe_collection,
         write_diagnostic_report,

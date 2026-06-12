@@ -339,41 +339,48 @@ When it finds an issue it does two things and then stops: (1) it writes a **diag
 
 ---
 
-### Edit Brief Agent — `edit-brief` *(planned)*
+### Edit Brief Agent — `edit-brief` *(built)*
 
-**Status: not built.**
+**Status: Phase 2 MVP-complete — `draft` runs end-to-end (three-layer brief + missing-input notations), the time engine is fully unit-tested, and the orchestrator wraps both ops.** Package suite green (50 passed); orchestrator integration adds 3 tool tests (44 passed, 1 skipped). Both edit-brief smoke runs recorded (degradation on `script-draft.md`; a synthetic VO-backed fixture) plus an orchestrator-path smoke (`edit_brief_discover` free + `edit_brief_draft` child-budgeted, $0.0884, brief written). Full reasoning in `docs/edit-brief-phase1-handoff.md`; Phase 2 record in `docs/edit-brief-phase2-handoff.md`; deferred items in `docs/v2-refinements-edit-brief.md`.
 
-**Purpose:** Translates the creative artifacts (Concept & Script output, Music Curation choice, Technique Research findings, available footage) into an actionable editing checklist for the user's DaVinci Resolve session. The user does the editing; this agent prepares the briefing.
+**Purpose:** Translates the creative artifacts (the approved `script.md`, the selected music, voiceover takes, available footage and generated assets, technique findings) into a director-owned, **time-ordered execution checklist** for the director's DaVinci Resolve free session. The director does the editing; this agent prepares the briefing. Its one distinct competence is **assembly and time-translation** — section timestamps from VO durations, beat-aligned cut points from BPM, retrieved findings placed against the computed grids. All knowledge is retrieved, never gathered; gaps are flagged naming the upstream agent.
 
 **Critical caveat:** the agent does NOT use the DaVinci API or attempt automated editing. Tier 1 only — knowledge consultant. Translates a creative plan into a "here's what to do, in order, in DaVinci" document.
 
-**Inputs (starting points, not exhaustive):** an approved `VideoBrief`, the selected music (filename + duration + BPM if known), voiceover files (filenames + durations per section), a list of available footage (filenames + brief descriptions), and style references and technique findings. The build will likely surface more.
+**Inputs (resolved):** the script (`script.md`), positional and the only required input; everything else is **discovered from existing collections by `project_id`** (default: script stem) with flags as overrides — VO takes from voiceover-direction's records (durations ffprobe-read from disk; positively-reacted take wins, else latest), music + BPM from `music_curation_memory` (`--music` override), generated assets from visual-generation's records (generation intent gives rich section mapping). Director-sourced footage is the one input with no record: `--footage DIR`, scanned and ffprobed, descriptions as optional enrichment. Technique findings are retrieved, never passed. Partial input degrades the corresponding layer with an explicit missing-input notation — never a failure, never a silent guess.
 
 **Outputs:**
-- Markdown editing checklist written to the agent-reports vault
-- Timeline structure (rough timestamps for sections)
-- Beat-sync guide (approximate cut points based on BPM)
-- Transition/effect recommendations per moment
-- Color grade direction (if appropriate to the project)
+- Director-owned `edit-brief.md` written next to the script (supersedes the earlier vault-checklist plan; the vault gets only the standard run report). Frontmatter: `project_id`, `version`, discovered-input provenance; section anchors stable from the script's H1s for Feedback & Iteration.
+- Three layers: timeline skeleton (computed section timestamps), beat grid (computed from BPM — arithmetic, never LLM-estimated), per-section ordered checkbox steps executable in Resolve free, grounded in retrieved findings with toolset fit and upgrade flags verbatim.
+- **Decide vs. surface:** decides time arithmetic, work ordering, finding-to-moment application, asset-to-section mapping; surfaces creative footage selection (ranked candidates) and VO-grid/music-structure reconciliation (nearest-beat proposals).
 
-**Tools (starting points):** Claude for brief synthesis and the runtime's memory layer for retrieving relevant editing techniques. No external APIs in the known set — purely a reasoning + writing agent — though that could change if a useful tool emerges.
+**Memory:** stateless (passes the concept-script test); reads `user_knowledge` every run — stated director preferences land there via propose→confirm. Learning-from-feedback belongs to Feedback & Iteration.
+
+**Tools:** Claude for brief synthesis; the runtime memory layer composing `technique_research_outputs`, `tutorial_research`, and `user_knowledge` (`editing_toolset` always loaded); ffprobe for durations. Read-only over knowledge in v1 — no delegation. No external APIs.
+
+**CLI:** `edit-brief draft SCRIPT.md [--footage DIR] [--music FILE] [--gap SECONDS] [-o brief.md] [--project-id ID] [--max-cost N] [--dry-run]` — `--dry-run` is the free discovery-only preview of found/missing inputs; the orchestrator wraps `draft` child-budgeted and the discovery as the free op.
 
 ---
 
-### Feedback & Iteration Agent — `feedback-iteration` *(planned)*
+### Feedback & Iteration Agent — `feedback-iteration` *(built — Phase 2 complete)*
 
-**Status: not built.**
+**Status: built — Phase 2 (Build to MVP) complete; the `revise` turn runs end to end and the orchestrator wraps both ops.** Design rationale in `docs/feedback-iteration-phase1-handoff.md`; build record + verification in `docs/feedback-iteration-phase2-handoff.md`.
 
-**Purpose:** After the user produces a draft edit, this agent accepts natural-language feedback and translates it into specific actionable changes. Closes the iteration loop without requiring the user to learn precise DaVinci terminology.
+**Purpose:** After the director produces a draft edit, accepts natural-language feedback and translates it into specific actionable changes — closing the iteration loop without requiring the director to learn precise DaVinci terminology. **Revision is the spine; learning hangs off it:** feedback → moment mapping → diagnosis → (always) a targeted, anchor-addressed revision of the live brief with a version log entry → (when the diagnosis generalizes) a proposed durable lesson via propose→confirm. Its distinct competences against a cheap stateless edit-brief regeneration: interpretation of perceptual reaction, state-preserving targeted revision (the director's checkboxes and hand edits survive), the version trail (its own next run's input), and lesson distillation. Tier 1 verbatim — no DaVinci API; every action Resolve-free-executable with upgrade flags, toolset facts retrieved never hardcoded.
 
-**Inputs (starting points, not exhaustive):** the current `EditBrief` and version notes, and the user's natural-language feedback ("the drop feels too slow," "voiceover is competing with the music in the bridge," "the color in the third section feels off"). Other inputs to be discovered.
+**Inputs (resolved):** the live `edit-brief.md` (positional), feedback inline and/or `--feedback FILE` (batched — one run = one version bump), prior versions from the `versions/` subdir. Ambiguous moment references surface as unresolved, never guessed; mapping resolutions are logged visibly.
 
 **Outputs:**
-- Specific change recommendations with DaVinci Resolve actions
-- Updated `EditBrief` reflecting the changes
-- Version log entry
+- The live brief revised **in place by targeted patch** (never re-rendered): `version` bumped, untouched director state preserved, modified/new steps unchecked, pre-patch snapshot to `versions/edit-brief.v{N}.md`
+- A `## Version log` entry in the brief: version, date, feedback verbatim, anchors touched, changes, mapping resolutions, invalidated checked steps
+- Specific change recommendations with Resolve-free actions, grounded in retrieved findings
+- Lesson proposals (declarative preference + provenance) into `user_knowledge` domain `editing_preference` via propose→confirm — no owned collection (the concept-script test: the readers already exist)
 
-**Tools (starting points):** Claude for feedback interpretation, the runtime's memory layer for technique knowledge relevant to the feedback, and reads of prior versions from the agent's run history. Additional tools as useful.
+**Mechanics:** the LLM never produces a number — timing shifts recomputed in code (time-shift engine); the LLM does diagnosis and step text only. Imports only `agent-runtime`; parses the brief as a foreign artifact by its anchors (the decoupling precedent — no edit-brief import). Knowledge grounding is edit-brief's line verbatim: composed retrieval over `technique_research_outputs` / `tutorial_research` / `user_knowledge` (1.25× boost, `editing_toolset` always loaded), feedback-driven queries, read-only v1 with gaps as named notations.
+
+**CLI:** `feedback-iteration revise BRIEF.md "feedback" [--feedback FILE] [--max-cost N] [--dry-run]` — `--dry-run` is the free no-LLM parse/validate op.
+
+**Orchestrator surface (built):** wrapped in `orchestrator.tools` per the `edit_brief_draft` / `edit_brief_discover` precedent — `feedback_revise` (child-budgeted; one Claude mapping/diagnosis call, no external money, patches the brief in place) and `feedback_inspect` (the free dry-run; no budget, spends nothing). Both record their delegation under the `feedback_iteration` label; no `search_knowledge` registry entry (owns no collection — lessons live in `user_knowledge`). The tool surface wraps brief path + feedback text; the orchestrator wraps but does not yet *chain* `edit-brief → feedback-iteration` (each tool is invoked independently — the chaining is on the v2 list).
 
 ## Agent-to-Agent Delegation Map
 

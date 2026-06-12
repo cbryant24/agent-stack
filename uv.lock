@@ -13,6 +13,8 @@ members = [
     "agent-runtime",
     "agent-stack",
     "concept-script",
+    "edit-brief",
+    "feedback-iteration",
     "music-curation",
     "orchestrator",
     "technique-research",
@@ -552,6 +554,23 @@ wheels = [
 ]
 
 [[package]]
+name = "edit-brief"
+version = "0.0.1"
+source = { editable = "packages/edit-brief" }
+dependencies = [
+    { name = "agent-runtime" },
+    { name = "anthropic" },
+    { name = "click" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agent-runtime", editable = "packages/agent-runtime" },
+    { name = "anthropic", specifier = ">=0.40" },
+    { name = "click", specifier = ">=8.0" },
+]
+
+[[package]]
 name = "elevenlabs"
 version = "2.51.0"
 source = { registry = "https://pypi.org/simple" }
@@ -575,6 +594,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cc/28/c14e053b6762b1044f34a13aab6859bbf40456d37d23aa286ac24cfd9a5d/executing-2.2.1.tar.gz", hash = "sha256:3632cc370565f6648cc328b32435bd120a1e4ebb20c77e3fdde9a13cd1e533c4", size = 1129488, upload-time = "2025-09-01T09:48:10.866Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/ea/53f2148663b321f21b5a606bd5f191517cf40b7072c0497d3c92c4a13b1e/executing-2.2.1-py2.py3-none-any.whl", hash = "sha256:760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017", size = 28317, upload-time = "2025-09-01T09:48:08.5Z" },
+]
+
+[[package]]
+name = "feedback-iteration"
+version = "0.0.1"
+source = { editable = "packages/feedback-iteration" }
+dependencies = [
+    { name = "agent-runtime" },
+    { name = "anthropic" },
+    { name = "click" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agent-runtime", editable = "packages/agent-runtime" },
+    { name = "anthropic", specifier = ">=0.40" },
+    { name = "click", specifier = ">=8.0" },
 ]
 
 [[package]]
@@ -1975,6 +2011,8 @@ dependencies = [
     { name = "agent-runtime" },
     { name = "click" },
     { name = "concept-script" },
+    { name = "edit-brief" },
+    { name = "feedback-iteration" },
     { name = "langchain-anthropic" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
@@ -1990,6 +2028,8 @@ requires-dist = [
     { name = "agent-runtime", editable = "packages/agent-runtime" },
     { name = "click", specifier = ">=8.0" },
     { name = "concept-script", editable = "packages/concept-script" },
+    { name = "edit-brief", editable = "packages/edit-brief" },
+    { name = "feedback-iteration", editable = "packages/feedback-iteration" },
     { name = "langchain-anthropic", specifier = ">=1.0" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },

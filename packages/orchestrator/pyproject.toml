@@ -10,6 +10,8 @@ dependencies = [
     "concept-script",
     "visual-generation",
     "technique-research",
+    "edit-brief",
+    "feedback-iteration",
     "langgraph>=1.0",
     "langgraph-checkpoint-sqlite>=2.0",
     "langchain-anthropic>=1.0",
@@ -27,6 +29,8 @@ voiceover-direction = { workspace = true }
 concept-script = { workspace = true }
 visual-generation = { workspace = true }
 technique-research = { workspace = true }
+edit-brief = { workspace = true }
+feedback-iteration = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
