@@ -268,20 +268,28 @@ visual-generation explain "<concept>" [--level full|concise|quiet];  visual-gene
 
 ---
 
-### Technique Research Agent — `technique-research` *(planned)*
+### Technique Research Agent — `technique-research`
 
-**Status: not built.** This replaces what was originally framed as "Footage Research Agent" — the user clarified he sources clips himself and doesn't need clip discovery. What he does want is technique discovery: given a video type or theme, find out what makes videos like that work.
+**Status: Phase 2 MVP complete (40 tests passing); smoke-verified on a real goal.** The full Mode A turn works end to end — ground → identify → check → gate → delegate → curate → outputs; `recall` retrieves findings; the orchestrator wraps it. Deferred items live in `docs/v2-refinements-technique-research.md`; Phase 1 design rationale in `docs/technique-research-phase1-handoff.md`. This replaces what was originally framed as "Footage Research Agent" — the user clarified he sources clips himself and doesn't need clip discovery. What he does want is technique discovery: given a video type or theme, find out what makes videos like that work.
 
-**Purpose:** "I want to make a video like X — what techniques are involved?" The agent identifies relevant skill domains, then *delegates to Tutorial Research* to gather the actual training material. Output is a curated list of techniques + the knowledge to apply them, accumulating in the Qdrant knowledge base.
+**Purpose:** "I want to make a video like X — what techniques are involved?" The agent identifies relevant skill domains, then *delegates to Tutorial Research* to gather the actual material. Output is a curated `TechniqueReport` plus per-technique findings accumulating in `technique_research_outputs`.
 
-**Inputs (starting points, not exhaustive):** a video reference (description, examples, mood), and the domain (AMV, game review, travel, etc.). Other useful inputs to be discovered during the build.
+**The central design decision (the anti-redundancy boundary).** Tutorial-research already discovers, ingests, and synthesizes — so technique-research owns only what the delegate doesn't: **(a)** the identification layer ("goal → prioritized technique domains" — tutorial-research takes a topic as given; this agent decides which topics matter); **(b)** the control flow *identify → check existing knowledge → delegate gaps → curate* (the check step makes run N+1 cheaper than run N); **(c)** the curated layer — *relevance decisions, not material*. No tutorial discovery, no ingestion, no yt-pipeline calls in this agent, ever. Both agents use Tavily, for different purposes: tutorial-research searches for tutorials to ingest; technique-research searches only to *understand the reference* (what "videos like X" are).
+
+**Two modes.** **Mode A (reference-based) is v1:** Claude reasoning (vision-capable) + conditional Tavily reference grounding, with optional reference image(s) (the technique may just be a look) and an optional video URL (yt-dlp metadata/description as context only — no frame extraction). **Mode B (footage-based diagnosis) is V2, parked:** a YouTube URL + start/stop timestamps or a local video file → ffmpeg interval frames → multi-frame Claude-vision technique diagnosis → search/match on the diagnosis. The one v1 provision: the identification chain's input model is "text + zero-or-more images + optional context" from the start, so Mode B becomes more frames into the same chain plus an extraction front-end — an extension, not a redesign.
+
+**Inputs (v1):** the creative goal (required); optional domain (AMV, game review, travel — inferable), reference image(s), reference video URL, `--ref` to a prior TechniqueReport, and a scope hint (`editing | generation | both` — inferred by default; generation scope targets ComfyUI/Flux/WAN/LoRA territory). The director's toolset is read automatically from `user_knowledge` (`domain=editing_toolset`), not supplied per run.
 
 **Outputs:**
-- A `TechniqueReport` containing a list of techniques identified as relevant; for each, a brief description, why it matters, and where to learn more; the knowledge gaps that triggered Tutorial Research delegations; and links to the resulting tutorial-research run reports
+- A **TechniqueReport** — an editable markdown file the director owns (`-o` path): the goal and grounded reference summary; prioritized techniques, each with description, why-it-matters for this goal, how-to-apply grounded in gathered material and the director's toolset (with a paid/Studio upgrade flag where relevant), and where-to-learn-more links to tutorial-research run reports; the gaps that triggered delegations; consumer-directed sections per scope
+- **Per-technique findings** in `technique_research_outputs` — the canonical accumulating layer (text-embedded, `voyage-3-large`; the agent's own check step is the retrieval consumer that earns the collection)
+- The standard run report to the agent-reports vault
 
-**Tools (starting points):** Claude for technique identification and reasoning, the runtime's memory layer to check what's already known before delegating, **delegation to Tutorial Research** when knowledge gaps are identified (this agent exercises the cross-agent delegation pattern most heavily), and Tavily for high-level reference video discovery. Additional tools as they prove useful.
+**The gate.** Identification is cheap; delegations are the spend. After identification the director sees the technique list + delegation plan with estimated cost and prunes per-domain (interactive by default, `-y` to skip, `--plan-only` to stop at the gate with no writes). Declining all delegations isn't an abort — the run curates from existing knowledge only.
 
-**Cross-agent dynamics:** Technique Research is upstream of Concept & Script Agent (informs what techniques the brief should call for) and signals downstream to Edit Brief Agent (which techniques apply to which moments of the final edit).
+**Tools:** Claude (Sonnet, vision-capable) for grounding and identification; conditional Tavily for reference discovery; yt-dlp for URL metadata; the runtime memory layer (check across `technique_research_outputs`, `tutorial_research`, `user_knowledge`, thresholds recorded via `record_delegation_decision`); **delegation to Tutorial Research** on child budgets (this agent exercises the cross-agent delegation pattern most heavily). Default budget (unvalidated): `max_items=5, max_depth=1, max_cost_usd=5.00, max_wall_time_sec=2700`.
+
+**Cross-agent dynamics — two consumption channels, both already wired.** *Knowledge channel (automatic):* delegated gathering lands in `tutorial_research`, which visual-generation's retrieval already queries on every `draft`/`explain`/`recall` — so generation-technique research makes visual-generation smarter with zero integration work. *Artifact channel (director-mediated):* the report feeds concept-script as seed material (`draft --seeds` accepts arbitrary markdown — no new contract) and gives the director the intent language for `visual-generation draft`; Edit Brief (unbuilt) gets no designed contract. The Orchestrator wraps `technique_recall` (free) and `technique_identify` (full run, child-budgeted — the `research_tutorials` precedent) and gains `technique_research_outputs` as a `search_knowledge` domain.
 
 ---
 
@@ -438,7 +446,7 @@ Each agent owns one or more Qdrant collections. The structure:
 | `music_curation_memory` | Music Curation | Generation history (prompts + reactions + chains), taste lessons, templates, sound references |
 | `voiceover_direction_memory` | Voiceover Direction | Takes (section text → voice/settings/reaction, section-scoped lineage) and direction lessons. The voice library is a local JSON registry, not a vector type; ElevenLabs-mechanics facts live in `user_knowledge` (`domain=elevenlabs_mechanics`). |
 | `visual_generation_memory` | Visual Generation | Generation history (prompt + settings + workflow → result → reaction), settings/technique lessons, reusable ComfyUI workflow templates, reference notes. ComfyUI/RunPod-mechanics facts live in `user_knowledge` (`domain=comfyui_mechanics`, `domain=runpod_mechanics`). |
-| `technique_research_outputs` | Technique Research | Curated technique findings per domain |
+| `technique_research_outputs` | Technique Research | Curated per-technique findings (technique → description, why-it-matters, application notes, toolset fit, source refs; text-embedded) — designed, not yet created |
 | `project_archive` | Cross-agent | Final artifacts and decisions from completed projects (planned, low priority) |
 
 Cross-collection reads are fine. Tutorial Research's collection is *the* tutorial knowledge base; any agent can query it.
@@ -472,7 +480,7 @@ A rough current order, subject to revision based on what the user wants to use n
 2. **Music Curation** — done (214 tests passing)
 3. **Voiceover Direction** — done, Phase 2 MVP (145 tests passing). Built ahead of Concept & Script: it consumes a markdown-with-headings script, which a human can author directly, so it doesn't block on the scriptwriting agent existing yet.
 4. **Concept & Script** — done, Phase 2 MVP (45 tests passing). Produces the `script.md` that Voiceover Direction consumes unchanged (and Edit Brief will consume later); the inline emotion-tag format aligns with the directed-script input contract already in place.
-5. **Technique Research** — useful in parallel with the above; not blocking
+5. **Technique Research** — done, Phase 2 MVP (40 tests passing). Goal → prioritized technique domains → check existing knowledge → gate → delegate gaps to tutorial-research → curated `TechniqueReport` + accumulating `technique_research_outputs` findings; the heaviest exerciser of cross-agent delegation. Useful in parallel with the above; not blocking
 6. **Visual Generation** — done, Phase 2 MVP (152 tests passing). ComfyUI-backed diffusion collaborator with multimodal own-memory (`voyage-multimodal-3`), the dual Claude/GPU budget separation, slot-map workflow templates, and a first-class tutor role (`explain`/`research`). Independently useful and not blocking on the editing-pipeline agents.
 7. **Edit Brief** — needs the upstream agents to produce its inputs
 8. **Feedback & Iteration** — needs Edit Brief to iterate on

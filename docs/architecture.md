@@ -715,6 +715,40 @@ video/WAN (a fast-follow on the same turn shape — a generation already embeds 
 
 ---
 
+### technique-research
+
+Technique **discovery**, not clip discovery. **Status: Phase 2 MVP complete.** 40 tests passing. Given a creative goal (optionally a reference image, a reference video URL, or a prior report) it reasons to a prioritized set of technique *domains*, checks what the system already knows, delegates only the genuine gaps to `tutorial-research`, and curates the result. It is the heaviest exerciser of cross-agent delegation in the stack and adds no gathering of its own (no tutorial discovery, no ingestion, no yt-pipeline calls — ever).
+
+#### The Mode A turn (`agent.py`)
+
+`identify(IdentificationInput, *, budget, approval, plan_only, output_path)` runs inside one `BudgetTracker`:
+
+1. **Toolset read** (`retrieval.read_editing_toolset`) — `UserKnowledgeStore.search(query, domain="editing_toolset")`. The director's toolset is **never hardcoded**; this run-level read is its only source, so it tracks the seeded toolset (Resolve free + constraints, ffmpeg, mpv, Topaz Video AI) as it evolves.
+2. **Ground** (`grounding.py`) — yt-dlp metadata/description for a `--url` (no frame extraction); a conditional, Claude-triggered Tavily *reference* search (exemplars/commentary, **not** tutorials) only when a named reference is under-specified. A well-specified goal costs zero searches.
+3. **Identify** (`chains.identify_techniques`) — Sonnet (vision-capable) takes goal + base64 image blocks + grounded context + prior findings + toolset → prioritized `TechniqueDomain`s, a grounded-reference summary, and the scope (`--scope` authoritative; otherwise inferred — "video like X" → editing, "images like X" → generation).
+4. **Check** (`retrieval.check_domain`) — per domain, parallel query of `technique_research_outputs` (own), `tutorial_research` (reusing `tutorial_research.retrieval.retrieve_chunks` verbatim, boosted `user_knowledge` co-query included), and `user_knowledge`; any leg clearing its `CHECK_*_THRESHOLD` answers locally, else the domain is a gap. Each leg emits `record_delegation_decision` for tuning.
+5. **Gate** — interactive by default (CLI `click.confirm` per gap); `-y` auto-approves; `--plan-only` stops with a preview (no delegation, no writes); declining all is **not** an abort (curate from local). The gate is supplied as an `approval` callback so the library/orchestrator paths auto-approve.
+6. **Delegate** — each approved gap `delegate("tutorial-research", {request, request_type="research", synthesize=True}, _delegation_budget(...), parent_tracker=tracker)`. `max_items` caps **delegations**, not findings: `check_budget()` runs at the top of the loop, `add_item_processed()` after each delegation. `register_delegate_handlers()` is the idempotent bootstrap (mirrors `visual_generation/research.py`).
+7. **Curate + write** (`chains.curate_findings`) — one Sonnet call over all domains and their resolved material → `TechniqueFinding`s with how-to-apply grounded in the toolset and a `upgrade_flag` only where a technique is materially faster/only-possible in a paid tool. Findings → `technique_research_outputs` (not item-counted); the `TechniqueReport` markdown → `-o` (a directory writes the default filename into it; `cli.py` validates the path at parse time so a bad `-o` can never cost a run); the standard run report → the vault.
+
+#### Collection & memory model
+
+Owns **`technique_research_outputs`** (1024-dim cosine, text / `voyage-3-large` — same space as `tutorial_research`/`user_knowledge`, so the orchestrator reads it with no cross-space mismatch). The stored unit is the per-technique **finding**, not the report (`TechniqueFinding.to_memory_point` → `source_type="agent_summary"`, structured fields in the point `metadata`). The agent's own `check` step is the retrieval consumer that earns the collection. `recall(query)` searches it; `_record_llm` (copied from music-curation) bridges Anthropic cost into the tracker.
+
+#### Default budget (`constants.py`)
+
+```
+DEFAULT_BUDGET: max_items=5, max_depth=1, max_cost_usd=5.00, max_wall_time_sec=2700
+```
+
+`max_items` caps techniques gathered (delegations); `max_depth=1` permits exactly the one hop to tutorial-research (`delegate()` derives a depth-0 child, so tutorial-research cannot delegate further). Per-delegation caps (`DELEGATION_CHILD`) and check thresholds (`CHECK_*_THRESHOLD = 0.70 / 0.65 / 0.70`) are unvalidated starting values.
+
+#### Cross-agent dynamics
+
+*Knowledge channel (automatic):* delegated gathering lands in `tutorial_research`, which visual-generation already queries — generation-technique research lands where visual-generation looks, zero integration. *Artifact channel:* the report feeds `concept-script draft --seeds` and supplies intent language for `visual-generation draft`. The orchestrator wraps `technique_recall` (free) and `technique_identify` (full run, child-budgeted; the per-turn `max_depth=2` accommodates orchestrator → technique-research → tutorial-research) and gains `technique_research_outputs` as a `search_knowledge` domain. Deferred items: `docs/v2-refinements-technique-research.md`.
+
+---
+
 ### orchestrator
 
 The conversational meta-agent over the whole system — the "director's console." **Status: Phase 2 first build slice + Phase 3 sub-agent surface + diagnose-only vector-DB diagnostics shipped.** 42 tests passing. The first agent in the stack to use **LangGraph** (hand-rolled ReAct loop) over `langchain-anthropic`, with a thread-keyed SQLite checkpointer for resumable conversations; the other five agents remain on plain sequential LangChain. It is a reader/router over the rest of the system — it owns no Qdrant collection.

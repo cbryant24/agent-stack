@@ -36,6 +36,7 @@ Domain = Literal[
     "music_curation_memory",
     "voiceover_direction_memory",
     "visual_generation_memory",
+    "technique_research_outputs",
     "langgraph_mechanics",
 ]
 
@@ -67,6 +68,7 @@ DOMAINS: dict[str, _DomainSpec] = {
     "music_curation_memory": _DomainSpec(collection="music_curation_memory"),
     "voiceover_direction_memory": _DomainSpec(collection="voiceover_direction_memory"),
     "visual_generation_memory": _DomainSpec(collection="visual_generation_memory"),
+    "technique_research_outputs": _DomainSpec(collection="technique_research_outputs"),
     # This domain *is* user_knowledge, so there is no separate co-query / boost.
     "langgraph_mechanics": _DomainSpec(uk_domain="langgraph_mechanics", co_query_user_knowledge=False),
 }

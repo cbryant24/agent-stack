@@ -15,6 +15,7 @@ members = [
     "concept-script",
     "music-curation",
     "orchestrator",
+    "technique-research",
     "tutorial-research",
     "visual-generation",
     "voiceover-direction",
@@ -1978,6 +1979,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "music-curation" },
+    { name = "technique-research" },
     { name = "tutorial-research" },
     { name = "visual-generation" },
     { name = "voiceover-direction" },
@@ -1992,6 +1994,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
     { name = "music-curation", editable = "packages/music-curation" },
+    { name = "technique-research", editable = "packages/technique-research" },
     { name = "tutorial-research", editable = "packages/tutorial-research" },
     { name = "visual-generation", editable = "packages/visual-generation" },
     { name = "voiceover-direction", editable = "packages/voiceover-direction" },
@@ -2885,6 +2888,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/92/d3/a6a9c24bfafed30b4ce3c3d685ab00806ad631c9742441f2597ec91f0002/tavily_python-0.7.24.tar.gz", hash = "sha256:6c8954193c6472231e813fe50cbd07806bd86c7228957675eb45875a44d58296", size = 27311, upload-time = "2026-04-27T17:26:50.511Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/ce/37e3aba0f359f540bfc57eb178f73d521161761f21e0aa28749f42750b11/tavily_python-0.7.24-py3-none-any.whl", hash = "sha256:1a750108de42c4b0b46e4c1b7b64aeaf7fad7d7bac9167927edce0081fe166c9", size = 20022, upload-time = "2026-04-27T17:26:48.885Z" },
+]
+
+[[package]]
+name = "technique-research"
+version = "0.0.1"
+source = { editable = "packages/technique-research" }
+dependencies = [
+    { name = "agent-runtime" },
+    { name = "anthropic" },
+    { name = "click" },
+    { name = "tavily-python" },
+    { name = "tutorial-research" },
+    { name = "yt-dlp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agent-runtime", editable = "packages/agent-runtime" },
+    { name = "anthropic", specifier = ">=0.40" },
+    { name = "click", specifier = ">=8.0" },
+    { name = "tavily-python", specifier = ">=0.3" },
+    { name = "tutorial-research", editable = "packages/tutorial-research" },
+    { name = "yt-dlp", specifier = ">=2024.1" },
 ]
 
 [[package]]

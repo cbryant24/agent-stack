@@ -79,6 +79,7 @@ async def search_knowledge(query: str, domain: Domain) -> str:
       - "music_curation_memory": the music-curation agent's generation/taste memory.
       - "voiceover_direction_memory": the voiceover-direction agent's takes/direction-lesson memory.
       - "visual_generation_memory": the visual-generation agent's generation/technique memory.
+      - "technique_research_outputs": the technique-research agent's curated per-technique findings.
       - "langgraph_mechanics": LangGraph mechanics facts in user_knowledge.
     Authoritative user_knowledge hits are boosted. Returns scored snippets.
     """
@@ -436,6 +437,64 @@ async def visual_recall(query: str) -> str:
     return _truncate(render_recall(gens, lessons, templates))
 
 
+# ── Sub-agent tools: technique-research ──────────────────────────────────────────
+
+
+@tool
+async def technique_recall(query: str) -> str:
+    """Recall prior technique-research findings WITHOUT identifying or delegating
+    anything (embedding-only, near-free): curated per-technique findings (technique,
+    why it matters, how to apply, toolset fit). Use to look up techniques already
+    researched for past goals."""
+    from technique_research import recall
+
+    try:
+        results = await recall(query)
+    except Exception as exc:
+        logger.warning("technique_recall failed: %s", exc)
+        return f"technique-research recall failed: {exc}"
+    _record_delegation("technique_recall", "technique_research_outputs", query, 0.0)
+    if not results:
+        return f"No technique findings found for: {query}"
+    lines = [
+        f"[{score:.3f}] {f.technique}: {f.description[:240]}" for score, f in results
+    ]
+    return _truncate("Prior technique findings:\n" + "\n".join(lines))
+
+
+@tool
+async def technique_identify(goal: str) -> str:
+    """Run the technique-research agent on a creative goal: identify the prioritized
+    technique domains the goal needs, check existing knowledge, and (auto-approving
+    gaps within budget) delegate gathering to tutorial-research, then curate findings.
+    This SPENDS budget (identification + possible tutorial-research delegations) — use
+    when the user wants to know what techniques a 'video/images like X' goal involves.
+    Returns the curated techniques and where the report was written."""
+    from technique_research import identify
+    from technique_research.models import IdentificationInput
+
+    try:
+        result = await identify(
+            IdentificationInput(goal=goal), budget=_child_budget(), approval=None
+        )
+    except Exception as exc:
+        logger.warning("technique_identify failed: %s", exc)
+        return f"technique-research identify failed: {exc}"
+    _record_delegation("technique_identify", "technique_research_outputs", goal, result.cost_usd)
+    parts = [
+        f"status={result.status} cost=${result.cost_usd:.4f} "
+        f"scope={result.report.scope} findings={len(result.report.techniques)}"
+    ]
+    if result.report_path:
+        parts.append(f"report: {result.report_path}")
+    for t in result.report.techniques:
+        line = f"\n• {t.technique}: {t.why_it_matters or t.description}"
+        if t.upgrade_flag:
+            line += f" [⬆ paid/Studio: {t.upgrade_flag}]"
+        parts.append(line)
+    return _truncate("\n".join(parts))
+
+
 # ── Vector-DB diagnostics (diagnose-only) ────────────────────────────────────────
 # The orchestrator audits the Qdrant layer but NEVER writes to it. These tools do
 # read-only structural inspection + a behavioral probe, then write a diagnostic
@@ -583,6 +642,8 @@ def all_tools() -> list:
         concept_shape,
         visual_draft,
         visual_recall,
+        technique_recall,
+        technique_identify,
         inspect_collection,
         probe_collection,
         write_diagnostic_report,
