@@ -74,7 +74,7 @@ from agent_runtime import render_run_report, notify, notify_budget_threshold, no
 
 ```python
 import asyncio, os
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-...")
+os.environ.setdefault("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-...")
 os.environ.setdefault("VOYAGE_API_KEY", "pa-...")
 
 from agent_runtime import (

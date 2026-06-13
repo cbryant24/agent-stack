@@ -6,21 +6,50 @@ from langchain_core.tools import tool
 
 
 class StubModel:
-    """A minimal stand-in for ChatAnthropic. Returns queued AIMessages in order;
-    bind_tools is a no-op that records the tools and returns self."""
+    """A minimal stand-in for ChatAnthropic. Returns queued AIMessages in order.
 
-    def __init__(self, responses: list[AIMessage]) -> None:
-        self._responses = list(responses)
-        self.calls = 0
+    Binding-aware: bind_tools returns a NEW StubModel flagged tools-bound that shares
+    the response queue, call counter, and invocation log with the original. A model
+    that is NOT tools-bound cannot emit tool_use — so if a queued response carries
+    tool_calls, the unbound instance strips them, mirroring real ChatAnthropic invoked
+    with no tools (the orchestrator's budget-exhausted final-summary step)."""
+
+    def __init__(self, responses: list[AIMessage], *, _shared=None, _tools_bound=False) -> None:
+        self._shared = _shared if _shared is not None else {
+            "responses": list(responses),
+            "calls": 0,
+            "invocations": [],
+        }
+        self._tools_bound = _tools_bound
         self.bound_tools: list | None = None
 
-    def bind_tools(self, tools: list) -> "StubModel":
-        self.bound_tools = tools
-        return self
+    @property
+    def calls(self) -> int:
+        return self._shared["calls"]
+
+    @property
+    def invocations(self) -> list:
+        """Every message list the model has been invoked with, in order."""
+        return self._shared["invocations"]
+
+    @property
+    def last_invocation(self) -> list | None:
+        inv = self._shared["invocations"]
+        return inv[-1] if inv else None
+
+    def bind_tools(self, tools: list, **kwargs) -> "StubModel":
+        bound = StubModel([], _shared=self._shared, _tools_bound=True)
+        bound.bound_tools = tools
+        return bound
 
     async def ainvoke(self, messages, *args, **kwargs) -> AIMessage:
-        resp = self._responses[min(self.calls, len(self._responses) - 1)]
-        self.calls += 1
+        self._shared["invocations"].append(list(messages))
+        responses = self._shared["responses"]
+        resp = responses[min(self._shared["calls"], len(responses) - 1)]
+        self._shared["calls"] += 1
+        if not self._tools_bound and getattr(resp, "tool_calls", None):
+            # No tools bound -> the model cannot call tools; drop the tool_use blocks.
+            resp = AIMessage(content=resp.content or "(summary)")
         return resp
 
 

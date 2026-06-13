@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,7 +15,8 @@ class RuntimeConfig(BaseSettings):
         extra="ignore",
     )
 
-    anthropic_api_key: str
+    anthropic_api_key: str = Field(validation_alias="PRODUCTION_AGENTS_ANTHROPIC_API_KEY")
+    orchestrator_anthropic_api_key: str | None = None
     voyage_api_key: str
     tavily_api_key: str | None = None
     elevenlabs_api_key: str | None = None

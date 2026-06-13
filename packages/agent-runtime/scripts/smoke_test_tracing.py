@@ -5,7 +5,7 @@ Then open http://localhost:16686 and look for service "agent-runtime-smoke".
 import asyncio
 import os
 
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-test")
+os.environ.setdefault("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-test")
 os.environ.setdefault("VOYAGE_API_KEY", "pa-test")
 
 from agent_runtime.tracing.setup import init_tracing

@@ -26,7 +26,7 @@ uv sync
 **2. Copy and fill environment variables**
 ```bash
 cp .env.example .env
-# Edit .env — set ANTHROPIC_API_KEY, VOYAGE_API_KEY, OBSIDIAN_OUTPUT_PATH at minimum
+# Edit .env — set PRODUCTION_AGENTS_ANTHROPIC_API_KEY, VOYAGE_API_KEY, OBSIDIAN_OUTPUT_PATH at minimum
 # (set ELEVENLABS_API_KEY too if using voiceover-direction)
 ```
 
@@ -349,7 +349,7 @@ result = generate_sync("batch.md", all_sections=True, endpoint="http://pod:8188"
 
 | Variable | Description |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude API key |
+| `PRODUCTION_AGENTS_ANTHROPIC_API_KEY` | Claude API key |
 | `VOYAGE_API_KEY` | Voyage AI key (text + multimodal embeddings) |
 | `OBSIDIAN_OUTPUT_PATH` | Path to your Obsidian vault folder for pipeline notes |
 | `ELEVENLABS_API_KEY` | Required for voiceover-direction (voice sync, usage query, TTS generation) |

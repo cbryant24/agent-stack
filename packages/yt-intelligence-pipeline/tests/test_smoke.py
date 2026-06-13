@@ -56,7 +56,7 @@ class TestConfigLoading:
         assert isinstance(cfg, AppConfig)
 
     def test_missing_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", raising=False)
         with pytest.raises(SystemExit):
             from yt_intelligence_pipeline.config import load_and_validate_config
             load_and_validate_config()

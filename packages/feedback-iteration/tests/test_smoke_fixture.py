@@ -54,8 +54,8 @@ def _load_real_env() -> dict[str, str]:
 @requires_qdrant
 def test_revise_real_brief_end_to_end(tmp_path, monkeypatch):
     real = _load_real_env()
-    if not real.get("ANTHROPIC_API_KEY") or not real.get("VOYAGE_API_KEY"):
-        pytest.skip("real ANTHROPIC_API_KEY / VOYAGE_API_KEY not found in .env")
+    if not real.get("PRODUCTION_AGENTS_ANTHROPIC_API_KEY") or not real.get("VOYAGE_API_KEY"):
+        pytest.skip("real PRODUCTION_AGENTS_ANTHROPIC_API_KEY / VOYAGE_API_KEY not found in .env")
     for k, v in real.items():
         monkeypatch.setenv(k, v)
     import agent_runtime.config

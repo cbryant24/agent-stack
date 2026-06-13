@@ -101,7 +101,7 @@ All variables are read from the workspace `.env` at `~/projects/agent-stack/.env
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Claude API key for transcript cleanup, summary, and timestamp chains |
+| `PRODUCTION_AGENTS_ANTHROPIC_API_KEY` | Yes | Claude API key for transcript cleanup, summary, and timestamp chains |
 | `LANGSMITH_API_KEY` | Yes | LangSmith tracing key |
 | `OBSIDIAN_OUTPUT_PATH` | Human mode | Absolute path to your Obsidian vault folder |
 | `VOYAGE_API_KEY` | Agent mode | Voyage AI key for embeddings |

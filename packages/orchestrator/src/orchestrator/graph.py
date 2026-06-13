@@ -70,6 +70,31 @@ def should_continue(state: OrchestratorState) -> str:
     return "tools" if _last_ai_tool_calls(state) else END
 
 
+def _reconcile_tool_messages(messages: list) -> list:
+    """Splice a synthetic skip ToolMessage after any AI tool_use whose id has no
+    matching tool_result later in the history. Makes a thread stranded by budget
+    exhaustion, Ctrl-C, or a crash valid before it reaches the API. Input is not
+    mutated; the same list is returned when nothing needs repair."""
+    repaired: list = []
+    changed = False
+    for i, m in enumerate(messages):
+        repaired.append(m)
+        tool_calls = getattr(m, "tool_calls", None) or []
+        if not tool_calls:
+            continue
+        following_ids = {getattr(x, "tool_call_id", None) for x in messages[i + 1 :]}
+        for tc in tool_calls:
+            if tc.get("id") not in following_ids:
+                repaired.append(
+                    ToolMessage(
+                        content="Skipped — tool call was interrupted and never completed.",
+                        tool_call_id=tc["id"],
+                    )
+                )
+                changed = True
+    return repaired if changed else messages
+
+
 def build_graph(model, tools: list, checkpointer):
     """Compile the ReAct StateGraph. `model` is injected (a ChatAnthropic in
     production, a stub in tests). `checkpointer` is a LangGraph saver."""
@@ -77,13 +102,20 @@ def build_graph(model, tools: list, checkpointer):
     tool_node = ToolNode(tools)
 
     async def agent_node(state: OrchestratorState) -> dict:
-        messages = state["messages"]
+        # Defensively repair any tool_use stranded by a prior interruption (budget
+        # exhaustion, Ctrl-C, crash, or an already-poisoned thread) before the model
+        # sees the history — otherwise the Anthropic API rejects the unbalanced turn.
+        messages = _reconcile_tool_messages(state["messages"])
         # Prepend the system prompt on the first turn only (it persists in the thread).
         if not messages or getattr(messages[0], "type", None) != "system":
             from langchain_core.messages import SystemMessage
 
             messages = [SystemMessage(content=SYSTEM_PROMPT), *messages]
-        response = await model_with_tools.ainvoke(messages)
+        # Once the budget is exhausted the turn still runs one more agent step to
+        # summarize, but with no tools bound so it CANNOT emit a fresh tool_use that
+        # should_continue would then strand (poisoning the checkpointed thread).
+        model_for_turn = model if state.get("budget_exhausted") else model_with_tools
+        response = await model_for_turn.ainvoke(messages)
 
         tracker = get_current_tracker()
         usage = getattr(response, "usage_metadata", None)

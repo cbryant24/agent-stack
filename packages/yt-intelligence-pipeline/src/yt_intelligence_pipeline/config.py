@@ -21,9 +21,9 @@ def load_and_validate_config() -> AppConfig:
 
     missing = []
 
-    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_api_key = os.getenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "")
     if not anthropic_api_key:
-        missing.append("ANTHROPIC_API_KEY")
+        missing.append("PRODUCTION_AGENTS_ANTHROPIC_API_KEY")
 
     langsmith_api_key = os.getenv("LANGSMITH_API_KEY", "")
     if not langsmith_api_key:

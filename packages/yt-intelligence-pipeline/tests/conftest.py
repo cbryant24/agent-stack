@@ -11,7 +11,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def fake_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Set required env vars so config loading works without real credentials."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-anthropic")
+    monkeypatch.setenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-test-anthropic")
     monkeypatch.setenv("VOYAGE_API_KEY", "pa-test-voyage")
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test-key")
     monkeypatch.setenv("LANGSMITH_PROJECT", "test-pipeline")

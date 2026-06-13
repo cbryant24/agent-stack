@@ -60,8 +60,8 @@ def test_vo_backed_fixture_computes_real_timestamps(tmp_path, monkeypatch):
     # Override the autouse fake_env with the real keys so embeddings + synthesis
     # actually run against Qdrant + Voyage + Anthropic.
     real = _load_real_env()
-    if not real.get("ANTHROPIC_API_KEY") or not real.get("VOYAGE_API_KEY"):
-        pytest.skip("real ANTHROPIC_API_KEY / VOYAGE_API_KEY not found in .env")
+    if not real.get("PRODUCTION_AGENTS_ANTHROPIC_API_KEY") or not real.get("VOYAGE_API_KEY"):
+        pytest.skip("real PRODUCTION_AGENTS_ANTHROPIC_API_KEY / VOYAGE_API_KEY not found in .env")
     for k, v in real.items():
         monkeypatch.setenv(k, v)
     import agent_runtime.config

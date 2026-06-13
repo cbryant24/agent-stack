@@ -20,6 +20,6 @@ requires_qdrant = pytest.mark.skipif(
 
 @pytest.fixture
 def fake_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-anthropic")
+    monkeypatch.setenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-test-anthropic")
     monkeypatch.setenv("VOYAGE_API_KEY", "pa-test-voyage")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")

@@ -32,7 +32,7 @@ def build_app(checkpointer, *, model=None):
 
         model = ChatAnthropic(
             model=MODEL_ORCHESTRATOR,
-            api_key=get_config().anthropic_api_key,
+            api_key=get_config().orchestrator_anthropic_api_key or get_config().anthropic_api_key,
             max_tokens=MAX_RESPONSE_TOKENS,
         )
     return build_graph(model, all_tools(), checkpointer)

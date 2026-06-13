@@ -72,7 +72,7 @@ async def process_video(
         _load_env()
         import anthropic as _anthropic  # noqa: F401 — just to get the key
         config = AppConfig(
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            anthropic_api_key=os.getenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", ""),
             langsmith_api_key=os.getenv("LANGSMITH_API_KEY", ""),
             langsmith_project=os.getenv("LANGSMITH_PROJECT", "youtube-tutorial-pipeline"),
             obsidian_output_path=__import__("pathlib").Path(tempfile.mkdtemp()),
