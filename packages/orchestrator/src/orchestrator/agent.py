@@ -61,7 +61,10 @@ async def run_turn(
     """Run one conversational turn through the graph on `thread_id`, governed by a
     per-turn BudgetTracker (the parent for any in-turn sub-agent delegation). The
     active tracker is exposed to all nodes/tools via the runtime contextvar."""
-    effective_budget = budget or DEFAULT_BUDGET
+    # Stamp the per-turn budget with the chat thread id as its session_id so each
+    # turn's persisted trace (run_end -> envelope.session_id) can be rolled up by
+    # chat session. DEFAULT_BUDGET is a shared module constant — copy, never mutate.
+    effective_budget = (budget or DEFAULT_BUDGET).model_copy(update={"session_id": thread_id})
     status = "completed"
     final_messages: list = []
 
