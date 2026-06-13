@@ -163,7 +163,7 @@ Load these as context at the start of Phase 1:
 - `packages/agent-runtime/README.md` — what the runtime provides (note the multimodal embedding surface)
 - `packages/voiceover-direction/README.md` — the primary precedent (cost inversion, dual budgets, lifecycle, `ingest-docs`, registry)
 - `packages/music-curation/README.md` — curated memory, seed ingest, delegation triggers
-- `docs/v2-refinements/v2-refinements-voiceover-direction.md` — the `ingest-docs` batch/URL refinements and the reference/persona/chat-mode patterns that may apply analogously
+- `docs/v2-refinements/voiceover-direction-v2-refinements.md` — the `ingest-docs` batch/URL refinements and the reference/persona/chat-mode patterns that may apply analogously
 - The Stable Diffusion / ComfyUI / WAN / Veo course documents (already in the project) — the `user_knowledge` ingestion source
 - This handoff document
 

@@ -165,7 +165,7 @@ Order, grouped for efficiency (no schedule).
 - `packages/agent-runtime/README.md` — runtime API (note the multimodal surface)
 - `packages/voiceover-direction/README.md` — the primary precedent
 - `packages/music-curation/README.md` — curated memory, delegation triggers
-- `docs/v2-refinements/v2-refinements-voiceover-direction.md` — `ingest-docs` batch/URL refinements (now shared) and the reference/persona patterns
-- `research-signals-visual-generation.md` — the between-phase ingestion list + `tutorial-research` gaps
+- `docs/v2-refinements/voiceover-direction-v2-refinements.md` — `ingest-docs` batch/URL refinements (now shared) and the reference/persona patterns
+- `visual-generation-phase1-research-signals.md` — the between-phase ingestion list + `tutorial-research` gaps
 - The course docs in the project (`comfyui_mechanics` source)
 - This handoff

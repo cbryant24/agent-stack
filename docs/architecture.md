@@ -558,7 +558,7 @@ loop that earns a collection for music-curation/voiceover-direction does not exi
 quality only surfaces many steps downstream and attribution back is muddy), so a collection would be
 storage without a learning mechanism. Prior work is reused via file reference (`--ref @prior-script.md`),
 since outputs are files. Reading `user_knowledge` / `tutorial_research` to fill a gap is deferred (see
-`docs/v2-refinements/v2-refinements-concept-script.md`). The only side effect of a run is writing the script file;
+`docs/v2-refinements/concept-script-v2-refinements.md`). The only side effect of a run is writing the script file;
 runtime wiring (budget, tracing, run report) mirrors the rest of the stack minus the stateful parts.
 
 #### Two modes → one artifact (`agent.py`, `chains.py`)
@@ -745,7 +745,7 @@ DEFAULT_BUDGET: max_items=5, max_depth=1, max_cost_usd=5.00, max_wall_time_sec=2
 
 #### Cross-agent dynamics
 
-*Knowledge channel (automatic):* delegated gathering lands in `tutorial_research`, which visual-generation already queries — generation-technique research lands where visual-generation looks, zero integration. *Artifact channel:* the report feeds `concept-script draft --seeds` and supplies intent language for `visual-generation draft`. The orchestrator wraps `technique_recall` (free) and `technique_identify` (full run, child-budgeted; the per-turn `max_depth=2` accommodates orchestrator → technique-research → tutorial-research) and gains `technique_research_outputs` as a `search_knowledge` domain. Deferred items: `docs/v2-refinements/v2-refinements-technique-research.md`.
+*Knowledge channel (automatic):* delegated gathering lands in `tutorial_research`, which visual-generation already queries — generation-technique research lands where visual-generation looks, zero integration. *Artifact channel:* the report feeds `concept-script draft --seeds` and supplies intent language for `visual-generation draft`. The orchestrator wraps `technique_recall` (free) and `technique_identify` (full run, child-budgeted; the per-turn `max_depth=2` accommodates orchestrator → technique-research → tutorial-research) and gains `technique_research_outputs` as a `search_knowledge` domain. Deferred items: `docs/v2-refinements/technique-research-v2-refinements.md`.
 
 ---
 
@@ -779,7 +779,7 @@ LangGraph `AsyncSqliteSaver` (`langgraph.checkpoint.sqlite.aio`) at `~/agent-dat
   - `inspect_collection(collection)` — read-only structural metadata (existence, point count, vector size/distance, sampled payload keys) via the new `MemoryStore.get_collection_info` / `count_points` / `sample_points`.
   - `probe_collection(collection, query, expected_point_id?, multimodal?, threshold?)` — a **behavioral probe**: embeds a query that *should* hit (text `voyage-3-large`, or `voyage-multimodal-3` when `multimodal=True`) and checks whether the expected point returns above threshold. The only way to catch a **cross-model embedding-space mismatch** — when the expected point exists in the collection but the probe can't surface it, the stored vectors were written in a different Voyage space.
   - `write_diagnostic_report(...)` — writes a markdown report (YAML frontmatter: collection, owning agent, symptom, diagnosis, evidence = filter/threshold/model-from-code + payloads/scores-from-Qdrant, proposed fix, `status`) to `~/obsidian/agent-reports/diagnostics/`, status `open`.
-  The **remediation delegation seam** (`RemediationHandler` protocol + registry + `delegate_remediation`, status `open → delegated → fixed`) is built and tested with a stub, but **ships with an empty registry**: no agent exposes a remediation write path yet, so reports stay `open` as manual work orders. Per-agent remediation entry points are deferred to `docs/v2-refinements/v2-refinements-orchestrator.md` — keeping the orchestrator a pure reader and the autonomous loop unable to trigger any Qdrant write.
+  The **remediation delegation seam** (`RemediationHandler` protocol + registry + `delegate_remediation`, status `open → delegated → fixed`) is built and tested with a stub, but **ships with an empty registry**: no agent exposes a remediation write path yet, so reports stay `open` as manual work orders. Per-agent remediation entry points are deferred to `docs/v2-refinements/orchestrator-v2-refinements.md` — keeping the orchestrator a pure reader and the autonomous loop unable to trigger any Qdrant write.
 
 #### CLI (`cli.py`) + library API
 
@@ -820,7 +820,7 @@ Covers the graph loop (a tool call routes to `tools` and loops back; no tool cal
 
 #### Deferred (first slice)
 
-per-agent remediation entry points (the owning-agent write paths the diagnostics delegation seam will call — see `docs/v2-refinements/v2-refinements-orchestrator.md`) · MCP (wrapping agents and exposing the orchestrator) · additional surfaces (Telegram/voice/web/scheduled) · Haiku utility (output compression, thread summarization) · the per-session hard ceiling (v1 is a soft tally) · the schema-migration runner/ledger. *(Now shipped: all five built agents wrapped as tools — free/non-side-effecting ops only — and diagnose-only vector-DB diagnostics.)*
+per-agent remediation entry points (the owning-agent write paths the diagnostics delegation seam will call — see `docs/v2-refinements/orchestrator-v2-refinements.md`) · MCP (wrapping agents and exposing the orchestrator) · additional surfaces (Telegram/voice/web/scheduled) · Haiku utility (output compression, thread summarization) · the per-session hard ceiling (v1 is a soft tally) · the schema-migration runner/ledger. *(Now shipped: all five built agents wrapped as tools — free/non-side-effecting ops only — and diagnose-only vector-DB diagnostics.)*
 
 ---
 

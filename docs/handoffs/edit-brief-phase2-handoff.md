@@ -14,7 +14,7 @@ three-layer brief, the time engine is fully unit-tested, and the orchestrator no
 wraps both ops. This document hands off to **Phase 3 (Refinement)** and carries
 forward the post-Phase-2 state plus every captured-but-not-built item. Phase 1
 design rationale lives in `docs/handoffs/edit-brief-phase1-handoff.md`; the durable
-deferred-item record is `docs/v2-refinements/v2-refinements-edit-brief.md`.
+deferred-item record is `docs/v2-refinements/edit-brief-v2-refinements.md`.
 
 ## What shipped (MVP)
 
@@ -84,7 +84,7 @@ This complements the two package-level smoke runs recorded in Build Session 1
 (degradation on `script-draft.md`; the synthetic VO-backed 2-section fixture
 proving computed-from-VO timestamps + a 120-BPM beat grid).
 
-## Deferred to Phase 3 / V2 (full list in `docs/v2-refinements/v2-refinements-edit-brief.md`)
+## Deferred to Phase 3 / V2 (full list in `docs/v2-refinements/edit-brief-v2-refinements.md`)
 
 Carried from Phase 1: beat detection for unlogged BPM (librosa/aubio); a real
 `project_id` + chosen-track file/duration on `music_curation_memory` (removing the
@@ -112,7 +112,7 @@ drew.
 
 Phase 3 is smaller-touch: polish a working agent, don't redesign it. Group items by
 surface area, each with explicit smoke verification. Anything that lands stays in
-the docs; anything not done moves to `docs/v2-refinements/v2-refinements-edit-brief.md` with
+the docs; anything not done moves to `docs/v2-refinements/edit-brief-v2-refinements.md` with
 reasoning. The highest-value candidates are the deterministic asset→section
 pre-map (moves a decision the handoff put in code back out of the LLM) and the
 real music↔project link (removes the only fuzzy step in discovery).

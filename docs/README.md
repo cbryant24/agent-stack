@@ -25,6 +25,6 @@ dated handoffs, and the `*research-signals*` notes.
 
 ## [v2-refinements/](v2-refinements/)
 
-Per-agent backlogs of deferred refinements for a future v2 (`v2-refinements-*.md`),
+Per-agent backlogs of deferred refinements for a future v2 (`*-v2-refinements.md`),
 one per agent: agent-runtime, concept-script, edit-brief, feedback-iteration,
 music-curation, orchestrator, technique-research, tutorial-research, voiceover-direction.

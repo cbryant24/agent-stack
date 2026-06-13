@@ -62,7 +62,7 @@ A new `memory_type` within `voiceover_direction_memory` (not a new collection): 
 
 ## Conversational chat mode (agent-runtime dependency)
 
-**Motivation.** The `direct` loop is single-shot CLI: one invocation, one directed-script file. Real direction is conversational ("make the intro punchier," "drop the whisper tag on line 3," "try a warmer voice") — a back-and-forth that today means re-running `direct` or hand-editing the file. This is not voiceover-specific; it's a shared interaction mode that belongs in `agent-runtime` and is tracked in `v2-refinements-agent-runtime.md`. It's listed here as a dependent consumer, not as voiceover-direction-owned work.
+**Motivation.** The `direct` loop is single-shot CLI: one invocation, one directed-script file. Real direction is conversational ("make the intro punchier," "drop the whisper tag on line 3," "try a warmer voice") — a back-and-forth that today means re-running `direct` or hand-editing the file. This is not voiceover-specific; it's a shared interaction mode that belongs in `agent-runtime` and is tracked in `agent-runtime-v2-refinements.md`. It's listed here as a dependent consumer, not as voiceover-direction-owned work.
 
 **Shape.** An interactive REPL/chat surface (agent-runtime-provided) that voiceover-direction plugs into: the direction chain runs turn-by-turn against an in-memory working directed-script, the user refines in natural language, and the file/takes are written only on an explicit commit.
 
@@ -71,7 +71,7 @@ A new `memory_type` within `voiceover_direction_memory` (not a new collection): 
 - Owned by agent-runtime; voiceover-direction is one consumer (music-curation is another). Cross-agent, not a voiceover-direction-only build.
 - Must preserve the cost inversion: chat refines *direction* (free); `generate` stays the deliberate paid commitment. Nothing in chat mode should make generation feel incidental.
 
-**Trigger to build.** When agent-runtime's conversational mode lands (driven from `v2-refinements-agent-runtime.md`); voiceover-direction adopts it as a direction surface at that point.
+**Trigger to build.** When agent-runtime's conversational mode lands (driven from `agent-runtime-v2-refinements.md`); voiceover-direction adopts it as a direction surface at that point.
 
 ---
 

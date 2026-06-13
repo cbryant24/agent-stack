@@ -9,7 +9,7 @@ status: active
 
 # Concept & Script Agent — Phase 1 Handoff
 
-This document opens **Phase 1 (Design and discovery)** for the Concept & Script agent (`concept-script`). The prior agent, `voiceover-direction`, is at Phase 2 complete (MVP) with its deferred items recorded in `docs/v2-refinements/v2-refinements-voiceover-direction.md`; its Phase 3 is treated as empty (no deferred item earned a build pass). Per the build methodology, Phase 1 is a design conversation — **no code is written** — and it opens against this handoff rather than a build prompt.
+This document opens **Phase 1 (Design and discovery)** for the Concept & Script agent (`concept-script`). The prior agent, `voiceover-direction`, is at Phase 2 complete (MVP) with its deferred items recorded in `docs/v2-refinements/voiceover-direction-v2-refinements.md`; its Phase 3 is treated as empty (no deferred item earned a build pass). Per the build methodology, Phase 1 is a design conversation — **no code is written** — and it opens against this handoff rather than a build prompt.
 
 ## System state at handoff
 
@@ -50,7 +50,7 @@ Concretely: what does the agent *decide* versus *surface for the user to decide*
 
 1. **Brief → voiceover coupling.** Does `concept-script` emit the markdown-with-headings script that `voiceover-direction direct` consumes *directly* (clean, tight handoff), or a more abstract brief the user adapts? The spec's "per-section voiceover script" leans toward the former; confirm and define the exact artifact boundary.
 2. **Memory model.** Stateless (each brief fresh) or a `concept_script_memory` collection (prior briefs/projects retrievable as reference material)? The spec mentions "retrieving reference material from prior projects," but assigns no collection. Decide whether memory earns its place in v1.
-3. **Interaction surface.** Single-shot CLI (like `direct`'s first pass) or conversational? A scriptwriting *collaborator* is the agent most likely to want the conversational chat mode that's currently deferred in `v2-refinements-agent-runtime.md`. Phase 1 should decide whether v1 is single-shot (and chat mode is a later adoption) or whether this agent justifies pulling that runtime work forward.
+3. **Interaction surface.** Single-shot CLI (like `direct`'s first pass) or conversational? A scriptwriting *collaborator* is the agent most likely to want the conversational chat mode that's currently deferred in `agent-runtime-v2-refinements.md`. Phase 1 should decide whether v1 is single-shot (and chat mode is a later adoption) or whether this agent justifies pulling that runtime work forward.
 4. **Input discovery.** The user explicitly wants the design to surface useful inputs beyond the obvious list. Treat the spec's inputs as a seed and actively probe for others (emotional arc, structural intentions, reference-to-own-prior-work, etc.).
 5. **Technique Research delegation.** Confirm v1 operates standalone with user-provided references/techniques, with TR delegation specified as a later enhancement.
 

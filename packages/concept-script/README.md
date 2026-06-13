@@ -117,7 +117,7 @@ feedback signal that brief quality could be attributed to, so a write-collection
 would be storage without learning. Prior work is reused via file reference
 (`--ref @prior-script.md`), since outputs are files. Reading `user_knowledge` /
 `tutorial_research` to fill a gap is deferred — see
-`docs/v2-refinements/v2-refinements-concept-script.md`.
+`docs/v2-refinements/concept-script-v2-refinements.md`.
 
 ## Default budget
 

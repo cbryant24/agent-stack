@@ -63,7 +63,7 @@ Opens the REPL. Existing subcommands (generate, report, recall, etc.) stay one-s
 
 **Constraints / scope notes.**
 
-- Should not be built until the structured-references-and-research feature in docs/v2-refinements/v2-refinements-music-curation.md is either landed or explicitly deferred, since they likely share retrieval and confirmation infrastructure.
+- Should not be built until the structured-references-and-research feature in docs/v2-refinements/music-curation-v2-refinements.md is either landed or explicitly deferred, since they likely share retrieval and confirmation infrastructure.
 - The end-of-session proposal flow is the design piece most likely to need refinement after real use. The basic shape (propose batched, confirm individually) is right; what's uncertain is how the conversation's content gets *decomposed* into proposals — that requires real conversation logs to design against.
 - The system-spec doc (docs/ai-director-agent-system.md) should be updated when this lands to reflect that conversational mode is a supported runtime capability and to document the agent-side interface for opting in.
 

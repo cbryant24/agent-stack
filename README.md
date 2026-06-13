@@ -277,7 +277,7 @@ print(result.brief.cut_trailer)                                  # executed dire
 ```
 
 concept-script is **stateless** — it owns no Qdrant collection; prior work is reused via
-`--ref`. See `packages/concept-script/README.md` and `docs/v2-refinements/v2-refinements-concept-script.md`.
+`--ref`. See `packages/concept-script/README.md` and `docs/v2-refinements/concept-script-v2-refinements.md`.
 
 ## Visual Generation Agent
 

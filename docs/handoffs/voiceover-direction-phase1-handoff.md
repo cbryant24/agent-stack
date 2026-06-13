@@ -97,7 +97,7 @@ These follow from the central question's answer and should be worked through del
 
 1. **Memory types in `voiceover_direction_memory`.** What's the analog of music-curation's generation/template/taste/sound_reference? Likely candidates that should be evaluated, not assumed: voice profiles, takes (analogous to generations), direction notes (analogous to taste lessons), character/persona definitions, project/episode groupings. Some of these may not warrant being a memory type at all; some may need to combine.
 
-2. **Relationship to `user_knowledge`.** ElevenLabs mechanics facts go to `user_knowledge` with `domain="elevenlabs_mechanics"` (following the established pattern). What's the seed strategy when there's no user-verified data to start? Ingest from ElevenLabs docs directly (the Suno-docs-ingestion spec in `docs/v2-refinements/v2-refinements-music-curation.md` would apply equivalently)? Rely on tutorial-research delegations to YouTube ElevenLabs tutorials? Both? Whichever choice gets made here likely produces research signals for the between-phase gathering activity.
+2. **Relationship to `user_knowledge`.** ElevenLabs mechanics facts go to `user_knowledge` with `domain="elevenlabs_mechanics"` (following the established pattern). What's the seed strategy when there's no user-verified data to start? Ingest from ElevenLabs docs directly (the Suno-docs-ingestion spec in `docs/v2-refinements/music-curation-v2-refinements.md` would apply equivalently)? Rely on tutorial-research delegations to YouTube ElevenLabs tutorials? Both? Whichever choice gets made here likely produces research signals for the between-phase gathering activity.
 
 3. **The free-plan budget constraint as design driver.** ElevenLabs free tier has a monthly character limit. The agent's workflow needs to make this visible to the user (per-turn character cost), avoid waste (don't generate a full script as exploration when a single section would suffice for direction-testing), and possibly track cumulative monthly spend in trace events.
 
@@ -122,7 +122,7 @@ Because ElevenLabs is a first-time tool with no user-verified knowledge in `user
 Phase 1 should produce the specific signals as concrete artifacts the user can act on between phases:
 
 - For YouTube tutorials: a Claude Code prompt that runs `tutorial-research <topic>` for each identified topic. The user reviews the prompt and runs it.
-- For docs/URLs: a list of specific URLs or domains the user retrieves manually, saves as markdown locally, and ingests via the docs-ingestion path. (If the Suno-docs-ingestion CLI subcommand from `docs/v2-refinements/v2-refinements-music-curation.md` is not yet implemented, Phase 1 should note this and propose either implementing it as a small standalone task before voiceover-direction Phase 2, or building the equivalent for voiceover-direction's needs directly.)
+- For docs/URLs: a list of specific URLs or domains the user retrieves manually, saves as markdown locally, and ingests via the docs-ingestion path. (If the Suno-docs-ingestion CLI subcommand from `docs/v2-refinements/music-curation-v2-refinements.md` is not yet implemented, Phase 1 should note this and propose either implementing it as a small standalone task before voiceover-direction Phase 2, or building the equivalent for voiceover-direction's needs directly.)
 
 If Phase 1 concludes that no research signals are needed (unlikely given the cold-start condition, but possible), it states this explicitly in the Phase 2 handoff and Phase 2 begins immediately.
 
@@ -164,8 +164,8 @@ These should be loaded as context at the start of Phase 1:
 - `docs/architecture.md` — full agent-stack architecture
 - `packages/agent-runtime/README.md` — what the runtime provides
 - `packages/music-curation/README.md` — the most recently built agent, as a reference for patterns to consider (not copy)
-- `docs/v2-refinements/v2-refinements-agent-runtime.md` — including the conversational chat mode spec, which may eventually apply here
-- `docs/v2-refinements/v2-refinements-music-curation.md` — including the Suno-docs-ingestion spec which may apply analogously to ElevenLabs-docs-ingestion
+- `docs/v2-refinements/agent-runtime-v2-refinements.md` — including the conversational chat mode spec, which may eventually apply here
+- `docs/v2-refinements/music-curation-v2-refinements.md` — including the Suno-docs-ingestion spec which may apply analogously to ElevenLabs-docs-ingestion
 - This handoff document
 
 ## One open question for the user before opening Phase 1's design conversation
