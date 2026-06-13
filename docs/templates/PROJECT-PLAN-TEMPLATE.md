@@ -12,24 +12,35 @@ tags:
 
 # Project Plan Template — AI Director Agent System
 
-A blank, self-contained template. Paste this whole file into a chat LLM (Claude, Gemini, or ChatGPT), state what you want to make, and the assistant interviews you to produce a **completed project plan**: a description of the project plus the ordered steps to take it to completion, which agent or tool runs each step, and a note where a requested capability does not yet exist.
+A blank, self-contained template **and** its own driver prompt. Fill in the **Objective** line below, paste this whole file into a chat LLM (Claude, Gemini, or ChatGPT), and the assistant interviews you to produce a **completed project plan**: a description of the project plus the ordered steps to take it to completion, which agent or tool runs each step, and a note where a requested capability does not yet exist.
 
 This file carries everything the assistant needs inline — it does not assume access to the `agent-stack` repo or its docs.
 
 ---
 
+## Objective
+
+<!-- DIRECTOR: replace the bracketed line below with what you want to make, then paste this whole file (top to bottom, including the frontmatter) into a chat LLM. Leave everything else as-is. -->
+
+**I want to make:** [DESCRIBE WHAT YOU WANT TO MAKE — e.g. "a ~3-minute illustrated short story with a voiceover and original background music, calm reflective tone, no sourced footage"]
+
+---
+
 <!-- ============================================================
      INSTRUCTIONS TO THE ASSISTANT — REMOVE THIS ENTIRE BLOCK
-     (Section "How to use this template") FROM THE FINISHED PLAN.
+     (the "How to use this template" section) AND THE "Objective"
+     section above FROM THE FINISHED PLAN.
      ============================================================ -->
 
 ## How to use this template *(instructions to the assistant — remove from the finished plan)*
 
 You are helping a director plan a creative production project on the **AI Director Agent System** (`agent-stack`): a toolkit of standalone, domain-specialized agents the director composes per project. The director makes every creative decision; agents research, generate, and assemble. Your job is to turn the director's stated objective into a completed, ordered execution plan using only the capabilities defined in this file.
 
+**HARD STOP — interview before output.** Do not write any part of the completed plan (frontmatter, project description, ordered steps — anything from Section C) in the same turn as your clarifying questions. Run the interview first, then *wait* for the director's answers, then assemble. If you catch yourself drafting steps before the director has answered, stop and ask instead. A fast, generic plan produced without the interview is the exact failure mode this template exists to prevent — surfacing options and one-shotting a plan are not the same thing.
+
 Follow this protocol:
 
-1. **Read the stated objective.** The director will give you a description of what they want to make (e.g. "a short story with images and a voiceover," "a music video with a theme, music only, no voiceover").
+1. **Read the stated objective.** Take the director's goal from the **Objective** section above (the "I want to make:" line). If it's still the bracketed placeholder, ask the director to state their objective before doing anything else.
 
 2. **Match to the closest example.** Compare the objective against **Section A — Examples catalog**. Name the closest-matching example and ask the director to paste in that example file (the `EXAMPLE-*.md` flow) so you can ground the plan in a known-good sequence. If none is close, say so and proceed from the capability sections directly.
 
@@ -37,11 +48,11 @@ Follow this protocol:
    - **Include** — the objective clearly needs it.
    - **Drop** — it clearly does not apply (it will not appear in the finished plan).
    - **Ask** — it's genuinely ambiguous; ask **one** targeted clarifying question to decide. Do not ask about capabilities whose relevance is already obvious.
-   Ask only the questions that change the plan. Group them if you can; keep the interview tight.
+   Ask only the questions that change the plan. Group them if you can; keep the interview tight. When a question has a small set of natural answers, present them as concrete labeled options (A / B / C …) with a one-line description each, so the director can pick fast — then add any free-form notes.
 
 4. **Handle not-yet-capable (v2) requests honestly.** If the objective requires a capability marked **v2 — not yet capable** (e.g. generated video clips), do **not** invent steps for it. State plainly in the finished plan that the project cannot be fully executed today, name the gap, and list the capabilities needed to close it. Offer the closest v1 alternative if one exists.
 
-5. **Assemble the completed plan (Section C).** Produce the finished document:
+5. **Assemble the completed plan (Section C).** Only after the director has answered your clarifying questions (steps 2–3) — never before. Produce the finished document:
    - Author **project-relevant frontmatter** (not a fixed schema — see the frontmatter guidance below).
    - Write a short **project description** (deliverable, creative core, structural shape).
    - Produce the **ordered steps**, each with: the agent or tool (or "Director — manual"), what happens, the command to run, the expected outcome, and dependencies.
@@ -53,10 +64,14 @@ Follow this protocol:
 
 7. **Note the Orchestrator.** Any **free, non-side-effecting** step (recall, review, retrieval, planning) can also be driven conversationally through `orchestrator chat` instead of the individual CLI. Mention this where relevant; it is not itself a pipeline step.
 
+8. **Pace the interview.** Ask your clarifying questions, then wait for the director's answers before continuing — do not answer them yourself. Surface options where useful, but never make the creative decisions (theme, message, which references matter); those belong to the director.
+
 <!-- FINISHED-DOCUMENT FRONTMATTER GUIDANCE — REMOVE THIS COMMENT AND THE
      guidance paragraph below once you have authored real frontmatter.
      The finished plan's frontmatter is NOT standardized. Author whatever is
-     most relevant to THIS project. Useful candidates: title, date, project
+     most relevant to THIS project. Discard this template file's own frontmatter
+     (its title/type/tags describe the template, not your project) and write
+     fresh frontmatter for the plan. Useful candidates: title, date, project
      (agent-stack), type: project-plan, deliverable, running_example, the
      matched example, agents_used (list), spend_axes (elevenlabs/gpu/suno),
      status. Include only fields that carry meaning for this project. -->
@@ -146,7 +161,7 @@ uv run concept-script shape <dictation-transcript.md> -o script.md [--clean]    
 ```bash
 uv run music-curation recall "<query>"                                  # check prior territory first
 uv run music-curation generate "<request, e.g. dark phonk, ~90s arc>"   # emit prompts
-uv run music-curation report <gen_id> --reaction <loved|liked|...> --rating <1-5>
+uv run music-curation report <gen_id> --reaction <loved|liked|...> [--rating 1-5] [--notes "..."]
 ```
 
 **Director (manual) part:** runs the prompts in Suno, listens, picks the track, then reports the reaction. **Manual spend step** (Suno generations).
@@ -169,7 +184,7 @@ uv run music-curation report <gen_id> --reaction <loved|liked|...> --rating <1-5
 ```bash
 uv run voiceover-direction direct script.md -o directed.md                 # free, iterable
 uv run voiceover-direction generate directed.md (--all | --section <id>)   # spends characters
-uv run voiceover-direction report <take_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed>
+uv run voiceover-direction report <take_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5] [--notes "..."]
 ```
 
 **Director (manual) part:** selects the voice from the ElevenLabs library; listens to takes and reports reactions. **Scarce spend** (monthly ElevenLabs character budget) — generate section-by-section for long scripts.
@@ -194,8 +209,10 @@ uv run visual-generation model sync --endpoint <comfyui-url>          # first ru
 uv run visual-generation workflow register <exported-api.json>
 uv run visual-generation draft "<intent>" -o batch.md --project <id>  # free prompt-craft
 uv run visual-generation generate batch.md --all --endpoint <comfyui-url> --max-session-cost <N>
-uv run visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed>
+uv run visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5]
 ```
+
+**Thread the project id:** use the same slug for `--project <id>` here as you pass to `edit-brief --project-id` so the generated stills auto-discover into the brief (don't pass stills to edit-brief as `--footage`).
 
 **Director (manual) part:** starts and stops the RunPod pod (billing clock); reviews outputs and reports reactions. **Scarce spend** (GPU/pod uptime + per-run generation) — batch free prompt-craft before starting the pod. **Scope boundary:** clothing/scene variation and creative generation only; no nude generation or clothed-to-unclothed transformation of real people.
 
@@ -221,16 +238,16 @@ uv run visual-generation report <gen_id> --reaction <loved|liked|liked_with_chan
 
 **Where in the flow:** after the assets exist (script, VO, music, stills, footage), before the director edits.
 
-**Inputs:** `script.md` (required); everything else discovered from collections by `project_id`, with overrides — VO takes, music + BPM, generated assets auto-discovered; director footage via `--footage DIR`.
+**Inputs:** `script.md` (required); everything else discovered from collections by `project_id`, with overrides. VO takes and generated stills are **auto-discovered by `project_id`** (so thread the same id used by `voiceover-direction --project-id` and `visual-generation --project`); the selected music track is passed via `--music`; **`--footage DIR` is only for director-sourced video clips, not generated stills.**
 
 **Expected outcome:** an editable `edit-brief.md` next to the script: a timeline skeleton, a beat grid, and per-section ordered checkbox steps executable in Resolve free.
 
 **How to run it:**
 ```bash
-uv run edit-brief draft script.md --footage ./footage --music ./track.mp3 -o edit-brief.md
+uv run edit-brief draft script.md --project-id <id> --music ./track.mp3 [--footage ./clips] -o edit-brief.md
 ```
 
-**Director (manual) part:** sources and organizes footage into the folder (rights and taste — never agent work).
+**Director (manual) part:** sources and organizes any director-shot footage into the folder (rights and taste — never agent work).
 
 ---
 
@@ -286,8 +303,12 @@ Produce the finished document in this shape (and remove Sections A, B, and the i
    - **Expected outcome:** the artifact or result.
    - **Depends on:** prior steps/artifacts, if any.
 
+   Two assembly rules:
+   - **Open with a Director step** that captures the creative brief — story/theme, references, inside jokes, the ending — into a `brief.md` before any agent runs. The creative core is the director's, stated once up front; downstream steps consume it.
+   - **Thread one `project_id`** through the whole plan: pick a slug and pass it to `voiceover-direction --project-id`, `visual-generation --project`, and `edit-brief --project-id` so takes and stills auto-discover. Pass the selected music to `edit-brief` via `--music`. Do not pass generated stills as `--footage`.
+
 5. **Not yet possible (only if applicable)** — if the objective requested a v2 capability (e.g. generated video), state the project cannot be fully executed today, name the gap, list the capabilities needed, and give the closest v1 alternative.
 
 6. **Director tasks** — a short list of what stays with the director throughout (creative decisions, Suno selection, footage sourcing, voice selection, DaVinci editing, final export and publishing).
 
-Keep the finished plan tight: only the sections this project uses, real commands, explicit dependencies, no leftover template scaffolding.
+Save the finished plan to `docs/projects/<project-slug>-plan.md` (use the same slug as the `project_id`). Keep it tight: only the sections this project uses, real commands, explicit dependencies, no leftover template scaffolding.
