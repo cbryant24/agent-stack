@@ -12,8 +12,8 @@ status: active
 Phase 2 (Build to MVP) is complete. The full Mode A turn works end to end and is smoke-verified
 on a real goal. This document hands off to **Phase 3 (Refinement)** and carries forward the
 post-Phase-2 state plus every captured-but-not-built item. Phase 1 design rationale lives in
-`docs/technique-research-phase1-handoff.md`; the durable deferred-item record is
-`docs/v2-refinements-technique-research.md`.
+`docs/handoffs/technique-research-phase1-handoff.md`; the durable deferred-item record is
+`docs/v2-refinements/v2-refinements-technique-research.md`.
 
 ## What shipped (MVP)
 
@@ -68,7 +68,7 @@ Updated to post-Phase-2: `README.md` (agent table, collections table, dir tree, 
 flipped to built + Build Order line), `packages/technique-research/README.md` (new). Nothing committed —
 the user commits on request.
 
-## Deferred to Phase 3 / V2 (full list in `docs/v2-refinements-technique-research.md`)
+## Deferred to Phase 3 / V2 (full list in `docs/v2-refinements/v2-refinements-technique-research.md`)
 
 Parked by Phase 1: Mode B footage-based diagnosis (the chain's `text + zero-or-more images + optional
 context` input shape is the only provision made); findings carrying reference images (forces a
@@ -86,6 +86,6 @@ only in the file); per-domain toolset re-query; adding `technique-research` to
 
 Phase 3 is smaller-touch: polish a working agent, don't redesign it. Group items by surface area, each
 with explicit smoke verification. Anything that lands stays in the docs; anything not done moves to
-`docs/v2-refinements-technique-research.md` with reasoning. The highest-value candidate is the
+`docs/v2-refinements/v2-refinements-technique-research.md` with reasoning. The highest-value candidate is the
 finding→domain source-ref precision, since it sharpens both the stored findings and the report's
 "where to learn more" links.

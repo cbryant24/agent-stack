@@ -11,7 +11,7 @@ status: active
 
 This document **closes Phase 2 (Implementation)** for the Orchestrator agent (`orchestrator`) and **opens Phase 3 (Refinement)**. It captures everything deferred from Phase 2 so Phase 3 can begin without re-deriving it. Per the methodology (`ai-director-agent-system.md` → "Build Methodology"), Phase 3 opens with a **handoff-verification turn**: read this fresh, confirm it still reflects your understanding, and reconcile any drift in chat before the first refinement prompt is sent.
 
-Phase 3 is deliberately **smaller-touch** than Phase 2 — it polishes a working agent, not redesigns one. Scope is limited to non-major architecture changes, weighed on cost, necessity, and scope-appropriateness, in the "Group A" style: focused changes grouped by surface area, each smoke-verified. Items that prove larger than that bar move to `docs/v2-refinements-orchestrator.md` with documented reasoning rather than being forced into Phase 3.
+Phase 3 is deliberately **smaller-touch** than Phase 2 — it polishes a working agent, not redesigns one. Scope is limited to non-major architecture changes, weighed on cost, necessity, and scope-appropriateness, in the "Group A" style: focused changes grouped by surface area, each smoke-verified. Items that prove larger than that bar move to `docs/v2-refinements/v2-refinements-orchestrator.md` with documented reasoning rather than being forced into Phase 3.
 
 ## System state at handoff
 
@@ -27,7 +27,7 @@ What Phase 2 shipped (first slice), verified working:
 
 The smoke test passed: a real-use `orchestrator chat` answered a question about the agents via the read/grep introspection path.
 
-`docs/v2-refinements-orchestrator.md` **does not exist yet** — Phase 3 creates it as the durable record of captured-but-not-built items, and finalizes it at Phase 3's end.
+`docs/v2-refinements/v2-refinements-orchestrator.md` **does not exist yet** — Phase 3 creates it as the durable record of captured-but-not-built items, and finalizes it at Phase 3's end.
 
 ## Deferred items (from Phase 2)
 
@@ -41,11 +41,11 @@ Grouped by surface area, with a recommended order. No timelines — order only, 
 
 2. **`_maybe_notify_threshold` zero-guard — [Phase 3], runtime. ✅ Done.** `agent_runtime/budget.py`: `_maybe_notify_threshold` now short-circuits when a `max_*` ceiling is falsy/`<= 0` instead of dividing `current / maximum`, so a `BudgetEnvelope` with any dimension set to `0` no longer raises `ZeroDivisionError` inside `check_budget()` (a `0` ceiling reads as "no headroom"; the hard checks still raise `BudgetExhaustedError`). Covered by `max_items=0` / `max_cost_usd=0` regression tests. (This was the **single** genuine runtime follow-up; the `record_tool_call` → `add_tool_call` bridge is **not** a deferred item — it predates this build, commit `8e9945c`, and is already documented at `architecture.md` Layer 2.)
 
-3. **Per-session ceiling — [v2-refinements]. ⏸ Deferred.** Moved to `docs/v2-refinements-orchestrator.md`. Low-value polish: the soft per-session cost tally already gives visibility, and if ever built it must stay warn-only (a checkpointed thread resumes across sessions, so a cumulative hard cap would brick a useful thread or govern nothing).
+3. **Per-session ceiling — [v2-refinements]. ⏸ Deferred.** Moved to `docs/v2-refinements/v2-refinements-orchestrator.md`. Low-value polish: the soft per-session cost tally already gives visibility, and if ever built it must stay warn-only (a checkpointed thread resumes across sessions, so a cumulative hard cap would brick a useful thread or govern nothing).
 
 ### Group C — Diagnostics (larger; scope carefully)
 
-4. **Vector-DB diagnostics (diagnose-only) + remediation delegation — [Phase 3 / v2-refinements]. ✅ Diagnose-only done; remediation split to v2 (as anticipated).** Built per the settled design: read-only Qdrant inspection (`MemoryStore.get_collection_info` / `count_points` / `sample_points`), live code access (existing `read_file` / `grep`), and a behavioral probe — surfaced as the `inspect_collection`, `probe_collection`, and `write_diagnostic_report` tools (`orchestrator/diagnostics.py`); reports land in `~/obsidian/agent-reports/diagnostics/` with status `open → delegated → fixed`. The **delegation seam** (`RemediationHandler` protocol + registry + `delegate_remediation`) is built and stub-tested, but ships with an **empty registry** — the hard dependency (a **remediation entry point on each owning agent**, which performs the actual write) was split off as anticipated: per-agent remediation paths are recorded in `docs/v2-refinements-orchestrator.md`. Until an agent registers a handler, each report is a manual work order. The orchestrator never writes to Qdrant.
+4. **Vector-DB diagnostics (diagnose-only) + remediation delegation — [Phase 3 / v2-refinements]. ✅ Diagnose-only done; remediation split to v2 (as anticipated).** Built per the settled design: read-only Qdrant inspection (`MemoryStore.get_collection_info` / `count_points` / `sample_points`), live code access (existing `read_file` / `grep`), and a behavioral probe — surfaced as the `inspect_collection`, `probe_collection`, and `write_diagnostic_report` tools (`orchestrator/diagnostics.py`); reports land in `~/obsidian/agent-reports/diagnostics/` with status `open → delegated → fixed`. The **delegation seam** (`RemediationHandler` protocol + registry + `delegate_remediation`) is built and stub-tested, but ships with an **empty registry** — the hard dependency (a **remediation entry point on each owning agent**, which performs the actual write) was split off as anticipated: per-agent remediation paths are recorded in `docs/v2-refinements/v2-refinements-orchestrator.md`. Until an agent registers a handler, each report is a manual work order. The orchestrator never writes to Qdrant.
 
 ### Larger / architectural — likely `v2-refinements-orchestrator.md`
 
@@ -59,7 +59,7 @@ Grouped by surface area, with a recommended order. No timelines — order only, 
 
 ## Phase 3 end condition (from the methodology)
 
-All Phase-3-scoped items either landed or moved to `docs/v2-refinements-orchestrator.md` with documented reasoning for the defer; that file is current and is the durable record of captured-but-not-built items. All documentation (`README.md`, `docs/architecture.md`, `docs/ai-director-agent-system.md`, `packages/orchestrator/README.md`) reflects the post-Phase-3 state. A handoff document is produced for the next agent, tool, or application to be built — Phase 3's end is that next build's Phase 1 starting point.
+All Phase-3-scoped items either landed or moved to `docs/v2-refinements/v2-refinements-orchestrator.md` with documented reasoning for the defer; that file is current and is the durable record of captured-but-not-built items. All documentation (`README.md`, `docs/architecture.md`, `docs/ai-director-agent-system.md`, `packages/orchestrator/README.md`) reflects the post-Phase-3 state. A handoff document is produced for the next agent, tool, or application to be built — Phase 3's end is that next build's Phase 1 starting point.
 
 ## Working-relationship rules
 

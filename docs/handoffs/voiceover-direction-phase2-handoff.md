@@ -140,8 +140,8 @@ Ordered and grouped for efficient implementation; no schedule implied.
 - `docs/architecture.md` — full agent-stack architecture.
 - `packages/agent-runtime/README.md` — runtime public API (`MemoryStore`, `UserKnowledgeStore`, `BudgetTracker`, delegation, tracing, reporting).
 - `packages/music-curation/README.md` — nearest reference for store/retrieval/curated-write/pending-lifecycle patterns (reference, not copy).
-- `docs/v2-refinements-music-curation.md` — the Suno-docs-ingestion spec, applied analogously to `knowledge ingest-docs`.
-- `docs/v2-refinements-agent-runtime.md` — conversational chat mode (deferred here).
+- `docs/v2-refinements/v2-refinements-music-curation.md` — the Suno-docs-ingestion spec, applied analogously to `knowledge ingest-docs`.
+- `docs/v2-refinements/v2-refinements-agent-runtime.md` — conversational chat mode (deferred here).
 - This handoff + the Phase 1 research-signals artifact.
 
 ---

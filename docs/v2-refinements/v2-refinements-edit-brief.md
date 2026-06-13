@@ -97,4 +97,4 @@ free op — `--dry-run` discovery + the pure time engine, no LLM, no file). NO
 `search_knowledge` registry entry: edit-brief is stateless and owns no collection
 (it reads `user_knowledge` + the foreign collections generically). Both record the
 delegation on the active tracker under the `edit_brief` label. Closes Phase 2 —
-see `docs/edit-brief-phase2-handoff.md`.
+see `docs/handoffs/edit-brief-phase2-handoff.md`.

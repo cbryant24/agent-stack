@@ -162,7 +162,7 @@ conversation.
 ## Revisit list (adjacent, not Phase 2 scope)
 
 - Shared read-only "collection/artifact contracts" module in `agent-runtime`
-  (already on `docs/v2-refinements-edit-brief.md`) — F&I's brief parser adds a
+  (already on `docs/v2-refinements/v2-refinements-edit-brief.md`) — F&I's brief parser adds a
   second consumer of duplicated format facts, strengthening the case.
 
 ## First build session scope (Build Session 1 of Phase 2)
@@ -193,7 +193,7 @@ restated here.
 ## Phase 2 scope discipline and end condition
 
 Build to MVP exactly as scoped above — no redesign, no scope additions;
-adjacent ideas go to a `docs/v2-refinements-feedback-iteration.md` deferred
+adjacent ideas go to a `docs/v2-refinements/v2-refinements-feedback-iteration.md` deferred
 list with reasoning. End condition: the `revise` turn runs end to end against a
 real brief with the smoke recorded, the time-shift engine and brief parser are
 unit-tested, the suite is green, and a Phase 2 handoff documents what shipped,

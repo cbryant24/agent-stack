@@ -45,5 +45,5 @@ Feedback & Iteration agent.
 
 ## Design
 
-Phase 1 design: `docs/edit-brief-phase1-handoff.md`. Deferred items:
-`docs/v2-refinements-edit-brief.md`.
+Phase 1 design: `docs/handoffs/edit-brief-phase1-handoff.md`. Deferred items:
+`docs/v2-refinements/v2-refinements-edit-brief.md`.

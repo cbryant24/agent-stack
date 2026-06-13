@@ -39,7 +39,7 @@ step" verb is added, touched-section ordinal renumbering becomes necessary.
 ## Shared collection/artifact-contracts module
 F&I's brief parser is a second consumer of the edit-brief format facts (the first
 being edit-brief's own renderer). This strengthens the existing
-`docs/v2-refinements-edit-brief.md` idea of a shared read-only
+`docs/v2-refinements/v2-refinements-edit-brief.md` idea of a shared read-only
 "collection/artifact contracts" module in `agent-runtime` — the format contract
 would live once and both the writer and the foreign reader would import it.
 Still out of Phase 1/2 scope; a revisit item.

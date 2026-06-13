@@ -104,7 +104,7 @@ Modules (mirroring edit-brief's roles):
 
 ## Deferred
 
-See `docs/v2-refinements-feedback-iteration.md` — prose-retiming residual
+See `docs/v2-refinements/v2-refinements-feedback-iteration.md` — prose-retiming residual
 collision (attributed retime), guard against LLM-introduced un-anchored numbers,
 step-deletion renumbering, the shared artifact-contracts module, richer
 timing-conflict model, a lesson confirm surface, beat-grid awareness, richer
@@ -159,7 +159,7 @@ wrapping.
 
 ## Deferred (orchestrator integration)
 
-See `docs/v2-refinements-feedback-iteration.md`: the tool surface wraps brief path
+See `docs/v2-refinements/v2-refinements-feedback-iteration.md`: the tool surface wraps brief path
 + feedback only (`--feedback FILE` / `--max-cost` not threaded); no
 `edit-brief → feedback-iteration` chaining (each tool invoked independently); no
 remediation entry point registered.

@@ -73,4 +73,4 @@ result = await identify(IdentificationInput(goal="a punchy AMV"))   # -> Techniq
 findings = await recall("speed ramping")                            # -> [(score, TechniqueFinding)]
 ```
 
-Deferred / V2 items: see `docs/v2-refinements-technique-research.md`.
+Deferred / V2 items: see `docs/v2-refinements/v2-refinements-technique-research.md`.

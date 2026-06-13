@@ -8,7 +8,7 @@ conversation across sessions, and invokes the other agents as tools on the user'
 Built on **LangGraph** (hand-rolled ReAct loop) over `langchain-anthropic`, with a
 thread-keyed SQLite checkpointer for resumable conversations. See the "Orchestrator Agent"
 section of `docs/ai-director-agent-system.md` for the system-level spec and
-`docs/orchestrator-phase2-handoff.md` for the resolved design.
+`docs/handoffs/orchestrator-phase2-handoff.md` for the resolved design.
 
 ## Status
 
@@ -20,7 +20,7 @@ plus read-only vector-DB diagnostics that diagnose and write a report but never 
 Qdrant, with the **first remediation handler** wired (music-curation re-tag, behind the explicit
 `orchestrator remediate` CLI command — never the autonomous loop). Deferred: the re-embed
 remediation and the other agents' handlers (the seam is built; see
-`docs/v2-refinements-orchestrator.md`), MCP, additional surfaces, Haiku utility, a per-session
+`docs/v2-refinements/v2-refinements-orchestrator.md`), MCP, additional surfaces, Haiku utility, a per-session
 hard ceiling, the schema-migration runner.
 
 ## Usage
@@ -89,7 +89,7 @@ async with AsyncSqliteSaver.from_conn_string("agent-stack.db") as saver:
   loop can never trigger a write. A report carrying a `RemediationSpec` round-trips through the
   report markdown (`load_diagnostic_report`); a handler that refuses (wrong collection /
   unsupported kind / malformed spec) leaves the report at `open` as a manual work order. The
-  re-embed fix and other agents' handlers are deferred (`docs/v2-refinements-orchestrator.md`).
+  re-embed fix and other agents' handlers are deferred (`docs/v2-refinements/v2-refinements-orchestrator.md`).
 - **Model** — Sonnet only (`MODEL_ORCHESTRATOR`, defined here per the per-package
   convention). `MODEL_UTILITY` (Haiku) is reserved, not wired in.
 - **Checkpointer** — LangGraph `AsyncSqliteSaver` at `~/agent-data/agent-stack.db`,

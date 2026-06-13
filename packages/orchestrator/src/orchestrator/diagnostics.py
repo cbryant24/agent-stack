@@ -19,7 +19,7 @@ agent, which performs the actual write under its own ownership. That delegation
 (``MusicCurationStore.remediate``), registered for the explicit ``orchestrator
 remediate`` CLI command — never the autonomous loop. Reports without a registered
 handler stay ``open`` and serve as a human/Claude-Code work order; remaining agents
-and the re-embed fix are deferred (see ``docs/v2-refinements-orchestrator.md``). The
+and the re-embed fix are deferred (see ``docs/v2-refinements/v2-refinements-orchestrator.md``). The
 shared report types (``DiagnosticReport`` / ``RemediationSpec`` / ``RemediationOutcome``
 / ``Status``) live in ``agent_runtime.diagnostics`` and are re-exported here.
 """
@@ -275,7 +275,7 @@ class RemediationHandler(Protocol):
     (re-embed / re-tag payload / move points) under its own ownership — the
     orchestrator never writes to Qdrant. music-curation registers a re-tag handler
     (see `MusicCurationStore.remediate`); other agents are deferred to
-    docs/v2-refinements-orchestrator.md."""
+    docs/v2-refinements/v2-refinements-orchestrator.md."""
 
     async def remediate(self, report: DiagnosticReport) -> RemediationOutcome: ...
 

@@ -88,7 +88,7 @@ Build order, grouped for efficient sequencing (not scheduled):
 
 ## Deferred items (adoption conditions, not rejections)
 
-Destined for `docs/v2-refinements-concept-script.md`:
+Destined for `docs/v2-refinements/v2-refinements-concept-script.md`:
 
 - **Chat / conversational mode** — adoption: the file loop demonstrably fails to let the user steer (repeated `generate` re-runs because he can't direct it without a conversation). Pulls forward the deferred runtime chat work.
 - **`concept_script_memory` collection** — adoption: corpus scale makes manual file reference impractical, or a feedback signal emerges worth learning from. Backfill is a batch ingest of existing `script.md` files (the `music-curation seed ingest` pattern), so deferring carries no penalty.
@@ -106,4 +106,4 @@ Unchanged and in force — see the "Working-relationship rules" section of `ai-d
 
 **Scope:** build to MVP per the build order above. Resist adjacent additions ("while we're at it…"); they go to the deferred list, not into Phase 2.
 
-**End condition:** both input modes produce a `script.md` that `voiceover-direction direct` consumes unchanged; the curation command channel behaves as specified (verbatim preservation, disfluency stripping, stumble preservation, `director note` execution + removal, cut trailer); runtime wiring (budget, tracing, reporting) is in place; the test suite passes; a successful end-to-end smoke test is recorded. At that point Phase 2 is MVP-complete and deferred items are written to `docs/v2-refinements-concept-script.md`.
+**End condition:** both input modes produce a `script.md` that `voiceover-direction direct` consumes unchanged; the curation command channel behaves as specified (verbatim preservation, disfluency stripping, stumble preservation, `director note` execution + removal, cut trailer); runtime wiring (budget, tracing, reporting) is in place; the test suite passes; a successful end-to-end smoke test is recorded. At that point Phase 2 is MVP-complete and deferred items are written to `docs/v2-refinements/v2-refinements-concept-script.md`.

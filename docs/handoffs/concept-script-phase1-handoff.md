@@ -9,7 +9,7 @@ status: active
 
 # Concept & Script Agent — Phase 1 Handoff
 
-This document opens **Phase 1 (Design and discovery)** for the Concept & Script agent (`concept-script`). The prior agent, `voiceover-direction`, is at Phase 2 complete (MVP) with its deferred items recorded in `docs/v2-refinements-voiceover-direction.md`; its Phase 3 is treated as empty (no deferred item earned a build pass). Per the build methodology, Phase 1 is a design conversation — **no code is written** — and it opens against this handoff rather than a build prompt.
+This document opens **Phase 1 (Design and discovery)** for the Concept & Script agent (`concept-script`). The prior agent, `voiceover-direction`, is at Phase 2 complete (MVP) with its deferred items recorded in `docs/v2-refinements/v2-refinements-voiceover-direction.md`; its Phase 3 is treated as empty (no deferred item earned a build pass). Per the build methodology, Phase 1 is a design conversation — **no code is written** — and it opens against this handoff rather than a build prompt.
 
 ## System state at handoff
 
