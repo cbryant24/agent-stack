@@ -23,12 +23,13 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 uv sync
 ```
 
-**2. Copy and fill environment variables**
+**2. Set up secrets (1Password)**
+
+API keys are stored in 1Password (the `Personal` vault) and referenced from `.env` as `op://…` secret references — no plaintext keys live in the repo. The `.env.example` template already holds the references, so just copy it:
 ```bash
 cp .env.example .env
-# Edit .env — set PRODUCTION_AGENTS_ANTHROPIC_API_KEY, VOYAGE_API_KEY, OBSIDIAN_OUTPUT_PATH at minimum
-# (set ELEVENLABS_API_KEY too if using voiceover-direction)
 ```
+You need the [1Password CLI](https://developer.1password.com/docs/cli/) installed and signed in (`op signin`), with one item per key in the `Personal` vault (`PRODUCTION_AGENTS_ANTHROPIC_API_KEY`, `ORCHESTRATOR_ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `TAVILY_API_KEY`, `ELEVENLABS_API_KEY`, `LANGSMITH_API_KEY`) — each an **API Credential** item whose secret lives in the `credential` field. Non-secret settings (`OBSIDIAN_OUTPUT_PATH`, paths, URLs) stay as literal values in `.env`. See [Running agents](#running-agents) for how these resolve at runtime.
 
 **3. Start infrastructure (Qdrant + Jaeger)**
 ```bash
@@ -40,6 +41,18 @@ docker compose -f infrastructure/docker-compose.yml up -d
 curl http://localhost:6333/healthz    # Qdrant
 open http://localhost:16686           # Jaeger UI
 ```
+
+## Running agents
+
+Because the API keys in `.env` are 1Password references, any command that calls an API must run through `op run`, which resolves them into the environment:
+```bash
+op run --env-file=.env -- uv run orchestrator chat
+```
+To avoid typing the prefix, add a shell function (run from the repo root, or point `--env-file` at an absolute path to run from anywhere):
+```bash
+agent() { op run --env-file=.env -- uv run "$@"; }
+```
+Then any example below runs as `agent <command>` — e.g. `agent orchestrator chat` or `agent music-curation generate "…"`. The CLI examples in this README omit the prefix for brevity; wrap them with `op run` or `agent`. **Exception:** the test suite uses fake keys, so `uv run pytest` runs without `op run`.
 
 ## Workspace Structure
 
@@ -66,7 +79,7 @@ agent-stack/
 ## Running Tests
 
 ```bash
-uv sync --all-packages && uv run pytest -v   # full suite (879 tests)
+uv sync --all-packages && uv run pytest -v   # full suite
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running. No tests require real Voyage, Anthropic, or ElevenLabs API keys.
@@ -334,6 +347,25 @@ result = draft_sync("a cinematic neon wolf in the rain")          # DraftResult 
 result = generate_sync("batch.md", all_sections=True, endpoint="http://pod:8188")  # GenerationResult
 ```
 
+## Orchestrator
+
+The conversational meta-agent over the whole system — a LangGraph ReAct loop that retrieves from the knowledge bases, reads the live code/docs, and invokes the other agents as tools. Chat is resumable and thread-keyed (SQLite checkpointer):
+```bash
+op run --env-file=.env -- uv run orchestrator chat                 # new session
+op run --env-file=.env -- uv run orchestrator chat --thread <id>   # resume a thread
+```
+Each turn prints its cost and a running session total. The orchestrator uses `ORCHESTRATOR_ANTHROPIC_API_KEY` when set (for separate cost attribution), falling back to `PRODUCTION_AGENTS_ANTHROPIC_API_KEY`.
+
+## Cost tracking
+
+Every run writes a trace to `~/agent-data/runs/<date>/<agent>/<run_id>/trace.jsonl` (per-call tokens + cost, plus a run-end summary that records the chat session). `scripts/agent_costs.py` aggregates these into cost reports (stdlib only — no `op run` needed, it just reads files):
+```bash
+python3 scripts/agent_costs.py                 # per-turn, with totals + input/output cost split
+python3 scripts/agent_costs.py --by-session    # grouped by chat session (thread)
+python3 scripts/agent_costs.py --by-day        # daily rollup
+python3 scripts/agent_costs.py --all-agents    # every agent, not just orchestrator
+```
+
 ## Qdrant Collections
 
 | Collection | Contents |
@@ -347,9 +379,12 @@ result = generate_sync("batch.md", all_sections=True, endpoint="http://pod:8188"
 
 ## Required Environment Variables
 
+Values are supplied as 1Password `op://` references resolved by `op run` (see [Setup](#setup) and [Running agents](#running-agents)).
+
 | Variable | Description |
 |---|---|
-| `PRODUCTION_AGENTS_ANTHROPIC_API_KEY` | Claude API key |
+| `PRODUCTION_AGENTS_ANTHROPIC_API_KEY` | Claude API key (shared by all agents) |
+| `ORCHESTRATOR_ANTHROPIC_API_KEY` | Optional — orchestrator-only Claude key for separate cost attribution; falls back to `PRODUCTION_AGENTS_ANTHROPIC_API_KEY` if unset |
 | `VOYAGE_API_KEY` | Voyage AI key (text + multimodal embeddings) |
 | `OBSIDIAN_OUTPUT_PATH` | Path to your Obsidian vault folder for pipeline notes |
 | `ELEVENLABS_API_KEY` | Required for voiceover-direction (voice sync, usage query, TTS generation) |
