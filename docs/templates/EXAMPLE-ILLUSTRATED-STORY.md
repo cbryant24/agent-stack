@@ -34,7 +34,7 @@ Lock the creative core before any agent runs: the story, theme, references, insi
 Answer "what makes an illustrated narrated short work?" — act-break pacing, dramatic-pause and title-card technique, how generated stills are paced against narration, where chapter songs land. Findings accumulate in `technique_research_outputs` for Visual Generation and Edit Brief to retrieve later.
 
 ```bash
-uv run technique-research identify "a narrated illustrated short story in theatrical acts, voiceover spine, generated-still visuals, and short lyrical chapter songs" -o story-techniques.md
+uv run technique-research identify "a narrated illustrated short story in theatrical acts, voiceover spine, generated-still visuals, and short lyrical chapter songs" -o techniques.md
 ```
 
 ## Step 3 — Dictate (or write) the story
@@ -43,7 +43,7 @@ uv run technique-research identify "a narrated illustrated short story in theatr
 
 Record or type the raw story. Don't over-polish — natural phrasing, jokes, asides, and any `director note` edit instructions are useful texture the next step preserves or resolves.
 
-**Outcome:** `dictation-transcript.md` (or a written draft).
+**Outcome:** `story.md` (or a written draft).
 
 ## Step 4 — Shape the script
 
@@ -52,7 +52,7 @@ Record or type the raw story. Don't over-polish — natural phrasing, jokes, asi
 `shape` mode is built for dictated input: it extracts sections, an emotional arc, and inline `[emotion]` tags, preserves natural stumbles as authentic narration (or `--clean` resolves them into final prose), executes `director note` edits, and adds a music-hint block for the chapter songs. (`draft` from `brief.md` + the technique report works if you wrote rather than dictated.)
 
 ```bash
-uv run concept-script shape dictation-transcript.md -o script.md
+uv run concept-script shape story.md -o script.md
 ```
 
 ## Step 5 — Director script pass
@@ -109,7 +109,7 @@ uv run voiceover-direction report <take_id> --reaction liked_with_changes [--rat
 Free, iterable prompt-craft: define the recurring visual language (style, character likeness, recurring settings, the act-card look, the closing image) into a batch file with full settings recipes. Use the same project id so the stills auto-discover into the edit brief.
 
 ```bash
-uv run visual-generation draft "<style + key scenes + character likeness + act cards + closing image>" -o batch.md --project illustrated-story
+uv run visual-generation draft "<style + key scenes + character likeness + act cards + closing image>" -o visual-batch.md --project illustrated-story
 ```
 
 ## Step 11 — Generate the stills
@@ -121,7 +121,7 @@ Start the RunPod pod, sync the environment and register the workflow on first ru
 ```bash
 uv run visual-generation model sync --endpoint <comfyui-url>
 uv run visual-generation workflow register <exported-api.json>
-uv run visual-generation generate batch.md --all --endpoint <comfyui-url> --max-session-cost <N>
+uv run visual-generation generate visual-batch.md --all --endpoint <comfyui-url> --max-session-cost <N>
 ```
 
 ## Step 12 — Review and report the stills

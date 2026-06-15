@@ -116,16 +116,19 @@ Status reflects current state of the `agent-stack` workspace.
 **Current knowledge base:** the `tutorial_research` collection holds ~564 points across ~30 videos, spanning Suno mechanics (features, tags, syntax, structure, stems, remix, v5.5), music theory (harmony/chord progressions, song structure, genre conventions, rhythm/groove, melody/hooks, mixing/mastering), and cross-cutting production. Seeded deliberately so downstream agents (Music Curation first) can delegate for both Suno-feature and music-theory knowledge from day one.
 
 **Modes:**
+
 - Research mode: Tavily discovery → candidate scoring → ingestion → optional synthesis
 - Plan-only mode: scores candidates without processing (preview before commitment)
 - Retrieve mode: pure query against existing knowledge base, no ingestion
 
 **Invocation:**
+
 - CLI: `uv run tutorial-research "topic"`
 - Library: `from tutorial_research import research, research_sync`
 - MCP exposure planned but not yet built
 
 **Tools it uses:**
+
 - Tavily web search for candidate discovery
 - `yt-intelligence-pipeline.process_video()` for ingestion
 - `MemoryStore.search()` for querying tutorial knowledge; `UserKnowledgeStore`-compatible query for `user_knowledge` (read-only)
@@ -142,6 +145,7 @@ Status reflects current state of the `agent-stack` workspace.
 **The load-bearing claim (what makes it useful):** v1's output **is** the Voiceover-Direction-ready `script.md`, not an abstract brief the user adapts later. If the primary output weren't the artifact the next agent consumes, the agent would produce homework, not input. Both input modes converge on the same editable `script.md`, and `voiceover-direction direct` consumes it unchanged.
 
 **Two input modes → one editable `script.md`:**
+
 - **`draft` (generative)** — sparse seeds (theme/topic, mood, target duration or a musical reference implying it, stylistic references, project type) plus an optional `--ref` prior-script reference. The agent *proposes* structure.
 - **`shape` (curation)** — a verbatim voice-dictation transcript. The agent *extracts* the structure latent in the stream-of-consciousness across four distinct categories: it strips disfluencies; **preserves natural stumbles/self-corrections verbatim as content by default** (the voiceover agent narrates them — the point of the agent; `--clean` opts into resolving them into final prose instead, and is the only category that flag affects); executes and removes the `director note` wake phrase (the one deliberate edit signal — a single deletion, a global/repeated change, a replacement, or a reorder), recording each executed note in a cut trailer; and applies sectioning + inline emotion direction.
 
@@ -168,6 +172,7 @@ Status reflects current state of the `agent-stack` workspace.
 The agent's persistent memory and deep Suno-feature knowledge directly target all three. Memory gives continuity and reproducibility across sessions. Accurate, current Suno knowledge (kept fresh via Tutorial Research delegations) prevents the interface/feature misunderstandings.
 
 **What the agent needs to be good at:**
+
 - Persistent memory of the user's taste and what he's generated, across sessions, so he can iterate on directions he liked instead of restarting
 - Genuine music-theory expertise to reason about *why* a sound works and how to push it in a desired direction
 - Accurate, current knowledge of Suno's prompt vocabulary, tags, and features (built and refreshed via Tutorial Research)
@@ -179,6 +184,7 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 **Inputs:** The user is candid that he doesn't yet know the full set of inputs that would help this agent most — and explicitly wants the agent (and its design) to surface inputs he hasn't thought of. The known starting points are things like stated mood or vibe, reference tracks/artists/films, and an optional brief from the Concept & Script Agent. But this list is a starting point, not a limit. Part of building this agent well is discovering what additional inputs (key/tempo preferences, structural intentions, instrumentation wishes, emotional arc, references to his own prior tracks) genuinely improve its output. The agent should help the user understand what's worth providing.
 
 **Outputs:**
+
 - One or more Suno prompts with style-tag breakdowns
 - Music-theory reasoning explaining the choices (so the user learns and can give better direction next time)
 - Cross-references to similar prior generations in memory (for iteration)
@@ -187,6 +193,7 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 **Tools:** The known tools are the runtime's memory layer (for persistent taste/generation memory), Claude for prompt generation and music-theory reasoning, and delegation to Tutorial Research for Suno-feature and music-theory knowledge gaps. As with inputs, this is not a closed list — the agent may benefit from tools not yet identified (a music-reference lookup, audio analysis of tracks the user points to, BPM/key detection, etc.). New tools should be added when they'd genuinely improve the agent.
 
 **Memory model:**
+
 - The `music_curation_memory` collection contains:
   - The user's stated taste preferences (genres, vibes, things he likes and dislikes)
   - Reference song/artist commentary (what about them resonates)
@@ -206,6 +213,7 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 **Inputs:** Script content as **markdown with headings** (each heading is a section), produced by a human or the planned Concept & Script Agent. Voice references and intended delivery shape the direction. The "use case" categories (narration, character voice, energetic intro) remain examples, not a fixed taxonomy — the agent's direction lessons accumulate the real distinctions over use.
 
 **Outputs:**
+
 - An **editable directed-script file** (`direct`) — markdown, headings preserved, audio tags (`[excited]`, `[whispers]`, etc.) inline, per-section metadata (voice, model, settings, notes) in invisible HTML-comment JSON that round-trips losslessly.
 - **Generated audio files + a `take` record** (`generate`) — born `pending` until the user reacts; section-scoped lineage so re-directs compound.
 - **Recorded reactions** (`report`) — `loved`/`liked`/`liked_with_changes`/`disliked`/`render_failed`, with the load-bearing `disliked` (aesthetic — weighs against the direction) vs. `render_failed` (the render missed, the direction was fine — territory stays open) distinction.
@@ -238,6 +246,7 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 **Inputs (starting points, not exhaustive):** creative intent (subject, style, mood, references); reference images (for IP-Adapter, img2img, or an I2V seed frame); a character LoRA or the intent to train one; target output (still vs. short video, resolution, count); and an optional brief from Concept & Script or Technique Research. As with the other agents, part of building it well is surfacing inputs the director hasn't thought of.
 
 **Outputs:**
+
 - Effective prompts plus a full **settings recipe** (model, sampler, steps, CFG, shift, LoRA stack and strengths, ControlNet / IP-Adapter config), each choice explained in plain language so the director learns as he goes
 - **Generated assets** via the ComfyUI API
 - A **generation record** (prompt + settings + workflow → result → director reaction) for reproducibility and iteration — the same prompt→result→reaction pattern Music Curation uses
@@ -253,6 +262,7 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 **Cross-agent dynamics:** Concept & Script and Technique Research can inform *what* to generate (style, technique); the agent delegates to Tutorial Research for technique/settings knowledge gaps; and it feeds generated stills/clips downstream to Edit Brief as available assets (footage sourcing is otherwise director-handled).
 
 **Realized command surface (the built turn):**
+
 ```bash
 visual-generation draft "<intent>" [-o batch.md] [--template <name>]                      # free Claude prompt-craft → batch file
 visual-generation generate <batch.md> (--section <id> | --all) --endpoint <url> [--max-session-cost N] [-y]  # warm-session GPU spend, soft-inform gate
@@ -281,6 +291,7 @@ visual-generation explain "<concept>" [--level full|concise|quiet];  visual-gene
 **Inputs (v1):** the creative goal (required); optional domain (AMV, game review, travel — inferable), reference image(s), reference video URL, `--ref` to a prior TechniqueReport, and a scope hint (`editing | generation | both` — inferred by default; generation scope targets ComfyUI/Flux/WAN/LoRA territory). The director's toolset is read automatically from `user_knowledge` (`domain=editing_toolset`), not supplied per run.
 
 **Outputs:**
+
 - A **TechniqueReport** — an editable markdown file the director owns (`-o` path): the goal and grounded reference summary; prioritized techniques, each with description, why-it-matters for this goal, how-to-apply grounded in gathered material and the director's toolset (with a paid/Studio upgrade flag where relevant), and where-to-learn-more links to tutorial-research run reports; the gaps that triggered delegations; consumer-directed sections per scope
 - **Per-technique findings** in `technique_research_outputs` — the canonical accumulating layer (text-embedded, `voyage-3-large`; the agent's own check step is the retrieval consumer that earns the collection)
 - The standard run report to the agent-reports vault
@@ -321,6 +332,7 @@ visual-generation explain "<concept>" [--level full|concise|quiet];  visual-gene
 **Inputs (starting points, not exhaustive):** a natural-language message from the user; the conversation thread ID (for continuity); and, implicitly, read access to the codebase, docs, and Qdrant collections. More to be discovered during the build.
 
 **Outputs:**
+
 - Conversational responses grounded in the system's knowledge and code
 - Tool/agent invocations (delegated runs of the other agents) and their results
 - Persisted, resumable conversation threads
@@ -350,6 +362,7 @@ When it finds an issue it does two things and then stops: (1) it writes a **diag
 **Inputs (resolved):** the script (`script.md`), positional and the only required input; everything else is **discovered from existing collections by `project_id`** (default: script stem) with flags as overrides — VO takes from voiceover-direction's records (durations ffprobe-read from disk; positively-reacted take wins, else latest), music + BPM from `music_curation_memory` (`--music` override), generated assets from visual-generation's records (generation intent gives rich section mapping). Director-sourced footage is the one input with no record: `--footage DIR`, scanned and ffprobed, descriptions as optional enrichment. Technique findings are retrieved, never passed. Partial input degrades the corresponding layer with an explicit missing-input notation — never a failure, never a silent guess.
 
 **Outputs:**
+
 - Director-owned `edit-brief.md` written next to the script (supersedes the earlier vault-checklist plan; the vault gets only the standard run report). Frontmatter: `project_id`, `version`, discovered-input provenance; section anchors stable from the script's H1s for Feedback & Iteration.
 - Three layers: timeline skeleton (computed section timestamps), beat grid (computed from BPM — arithmetic, never LLM-estimated), per-section ordered checkbox steps executable in Resolve free, grounded in retrieved findings with toolset fit and upgrade flags verbatim.
 - **Decide vs. surface:** decides time arithmetic, work ordering, finding-to-moment application, asset-to-section mapping; surfaces creative footage selection (ranked candidates) and VO-grid/music-structure reconciliation (nearest-beat proposals).
@@ -371,6 +384,7 @@ When it finds an issue it does two things and then stops: (1) it writes a **diag
 **Inputs (resolved):** the live `edit-brief.md` (positional), feedback inline and/or `--feedback FILE` (batched — one run = one version bump), prior versions from the `versions/` subdir. Ambiguous moment references surface as unresolved, never guessed; mapping resolutions are logged visibly.
 
 **Outputs:**
+
 - The live brief revised **in place by targeted patch** (never re-rendered): `version` bumped, untouched director state preserved, modified/new steps unchecked, pre-patch snapshot to `versions/edit-brief.v{N}.md`
 - A `## Version log` entry in the brief: version, date, feedback verbatim, anchors touched, changes, mapping resolutions, invalidated checked steps
 - Specific change recommendations with Resolve-free actions, grounded in retrieved findings
@@ -547,11 +561,11 @@ The judgment call to flag explicitly: code or architecture changes that would be
 
 Same pattern as Group A in the music-curation arc: focused, well-defined changes, often grouped by surface area for cohesion, each with explicit smoke verification.
 
-**End condition.** All Phase-3-scoped items either landed or moved to `v2-refinements-<agent>.md` with documented reasoning for the defer. The `v2-refinements-<agent>.md` file is the durable record of everything captured-but-not-built; it stays current. All other documentation (agent-stack `README.md`, `docs/architecture.md`, `docs/ai-director-agent-system.md`, the agent's own README) reflects the post-Phase-3 state. A handoff document is produced for the next agent, tool, or application to be built.
+**End condition.** All Phase-3-scoped items either landed or moved to `docs/v2-refinements/<agent>-v2-refinements.md` with documented reasoning for the defer. The `<agent>-v2-refinements.md` file is the durable record of everything captured-but-not-built; it stays current. All other documentation (agent-stack `README.md`, `docs/architecture.md`, `docs/ai-director-agent-system.md`, the agent's own README) reflects the post-Phase-3 state. A handoff document is produced for the next agent, tool, or application to be built.
 
 ### What survives between phases
 
-Between Phase 1 and Phase 2: the updated handoff doc, any new `docs/v2-refinements-<agent>.md` skeleton, any architecture-document additions, plus the user's between-phase research ingestion.
+Between Phase 1 and Phase 2: the updated handoff doc, any new `docs/v2-refinements/<agent>-v2-refinements.md` skeleton, any architecture-document additions, plus the user's between-phase research ingestion.
 
 Between Phase 2 and Phase 3: everything in the codebase plus the updated handoff with deferred-item list and all docs reflecting the post-Phase-2 state.
 

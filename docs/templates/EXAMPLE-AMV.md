@@ -31,7 +31,7 @@ Decide the creative core: source anime, musical direction, target length, mood. 
 Answer "what makes an effective AMV?" The agent grounds the reference, identifies prioritized technique domains, checks existing knowledge, and — behind an interactive cost gate — delegates gaps to Tutorial Research for gathering. Output: an editable `TechniqueReport` plus findings accumulated in `technique_research_outputs` (which Edit Brief and Visual Generation retrieve later automatically).
 
 ```bash
-uv run technique-research identify "an AMV for Demon Slayer with a revenge mood, cut to phonk" -o amv-techniques.md
+uv run technique-research identify "an AMV for Demon Slayer with a revenge mood, cut to phonk" -o techniques.md
 ```
 
 ## Step 3 — Write the script
@@ -41,7 +41,7 @@ uv run technique-research identify "an AMV for Demon Slayer with a revenge mood,
 Turn the theme (plus the technique report as seed material) into the editable `script.md`: logline, sections, inline `[emotion]` tags, and a music-hint block for Music Curation. Use `draft` from sparse seeds, or `shape` from a voice-dictation transcript. The director then edits the file — the agent surfaces structure, the director decides.
 
 ```bash
-uv run concept-script draft "Demon Slayer revenge AMV, phonk, ~90s" --seeds amv-techniques.md -o script.md
+uv run concept-script draft "Demon Slayer revenge AMV, phonk, ~90s" --seeds techniques.md -o script.md
 ```
 
 ## Step 4 — Craft the music
@@ -92,8 +92,8 @@ uv run voiceover-direction report <take_id> --reaction loved
 Character imagery and the thumbnail: free prompt-craft into a batch file, then GPU generation on the RunPod/ComfyUI pod behind its own soft-inform cost gate. Generated stills feed Edit Brief as available assets.
 
 ```bash
-uv run visual-generation draft "Demon Slayer-styled revenge imagery + thumbnail" -o batch.md --project demon-slayer-amv
-uv run visual-generation generate batch.md --all --endpoint <comfyui-url>
+uv run visual-generation draft "Demon Slayer-styled revenge imagery + thumbnail" -o visual-batch.md --project demon-slayer-amv
+uv run visual-generation generate visual-batch.md --all --endpoint <comfyui-url>
 uv run visual-generation report <gen_id> --reaction liked
 ```
 

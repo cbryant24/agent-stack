@@ -51,7 +51,7 @@ uv run visual-generation workflow register exported-api.json
 The free loop: translate the brief into prompts plus full settings recipes (model, sampler, steps, CFG, LoRA stack and strengths), each choice explained in plain language — the tutor role. Output is an editable batch file; iterate on it as long as needed, it costs nothing. Prior liked generations and technique lessons are retrieved from memory automatically.
 
 ```bash
-uv run visual-generation draft "wardrobe variation set: <subject LoRA>, business / casual / outdoor settings, consistent identity, photoreal" -o batch.md --project wardrobe-poc
+uv run visual-generation draft "wardrobe variation set: <subject LoRA>, business / casual / outdoor settings, consistent identity, photoreal" -o visual-batch.md --project wardrobe-poc
 ```
 
 ## Step 5 — Generate
@@ -61,7 +61,7 @@ uv run visual-generation draft "wardrobe variation set: <subject LoRA>, business
 The deliberate commitment: run the batch (or single sections) against the warm pod behind the soft-inform cost gate, with a session cost ceiling.
 
 ```bash
-uv run visual-generation generate batch.md --all --endpoint <comfyui-url> --max-session-cost 5
+uv run visual-generation generate visual-batch.md --all --endpoint <comfyui-url> --max-session-cost 5
 ```
 
 ## Step 6 — Review and report

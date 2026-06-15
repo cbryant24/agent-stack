@@ -37,7 +37,7 @@ Watch through the footage and voice-record impressions as they come: what happen
 `shape` mode is built for exactly this input: the agent extracts the narrative latent in the rambling transcript — sections, pacing, inline emotion direction — while preserving natural stumbles and self-corrections verbatim as authentic vlog narration. Use `director note` wake phrases during dictation for deliberate edits. The director edits the resulting `script.md`.
 
 ```bash
-uv run concept-script shape trip-dictation.md -o script.md
+uv run concept-script shape story.md -o script.md
 ```
 
 ## Step 4 — Optional: research the format
@@ -47,7 +47,7 @@ uv run concept-script shape trip-dictation.md -o script.md
 Worth running for the first vlog, skippable after: pacing conventions, montage technique, how strong travel vlogs balance narration against ambient footage. Findings persist in `technique_research_outputs`, so later vlogs get them for free.
 
 ```bash
-uv run technique-research identify "a reflective 6-minute travel vlog balancing narration with ambient footage" -o vlog-techniques.md
+uv run technique-research identify "a reflective 6-minute travel vlog balancing narration with ambient footage" -o techniques.md
 ```
 
 ## Step 5 — Curate the music

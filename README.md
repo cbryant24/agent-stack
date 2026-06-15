@@ -449,8 +449,24 @@ Three buckets:
 
 - **Agent run reports** auto-write to `~/obsidian/agent-reports/`.
 - **Agent data** (sources, audio, stills, qdrant) lives under `~/agent-data/`.
-- **Director-owned working artifacts** (brief, script, directed script, edit brief) belong in a per-project folder, e.g. `~/agent-projects/<project-slug>/` — not in your personal vault and not in agent-reports. Keep one project's files together (edit-brief writes next to the script and discovers by `project_id`). Never point `knowledge ingest-docs` at a folder of working drafts — they'd be vacuumed into `user_knowledge`.
+- **Director-owned working artifacts** (brief, script, directed script, visual batch, edit brief) belong in a per-project folder, e.g. `~/agent-projects/<project-slug>/` — not in your personal vault and not in agent-reports. Keep one project's files together (edit-brief writes next to the script and discovers by `project_id`). Never point `knowledge ingest-docs` at a folder of working drafts — they'd be vacuumed into `user_knowledge`.
+
+### How should I name files inside a project folder?
+
+**Folder = project slug; filename = artifact type only.** The folder (`~/agent-projects/<slug>/`) already namespaces the project, so do **not** repeat the slug in filenames (`celeste-you-dangerous-visual-batch.md` is wrong). Name each `-o` output by its role:
+
+| Artifact | Filename |
+|---|---|
+| Creative brief | `brief.md` |
+| Source story / dictation | `story.md` |
+| Technique report | `techniques.md` |
+| Script | `script.md` |
+| Directed script | `directed.md` |
+| Visual batch | `visual-batch.md` |
+| Edit brief | `edit-brief.md` |
+
+Type-only names match the agent defaults, read cleanly, and stay stable across projects. (If a project genuinely needs two of one type, qualify the role, not the project — e.g. `visual-batch-thumbnails.md`.)
 
 ### What makes a good `project_id` / slug?
 
-Lowercase-hyphenated, matching the work's identity and asset filenames, stable and unique. Thread it through `--project-id` / `--project` across agents so assets auto-discover downstream.
+Lowercase-hyphenated, matching the work's identity, stable and unique. Thread it through `--project-id` / `--project` across agents so assets auto-discover downstream. The slug names the **folder**, not the files inside it.

@@ -31,7 +31,7 @@ The opinion is the product. Play enough to have a verdict, the 3–4 points that
 "What makes a compelling game review video?" — structure conventions (hook, verdict placement, segment ordering), pacing against narration, b-roll technique. Findings accumulate in `technique_research_outputs` for Edit Brief to retrieve later.
 
 ```bash
-uv run technique-research identify "an 8-minute indie game review video with a strong hook and clear verdict" -o review-techniques.md
+uv run technique-research identify "an 8-minute indie game review video with a strong hook and clear verdict" -o techniques.md
 ```
 
 ## Step 3 — Write the script
@@ -41,7 +41,7 @@ uv run technique-research identify "an 8-minute indie game review video with a s
 For reviews, `shape` mode is the natural fit: dictate impressions of the game stream-of-consciousness, and the agent extracts sections, preserves natural stumbles as authentic narration, executes `director note` edits, and applies inline emotion direction. (`draft` from seeds works too.) The director edits the resulting `script.md` — the argument and verdict are never the agent's call.
 
 ```bash
-uv run concept-script shape dictation-transcript.md -o script.md
+uv run concept-script shape story.md -o script.md
 ```
 
 ## Step 4 — Direct the voiceover
@@ -89,8 +89,8 @@ Record the gameplay that illustrates each scripted point — the moments identif
 Thumbnail and any title/segment cards via the draft → generate → report loop on the ComfyUI pod. Optional — skip if screenshots suffice.
 
 ```bash
-uv run visual-generation draft "bold game-review thumbnail for an indie roguelike, readable at small size" -o thumb-batch.md
-uv run visual-generation generate thumb-batch.md --all --endpoint <comfyui-url>
+uv run visual-generation draft "bold game-review thumbnail for an indie roguelike, readable at small size" -o visual-batch.md
+uv run visual-generation generate visual-batch.md --all --endpoint <comfyui-url>
 ```
 
 ## Step 9 — Build the edit brief

@@ -115,7 +115,7 @@ Each capability is self-contained. The system is a roster, not a fixed pipeline 
 
 **How to run it:**
 ```bash
-uv run technique-research identify "<goal, e.g. an 8-minute indie game review with a strong hook>" -o <name>-techniques.md
+uv run technique-research identify "<goal, e.g. an 8-minute indie game review with a strong hook>" -o techniques.md
 ```
 
 **Director (manual) part:** none required; the director edits the report if desired.
@@ -141,7 +141,7 @@ uv run technique-research identify "<goal, e.g. an 8-minute indie game review wi
 **How to run it:**
 ```bash
 uv run concept-script draft "<seeds>" --seeds <techniques.md> -o script.md      # generative
-uv run concept-script shape <dictation-transcript.md> -o script.md [--clean]     # curation
+uv run concept-script shape story.md -o script.md [--clean]                      # curation
 ```
 
 **Director (manual) part:** edits `script.md` — the argument, message, and which references matter are never the agent's call.
@@ -210,8 +210,8 @@ uv run voiceover-direction report <take_id> --reaction <loved|liked|liked_with_c
 ```bash
 uv run visual-generation model sync --endpoint <comfyui-url>          # first run / after pod changes
 uv run visual-generation workflow register <exported-api.json>
-uv run visual-generation draft "<intent>" -o batch.md --project <id>  # free prompt-craft
-uv run visual-generation generate batch.md --all --endpoint <comfyui-url> --max-session-cost <N>
+uv run visual-generation draft "<intent>" -o visual-batch.md --project <id>  # free prompt-craft
+uv run visual-generation generate visual-batch.md --all --endpoint <comfyui-url> --max-session-cost <N>
 uv run visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5]
 ```
 
@@ -309,7 +309,7 @@ Produce the finished document in this shape (and remove Sections A, B, and the i
    Assembly rules:
    - **Open with a Director step** that captures the creative brief — story/theme, references, inside jokes, the ending — into a `brief.md` before any agent runs. The creative core is the director's, stated once up front; downstream steps consume it.
    - **Thread one `project_id`** through the whole plan: pick a slug and pass it to `voiceover-direction --project-id`, `visual-generation --project`, and `edit-brief --project-id` so takes and stills auto-discover. Pass the selected music to `edit-brief` via `--music`. Do not pass generated stills as `--footage`.
-   - **Output paths — write director-owned files into the project folder.** Every `-o` output (`brief.md`, `script.md`, `directed.md`, the visual batch, `edit-brief.md`) goes in `~/agent-projects/<project-slug>/` (slug = the `project_id`). *Why:* these are director-owned working files, they belong together per project (edit-brief writes next to the script and discovers by `project_id`), and they must stay out of the personal vault, out of `agent-reports`, and out of any folder that gets ingested. You do **not** set paths for machine-managed outputs: generated audio/stills land in `~/agent-data/…` automatically, and run reports auto-write to `~/obsidian/agent-reports/`. (Canonical detail: the "File organization" section of the repo root README.)
+   - **Output paths & filenames.** Every `-o` output goes in the project folder `~/agent-projects/<project-slug>/` (slug = the `project_id`), and is named by **artifact type only** — the folder already namespaces the project, so never repeat the slug in the filename. Use: `brief.md`, `story.md`, `techniques.md`, `script.md`, `directed.md`, `visual-batch.md`, `edit-brief.md`. *Why:* these are director-owned working files, they belong together per project (edit-brief writes next to the script and discovers by `project_id`), and they stay out of the personal vault, out of `agent-reports`, and out of any folder that gets ingested. You do **not** set paths for machine-managed outputs: generated audio/stills land in `~/agent-data/…` automatically, and run reports auto-write to `~/obsidian/agent-reports/`. (Canonical detail: the "File organization" section of the repo root README.)
 
 5. **Not yet possible (only if applicable)** — if the objective requested a v2 capability (e.g. generated video), state the project cannot be fully executed today, name the gap, list the capabilities needed, and give the closest v1 alternative.
 
