@@ -393,3 +393,16 @@ Values are supplied as 1Password `op://` references resolved by `op run` (see [S
 
 visual-generation needs no new key: it talks to a user-supplied ComfyUI `--endpoint` (the pod
 you spin up) and holds no RunPod credential in v1.
+
+## FAQ
+
+Operational questions about the stack as a whole. Agent-specific questions live in each agent's README — e.g. the [orchestrator FAQ](packages/orchestrator/README.md#faq).
+
+**Why must I run agents through `op run`?**
+`.env` holds 1Password `op://` references, not literal keys. `op run --env-file=.env -- …` resolves them into the environment at runtime; plain `uv run` would pass the literal `op://…` string as the key and fail at the API call. The `agent` shell function wraps this. Tests are the exception — they use fake keys, so `uv run pytest` runs without `op run`.
+
+**Do I need `op run` for every command?**
+Only commands that call an API. Tests and linting don't, and shouldn't — they rely on fake keys. Wrapping everything in `op run` works but couples every command to 1Password being unlocked and adds a secret lookup per run.
+
+**What does a separate API key / workspace actually give me?**
+A 1Password/Console workspace gives separate cost visibility (cost reports group by workspace), an optional spend limit, separate rate limits, and access scoping — billing still rolls up to the organization. API keys are tied to the workspace they're created in and **can't be moved**, so relocating the stack means issuing new keys and retiring the old ones.

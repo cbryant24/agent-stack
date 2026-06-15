@@ -114,3 +114,23 @@ music-curation handler over a mocked store — plus the `open → delegated → 
 with one live-Qdrant probe test that auto-skips when Qdrant is down), the `remediate` CLI
 refusal gates (`test_cli.py`), and the checkpointer (two turns on one thread resume accumulated
 state, surviving across saver instances).
+
+## FAQ
+
+**Why is a turn sometimes expensive, even for a simple question?**
+The orchestrator is a ReAct loop: every step is a billed LLM call that re-sends the entire conversation so far, including every tool result. When it reads source with `read_file`/`grep`, that file content joins the context and is re-billed as input on each later call in the turn, and the checkpointed thread re-bills earlier turns on follow-ups. Input *volume* dominates the bill even though output is priced higher per token (Sonnet: $3 input / $15 output per 1M). `scripts/agent_costs.py` shows the input-vs-output split.
+
+**Should I route simple questions to Haiku and keep Sonnet for research?**
+Verbosity and cost are mostly a prompt and retrieval problem, not a model one — the system prompt answers succinctly and reads package READMEs before dropping to source. Routing whole turns to Haiku is risky (it's weaker at the multi-step tool-calling the loop depends on), which is why `MODEL_UTILITY` (Haiku) is reserved for utility roles, not primary reasoning.
+
+**Does reading a README instead of source actually save money?**
+For usage/interface questions, yes — one small README read beats several source reads. For exact runtime behavior the README doesn't document, no — those still need the source. The orchestrator tries the README first and escalates only when it has to.
+
+**What does "(partial — per-turn budget was reached)" mean?**
+Each turn runs under `DEFAULT_BUDGET` — `max_items=12` (the tool-call ceiling), `max_cost_usd=1.50`, `max_wall_time_sec=300`. Hitting any of them ends the turn with a partial answer. The per-session total in the REPL is a soft tally, not a cap.
+
+**A follow-up question failed with a 400 "tool_use ids … without tool_result." Why?**
+When a turn hit the budget mid-tool-call, the saved thread could be left with a `tool_use` that never got a matching `tool_result`, which the Anthropic API rejects on the next turn. Fixed: the post-budget step runs with no tools bound, and history is repaired on load. If you ever hit a poisoned thread, start a fresh session — each `chat` launch is a new thread.
+
+**How do I see what the orchestrator costs?**
+Every turn writes a JSONL trace to `~/agent-data/runs/<date>/orchestrator/<run_id>/`. `scripts/agent_costs.py` aggregates it per turn, `--by-day`, or `--by-session` (a session = one chat thread). Set `ORCHESTRATOR_ANTHROPIC_API_KEY` to bill the orchestrator to its own key for separate cost attribution in the Console.
