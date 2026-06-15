@@ -74,3 +74,19 @@ findings = await recall("speed ramping")                            # -> [(score
 ```
 
 Deferred / V2 items: see `docs/v2-refinements/technique-research-v2-refinements.md`.
+
+## FAQ
+
+Common questions and knowledge gaps. Add entries as they come up.
+
+### Why is the delegation cost estimate so high (e.g. ~$10)?
+The gate sums each gap's child delegation at tutorial-research's default per-run cap (~$2 each), so 5 gaps shows ~$10. It's a worst-case "up to" ceiling, not expected spend — most runs finish under cap, and technique-research's own `max_cost_usd` envelope (default $5) clamps the true total below the displayed sum. Decline gaps to trim it.
+
+### How do I actually "use" the TechniqueReport?
+Two channels. **Automatic:** findings are written to `technique_research_outputs` (and delegations land in `tutorial_research`), which visual-generation and edit-brief query on their runs — no action needed. **Director-mediated:** the report file seeds `concept-script draft --seeds <report>.md` and gives you intent language for `visual-generation draft`. It cannot be fed to `concept-script shape` (shape takes no `--seeds`).
+
+### Is the report "ingested" separately?
+No. Running `identify` ingests findings into the collections as part of the run (you'll see tutorial-research run IDs cited in the report). The `.md` is just your readable copy — there's no separate ingest step.
+
+### Where do this agent's files go?
+`-o` outputs are director-owned working files — put them in your per-project folder (`~/agent-projects/<project-slug>/`). Machine-managed outputs (sources, audio, stills, qdrant) go under `~/agent-data/`, and run reports auto-write to `~/obsidian/agent-reports/`. Canonical, single-source-of-truth detail: [File organization](../../README.md#where-should-project-files-live) in the repo root README.

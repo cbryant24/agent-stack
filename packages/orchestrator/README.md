@@ -134,3 +134,7 @@ When a turn hit the budget mid-tool-call, the saved thread could be left with a 
 
 **How do I see what the orchestrator costs?**
 Every turn writes a JSONL trace to `~/agent-data/runs/<date>/orchestrator/<run_id>/`. `scripts/agent_costs.py` aggregates it per turn, `--by-day`, or `--by-session` (a session = one chat thread). Set `ORCHESTRATOR_ANTHROPIC_API_KEY` to bill the orchestrator to its own key for separate cost attribution in the Console.
+Common questions and knowledge gaps about this agent. Add entries as they come up — capture anything that surprised you about its capabilities, flags, costs, or where its outputs land.
+
+*** Where do this agent's files go? ***
+`-o` outputs are director-owned working files — put them in your per-project folder (`~/agent-projects/<project-slug>/`). Machine-managed outputs (sources, audio, stills, qdrant) go under `~/agent-data/`, and run reports auto-write to `~/obsidian/agent-reports/`. Canonical, single-source-of-truth detail: [File organization](../../README.md#where-should-project-files-live) in the repo root README.

@@ -19,24 +19,26 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 ## Setup
 
 **1. Install dependencies**
+
 ```bash
 uv sync
 ```
 
-**2. Set up secrets (1Password)**
+**2. Copy and fill environment variables**
 
-API keys are stored in 1Password (the `Personal` vault) and referenced from `.env` as `op://…` secret references — no plaintext keys live in the repo. The `.env.example` template already holds the references, so just copy it:
 ```bash
 cp .env.example .env
 ```
 You need the [1Password CLI](https://developer.1password.com/docs/cli/) installed and signed in (`op signin`), with one item per key in the `Personal` vault (`PRODUCTION_AGENTS_ANTHROPIC_API_KEY`, `ORCHESTRATOR_ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `TAVILY_API_KEY`, `ELEVENLABS_API_KEY`, `LANGSMITH_API_KEY`) — each an **API Credential** item whose secret lives in the `credential` field. Non-secret settings (`OBSIDIAN_OUTPUT_PATH`, paths, URLs) stay as literal values in `.env`. See [Running agents](#running-agents) for how these resolve at runtime.
 
 **3. Start infrastructure (Qdrant + Jaeger)**
+
 ```bash
 docker compose -f infrastructure/docker-compose.yml up -d
 ```
 
 **4. Verify**
+
 ```bash
 curl http://localhost:6333/healthz    # Qdrant
 open http://localhost:16686           # Jaeger UI
@@ -87,21 +89,25 @@ Tests that require Qdrant on `localhost:6333` are skipped automatically if it's 
 ## YouTube Pipeline
 
 **Human mode** (Obsidian note):
+
 ```bash
 uv run yt-pipeline "https://www.youtube.com/watch?v=..." --output human
 ```
 
 **Agent mode** (Qdrant ingestion):
+
 ```bash
 uv run yt-pipeline "https://www.youtube.com/watch?v=..." --output agent
 ```
 
 **Both:**
+
 ```bash
 uv run yt-pipeline "https://www.youtube.com/watch?v=..." --output both
 ```
 
 **As a library:**
+
 ```python
 from yt_intelligence_pipeline import process_video
 
@@ -116,21 +122,25 @@ result = await process_video(
 ## Tutorial Research Agent
 
 **Research mode** (Tavily discovery → ingestion → synthesis):
+
 ```bash
 uv run tutorial-research "suno prompt structures"
 ```
 
 **Plan only** (score candidates, no ingestion):
+
 ```bash
 uv run tutorial-research "suno prompt structures" --plan-only
 ```
 
 **Retrieve mode** (query existing knowledge base):
+
 ```bash
 uv run tutorial-research "suno meta tags for vocal control" --type retrieve
 ```
 
 **As a library:**
+
 ```python
 from tutorial_research import research_sync
 
@@ -154,6 +164,7 @@ print(result.report_path)     # Obsidian run report
 ## Music Curation Agent
 
 **Generate Suno prompts:**
+
 ```bash
 music-curation generate "lo-fi hip-hop for late-night studying"
 
@@ -168,21 +179,25 @@ exactly. A one-off spec in the request overrides saved taste for that song witho
 it; to set a durable length/structure preference use `taste add ... --scope arrangement`.
 
 **Record your reaction after running in Suno:**
+
 ```bash
 music-curation report <gen_id> --reaction loved
 ```
 
 **Search your generation history:**
+
 ```bash
 music-curation recall "phonk with heavy bass"
 ```
 
 **Review pending generations:**
+
 ```bash
 music-curation review-pending
 ```
 
 **Seed from session files:**
+
 ```bash
 music-curation seed ingest ~/path/to/session-files/    # interactive confirmation
 music-curation seed ingest ~/path/to/file.md --dry-run # preview without writing
@@ -190,6 +205,7 @@ music-curation seed review-taste                       # review deferred taste l
 ```
 
 **As a library:**
+
 ```python
 from music_curation import curate_sync, MusicResult
 
@@ -207,23 +223,27 @@ budget. So you direct freely, then generate as a deliberate commitment, then rea
 listening.
 
 **Direct a script** (free, re-runnable — writes an editable directed-script file):
+
 ```bash
 voiceover-direction direct script.md
 ```
 
 **Generate audio** (spends ElevenLabs characters — soft-inform cost gate, folds in `report`
 notes as a section re-direction):
+
 ```bash
 voiceover-direction generate script.directed.md --section intro   # one section
 voiceover-direction generate script.directed.md --all             # every section
 ```
 
 **React after listening** (flips the take pending → complete):
+
 ```bash
 voiceover-direction report <take_id> --reaction loved --rating 5
 ```
 
 **Inspect and direct-write:**
+
 ```bash
 voiceover-direction review-pending                        # takes awaiting a reaction
 voiceover-direction recall "energetic intro narration"    # search prior takes + lessons
@@ -232,12 +252,14 @@ voiceover-direction fact add "eleven_v3 reads inline audio tags"
 ```
 
 **Knowledge + voices:**
+
 ```bash
 voiceover-direction knowledge ingest-docs ~/elevenlabs-docs/   # local docs → user_knowledge
 voiceover-direction voice sync                                 # pull voices from ElevenLabs
 ```
 
 **As a library:**
+
 ```python
 from voiceover_direction import direct_sync, generate_sync
 
@@ -254,6 +276,7 @@ you own every decision by editing the file. Both modes emit a single editable `s
 that `voiceover-direction direct` consumes unchanged.
 
 **Generative — sparse seeds → script.md** (optionally anchored to a prior script):
+
 ```bash
 concept-script draft --seeds seeds.md -o script.md
 concept-script draft --seeds seeds.md --ref prior-script.md -o script.md
@@ -263,6 +286,7 @@ concept-script draft "focus, calm, ~2 min, video essay"          # inline seeds
 `packages/concept-script/cli-prompts/SEEDS_TEMPLATE.md` is a fill-in-the-blanks starting point.
 
 **Curation — a verbatim dictation transcript → script.md:**
+
 ```bash
 concept-script shape transcript.txt -o script.md
 concept-script shape transcript.txt --clean      # resolve self-corrections away
@@ -278,6 +302,7 @@ cut trailer live in the pre-heading preamble, which the voiceover parser skips �
 hands off to `voiceover-direction direct` with nothing leaking into narration.
 
 **As a library:**
+
 ```python
 from concept_script import draft_sync, shape_sync
 
@@ -305,22 +330,26 @@ the agent your ComfyUI `--endpoint`; it advises stop-on-drain. Stills-first (Flu
 is a fast-follow on the same path.
 
 **Craft offline** (free — Claude only, no GPU; appends to an editable batch file):
+
 ```bash
 visual-generation draft "<intent>" [-o batch.md] [--template <name>]
 ```
 
 **Generate in one warm session** (spends GPU — soft-inform gate; you spin the pod up):
+
 ```bash
 visual-generation generate batch.md --section <id> --endpoint <url>   # one spec
 visual-generation generate batch.md --all --endpoint <url> [--max-session-cost N] [-y]
 ```
 
 **React after viewing** (flips the generation pending → complete):
+
 ```bash
 visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5]
 ```
 
 **Backend + templates:**
+
 ```bash
 visual-generation model sync --endpoint <url>        # registry from ComfyUI /object_info
 visual-generation model list
@@ -329,6 +358,7 @@ visual-generation workflow list
 ```
 
 **Inspect, direct-write, and tutor:**
+
 ```bash
 visual-generation review-pending                          # generations awaiting a reaction
 visual-generation recall "<query>"                        # search your own generations + lessons + templates
@@ -340,6 +370,7 @@ visual-generation research "<topic>"                      # delegate to tutorial
 ```
 
 **As a library:**
+
 ```python
 from visual_generation import draft_sync, generate_sync
 
@@ -406,3 +437,20 @@ Only commands that call an API. Tests and linting don't, and shouldn't — they 
 
 **What does a separate API key / workspace actually give me?**
 A 1Password/Console workspace gives separate cost visibility (cost reports group by workspace), an optional spend limit, separate rate limits, and access scoping — billing still rolls up to the organization. API keys are tied to the workspace they're created in and **can't be moved**, so relocating the stack means issuing new keys and retiring the old ones.
+Cross-cutting questions and knowledge gaps for the whole stack. Per-agent FAQs live in each package README.
+
+**What is the `agent` command, and why does `agent run …` fail?**
+
+`agent` is a shell wrapper (e.g. `op run --env-file=… -- uv run`). It already includes `uv run`, so call `agent <agent-name> <subcommand>` — e.g. `agent technique-research identify "…"`. Don't add `run`: `agent run …` expands to `uv run run …`, which fails with `Failed to spawn: run`. The docs/examples write `uv run <agent> …`; with the wrapper, replace the whole `uv run` prefix with `agent`.
+
+### Where should project files live?
+
+Three buckets:
+
+- **Agent run reports** auto-write to `~/obsidian/agent-reports/`.
+- **Agent data** (sources, audio, stills, qdrant) lives under `~/agent-data/`.
+- **Director-owned working artifacts** (brief, script, directed script, edit brief) belong in a per-project folder, e.g. `~/agent-projects/<project-slug>/` — not in your personal vault and not in agent-reports. Keep one project's files together (edit-brief writes next to the script and discovers by `project_id`). Never point `knowledge ingest-docs` at a folder of working drafts — they'd be vacuumed into `user_knowledge`.
+
+### What makes a good `project_id` / slug?
+
+Lowercase-hyphenated, matching the work's identity and asset filenames, stable and unique. Thread it through `--project-id` / `--project` across agents so assets auto-discover downstream.

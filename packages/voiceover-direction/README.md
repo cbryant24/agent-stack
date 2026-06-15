@@ -146,3 +146,53 @@ uv run pytest packages/voiceover-direction -q
 Store tests that touch Qdrant skip automatically when it isn't running at `localhost:6333`
 (`@requires_qdrant`). The ElevenLabs client is tested fully mocked — no live key, no characters
 consumed.
+
+## FAQ
+
+Common questions and knowledge gaps. Add entries as they come up.
+
+### Where do generated audio files go?
+`~/agent-data/voiceover/audio/<project_id>/`. You don't choose a location — `generate` makes the ElevenLabs API call and writes there (path stored on each take relative to `agent_data_dir`; the CLI prints the absolute path).
+
+### What does `--raw` do on `generate`?
+It speaks the directed file's markup **verbatim**, skipping the re-direction fold-in. Without `--raw`, if the section's last take has a reported note, `generate` runs a Claude pass to fold that note into revised markup first. Use `--raw` when you're hand-editing the directed file and want to hear exactly your edits.
+
+### Is there a fixed list of audio tags?
+No — `eleven_v3` treats bracketed cues as an open, interpretive set; there is no enum to print. Reliability tiers:
+- **Fairly reliable:** emotion/delivery tags — `[excited]`, `[nervous]`, `[sarcastic]`, `[whispers]`, `[sighs]`, `[laughs]`, `[drawn out]`.
+- **Inconsistent (voice-dependent):** reaction/SFX tags — `[clears throat]`, `[gunshot]`, `[clapping]`. Re-roll, or write them as spoken words instead (`**ahem**` renders far more reliably than `[clears throat]`).
+- **Not real tags:** mood/stage-direction words like `[warm]`, `[building]`, `[reflective]` are not recognized audio tags and may do nothing.
+
+### Why does `[pause]` barely work?
+`eleven_v3` under-honors `[pause]`. Use `<break time="0.6s"/>` for reliable gaps — note the required `s` and self-closing `/`; `<break time="0.6">` is malformed and ignored. Don't overuse breaks: too many makes delivery choppy/robotic, and ElevenLabs warns excessive breaks cause artifacts. Let commas/periods/em-dashes carry most pacing; reserve a few breaks for deliberate beats.
+
+### How do I slow the delivery down?
+`speed` in the section's `settings` (e.g. `"speed": 0.9`). Continuous, range 0.7 (slower) to 1.2 (faster), default 1.0. This is the real pacing knob — stability does **not** control pace.
+
+### What does stability do? Can I use a fractional value?
+Stability is an expressiveness-vs-consistency dial, expressed as a discrete mode for v3: `creative` (0.0) = widest emotional range but more variable/erratic; `natural` (0.5) = balanced; `robust` (1.0) = most consistent but flat/monotone. v3 effectively honors only those three points — a numeric like `0.3` passes through but v3 snaps/ignores it (fractional values are a v2-era control). Set it per section: lower for comedic/sarcastic peaks, raise if it's erratic.
+
+### Why does ALL-CAPS sound unnatural?
+v3 reads caps as shout-emphasis; frequent caps stack into a stilted, declamatory read. Lowercase and let an emotion tag carry the emphasis.
+
+### `direct` keeps rewriting my tags — why?
+`direct` re-derives tags from the script every run. Put tone/intent in the **script** and let `direct` choose tags; if you want exact tags spoken verbatim, edit them in the **directed** file and `generate --raw`.
+
+### How do I see or choose voices?
+Voices sync from ElevenLabs into a local registry at `~/agent-data/voiceover/voices.json` via `voice sync`. There is no `voice list` command — read the file:
+```bash
+jq -r '.[] | "\(.voice_id)  \(.name)  [\(.category)]  \(.description // "")"' ~/agent-data/voiceover/voices.json
+```
+Set a chosen `voice_id` in the directed file's per-section `vo-meta`.
+
+### How do I keep takes discoverable by edit-brief?
+Pass `--project-id <slug>` to `direct`; the id is baked into the directed file's section metadata and inherited by takes. edit-brief discovers takes by `project_id`, so it must match. Run `direct` without it and the id defaults to the script's filename stem.
+
+### How do I find takes I still need to react to?
+`voiceover-direction review-pending` lists every take born `pending`. Each test re-roll creates its own pending take, so expect several per section. Clear them with `report <take_id> --reaction <…>`.
+
+### Cost model
+`direct` is free, iterable LLM work. `generate` spends the scarce monthly ElevenLabs character budget behind a soft-inform gate — generate section-by-section (not `--all`) while tuning.
+
+### Where do this agent's files go?
+`-o` outputs are director-owned working files — put them in your per-project folder (`~/agent-projects/<project-slug>/`). Machine-managed outputs (sources, audio, stills, qdrant) go under `~/agent-data/`, and run reports auto-write to `~/obsidian/agent-reports/`. Canonical, single-source-of-truth detail: [File organization](../../README.md#where-should-project-files-live) in the repo root README.

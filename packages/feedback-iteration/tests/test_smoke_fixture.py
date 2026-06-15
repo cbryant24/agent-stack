@@ -62,7 +62,7 @@ def test_revise_real_brief_end_to_end(tmp_path, monkeypatch):
 
     agent_runtime.config.reset_config()
 
-    original = (REPO_ROOT / "script-draft.edit-brief.md").read_text(encoding="utf-8")
+    original = (REPO_ROOT / "docs" / "templates" / "sample-outputs" / "script-draft.edit-brief.md").read_text(encoding="utf-8")
     brief = tmp_path / "script-draft.edit-brief.md"
     brief.write_text(original, encoding="utf-8")
 

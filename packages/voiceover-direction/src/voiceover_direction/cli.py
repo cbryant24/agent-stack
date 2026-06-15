@@ -251,7 +251,12 @@ def review_pending() -> None:
             click.echo(f"  Voice: {take.voice_id} | Model: {take.model}")
             click.echo(f"  Created: {take.created_at}")
             click.echo(f"  Text: {take.text[:80]}")
-            click.echo("  Use: voiceover-direction report <id> --reaction <X>")
+            reactions = "|".join(REACTIONS)
+            click.echo(
+                f"  Use: voiceover-direction report {take.entry_id} "
+                f"--reaction <{reactions}> [--rating 1-5] [--notes \"...\"] "
+                f"[--context \"...\"]"
+            )
             click.echo("")
 
     asyncio.run(_run())

@@ -143,3 +143,19 @@ uv run pytest packages/concept-script/tests/ -v   # 45 tests
 No test requires real Anthropic or Voyage API keys. The integration test imports
 the `voiceover-direction` parser (a test-only dependency) to prove `script.md` is
 consumed unchanged.
+
+## FAQ
+
+Common questions and knowledge gaps. Add entries as they come up.
+
+### `shape` vs `draft` — which do I use?
+`draft` is generative from sparse seeds and accepts `--seeds <file>` and `--ref`. `shape` is curation of a verbatim dictation transcript and takes only the transcript — no `--seeds`/`--ref`.
+
+### What do I feed `shape`?
+The raw story/dictation itself — not your project plan and not a technique report. Feeding the plan makes the agent narrate the plan. To bring a technique report in, use `draft --seeds <report>.md` instead.
+
+### What does `--clean` do?
+It resolves self-corrections into final prose (keeps the corrected phrasing, drops the abandoned one). Without it, natural stumbles/self-corrections are preserved verbatim as authentic narration. `--clean` affects only that category — disfluency stripping, sectioning, and `director note` edits happen either way.
+
+### Where do this agent's files go?
+`-o` outputs are director-owned working files — put them in your per-project folder (`~/agent-projects/<project-slug>/`). Machine-managed outputs (sources, audio, stills, qdrant) go under `~/agent-data/`, and run reports auto-write to `~/obsidian/agent-reports/`. Canonical, single-source-of-truth detail: [File organization](../../README.md#where-should-project-files-live) in the repo root README.

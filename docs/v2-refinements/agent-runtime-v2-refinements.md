@@ -68,3 +68,11 @@ Opens the REPL. Existing subcommands (generate, report, recall, etc.) stay one-s
 - The system-spec doc (docs/ai-director-agent-system.md) should be updated when this lands to reflect that conversational mode is a supported runtime capability and to document the agent-side interface for opting in.
 
 **Trigger to build.** When the user wants to ask exploratory questions about their music memory or about Suno mechanics, finds the existing `recall` subcommand insufficient (it returns hits, not answers), and the friction of one-shot interaction for exploration becomes a recurring annoyance. Anticipated to happen once the structured-references feature lands and the user starts exploring "what do I know about this artist" / "what mechanics matter for this feature" questions across the populated knowledge base.
+
+## `AGENT_PROJECTS_DIR` — config-owned project working directory (deferred)
+
+Today the per-project working folder (`~/agent-projects/<slug>/` holding `brief.md`, `script.md`, `directed.md`, the visual batch, `edit-brief.md`) is a **documentation convention only** — no agent reads it. The director passes `-o <path>` manually and the runtime never sees the project dir. The runtime-managed paths (`agent_data_dir`, the agent-reports vault) are already centralized in `RuntimeConfig`; the project working dir is the one location convention that lives only in prose (root README "File organization", referenced by the project-plan template and each package README).
+
+**The refinement:** add `AGENT_PROJECTS_DIR` (default `~/agent-projects`) to `RuntimeConfig`, plus a small path helper (e.g. `project_dir(project_id) -> agent_projects_dir / project_id`, created on demand like the other config dirs). Agents that take `-o` and a `--project-id` could then **default their output into `AGENT_PROJECTS_DIR/<project_id>/`** when `-o` is omitted, instead of the cwd. This makes the convention enforceable from one place: change the base dir in `.env`/config and every agent follows, the same way `agent_data_dir` works today.
+
+**Why deferred:** it only earns its place once we want tooling to *auto-place* outputs; until then the doc convention is sufficient and agents stay explicit about `-o`. Scope when built: the config field + helper here, then each agent's CLI opts into the default. No behavior change for explicit `-o` paths.

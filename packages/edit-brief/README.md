@@ -47,3 +47,16 @@ Feedback & Iteration agent.
 
 Phase 1 design: `docs/handoffs/edit-brief-phase1-handoff.md`. Deferred items:
 `docs/v2-refinements/edit-brief-v2-refinements.md`.
+
+## FAQ
+
+Common questions and knowledge gaps. Add entries as they come up.
+
+### How does edit-brief find my assets?
+By `project_id` (default: the script's filename stem). VO takes, music + BPM, and generated stills are auto-discovered from the collections by that id — so thread the same id used by `voiceover-direction --project-id` and `visual-generation --project`.
+
+### Should I pass generated stills via `--footage`?
+No. `--footage DIR` is only for director-shot video clips. Generated stills auto-discover by `project_id`; the selected music track is passed via `--music`.
+
+### Where do this agent's files go?
+`-o` outputs are director-owned working files — put them in your per-project folder (`~/agent-projects/<project-slug>/`). Machine-managed outputs (sources, audio, stills, qdrant) go under `~/agent-data/`, and run reports auto-write to `~/obsidian/agent-reports/`. Canonical, single-source-of-truth detail: [File organization](../../README.md#where-should-project-files-live) in the repo root README.

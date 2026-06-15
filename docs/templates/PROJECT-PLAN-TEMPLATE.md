@@ -87,8 +87,11 @@ Short descriptions of every project flow currently documented. Use these to matc
 - **Video Game Review** (`EXAMPLE-GAME-REVIEW.md`) — a narrated review video. **Voiceover is the spine**; gameplay footage illustrates; music plays a supporting (intro/background) role.
 - **Travel Vlog** (`EXAMPLE-TRAVEL-VLOG.md`) — a narrated vlog cut from the director's own trip footage. **Footage-first**: the material exists before any agent runs and the script is shaped to it. Warm VO, location music, little or no generated imagery.
 - **Wardrobe / Visual Generation** (`EXAMPLE-WARDROBE.md`) — a stills-only engagement: no script, music, or voiceover. Curated generated stills (clothed wardrobe + scene variation), identity-locked via a character LoRA. Visual-Generation-centric.
+- **Illustrated Narrated Short Story** (`EXAMPLE-ILLUSTRATED-STORY.md`) — a narrated short story film. **Voiceover is the spine**, every visual is a **generated still** (no sourced footage), and **custom chapter songs** comment on the story at key moments; optional theatrical act-break structure. The all-generated-visuals + active-music + no-footage shape.
 
 If the objective blends two (e.g. "a short illustrated story with voiceover" ≈ Game Review's VO spine + Wardrobe's stills, minus footage), name the blend and pull the relevant capability sections from B.
+
+**Sample outputs.** For concrete examples of what individual agent output *files* look like (as opposed to the `EXAMPLE-*.md` flow descriptions above), see `docs/templates/sample-outputs/`. It holds one real, chained run — `script-draft.md` (concept-script) → `script-draft.directed.md` (voiceover-direction) → `script-draft.edit-brief.md` (edit-brief). Consult or attach these when planning to ground expectations for each stage's deliverable.
 
 ---
 
@@ -303,9 +306,10 @@ Produce the finished document in this shape (and remove Sections A, B, and the i
    - **Expected outcome:** the artifact or result.
    - **Depends on:** prior steps/artifacts, if any.
 
-   Two assembly rules:
+   Assembly rules:
    - **Open with a Director step** that captures the creative brief — story/theme, references, inside jokes, the ending — into a `brief.md` before any agent runs. The creative core is the director's, stated once up front; downstream steps consume it.
    - **Thread one `project_id`** through the whole plan: pick a slug and pass it to `voiceover-direction --project-id`, `visual-generation --project`, and `edit-brief --project-id` so takes and stills auto-discover. Pass the selected music to `edit-brief` via `--music`. Do not pass generated stills as `--footage`.
+   - **Output paths — write director-owned files into the project folder.** Every `-o` output (`brief.md`, `script.md`, `directed.md`, the visual batch, `edit-brief.md`) goes in `~/agent-projects/<project-slug>/` (slug = the `project_id`). *Why:* these are director-owned working files, they belong together per project (edit-brief writes next to the script and discovers by `project_id`), and they must stay out of the personal vault, out of `agent-reports`, and out of any folder that gets ingested. You do **not** set paths for machine-managed outputs: generated audio/stills land in `~/agent-data/…` automatically, and run reports auto-write to `~/obsidian/agent-reports/`. (Canonical detail: the "File organization" section of the repo root README.)
 
 5. **Not yet possible (only if applicable)** — if the objective requested a v2 capability (e.g. generated video), state the project cannot be fully executed today, name the gap, list the capabilities needed, and give the closest v1 alternative.
 

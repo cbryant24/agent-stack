@@ -111,3 +111,16 @@ uv run pytest packages/agent-runtime/tests/test_reporting.py -v
 ```
 
 Qdrant tests are automatically skipped if Qdrant is not running on `localhost:6333`.
+
+## FAQ
+
+Common questions and knowledge gaps about this agent. Add entries as they come up — capture anything that surprised you about its capabilities, flags, costs, or where its outputs land.
+
+<!-- Template for a new entry:
+### Q: <the question, as you'd actually ask it>
+<the answer, with the exact command/flag/path where relevant>
+-->
+
+### Where do this agent's files go?
+
+`-o` outputs are director-owned working files — put them in your per-project folder (`~/agent-projects/<project-slug>/`). Machine-managed outputs (sources, audio, stills, qdrant) go under `~/agent-data/`, and run reports auto-write to `~/obsidian/agent-reports/`. Canonical, single-source-of-truth detail: [File organization](../../README.md#where-should-project-files-live) in the repo root README.

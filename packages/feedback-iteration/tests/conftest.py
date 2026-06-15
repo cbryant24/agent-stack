@@ -37,4 +37,4 @@ def real_brief_text() -> str:
     """The real edit-brief artifact the parser must round-trip and the agent
     revises. Loaded from the repo root (four levels up from this test file)."""
     root = Path(__file__).resolve().parents[3]
-    return (root / "script-draft.edit-brief.md").read_text(encoding="utf-8")
+    return (root / "docs" / "templates" / "sample-outputs" / "script-draft.edit-brief.md").read_text(encoding="utf-8")
