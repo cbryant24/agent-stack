@@ -56,6 +56,72 @@ A generation you create by clicking around in the ComfyUI web UI never
 touches steps 2-5 — it's a completely separate path (see "UI generations vs.
 CLI generations" below).
 
+## Glossary — plain language
+
+Short, jargon-free definitions. The most important one is the first.
+
+- **The pipeline layers (the mental model).** ComfyUI is the **workbench**
+  (camera body) you run things in; SDXL / Flux / Z-Image are **base models**
+  (lens mounts) — the engines; checkpoints / LoRAs / ControlNets / IP-Adapter
+  are **add-ons built for one specific mount**. "The SDXL/Flux ecosystem" = a
+  base model plus all the add-ons built for it — it is NOT a UI. ComfyUI runs
+  all of them. See [How a generation actually happens](#how-a-generation-actually-happens-pipeline-overview).
+- **checkpoint** — one complete trained model, the whole engine (a finished
+  "lens"). Name comes from training save-points (like a save-game). Big
+  (~2–7 GB). Z-Image ships its parts as separate files (UNET + CLIP + VAE)
+  rather than one bundled checkpoint.
+- **UNET / diffusion model** — the part that does the denoising.
+  **CLIP / text encoder** — the part that reads your prompt (Z-Image uses a
+  4 GB Qwen encoder). **VAE** — converts between pixels and the latent the model
+  works in (VAEEncode = pixels→latent, VAEDecode = latent→pixels). See
+  [KSampler parameters](#ksampler-parameters).
+- **LoRA** — a small trained add-on stacked on a checkpoint to teach it a
+  person/object/style (a "screw-on filter" — can't work alone). Needs ~15–80
+  training images.
+- **denoise (0–1)** — how much of a starting image to dissolve into static
+  before rebuilding it; like dissolving a photo into haze and re-developing.
+  1.0 = brand-new image (text-to-image), low = small tweak. Z-Image img2img
+  works at ~0.4–0.7 and breaks above ~0.85.
+- **img2img** — re-roll a whole image from an existing one. **inpainting** —
+  mask a region and regenerate only that area. **ControlNet** — copy structure
+  (pose/depth/edges) from a reference. **IP-Adapter / InstantID / FaceID** —
+  zero-shot "make it look like this person/object from one photo" (NOT available
+  on Z-Image; SDXL/Flux only).
+- **latent** — the compressed space the model actually works in.
+  EmptySD3LatentImage = a blank latent for text-to-image; VAEEncode produces a
+  latent FROM an image for img2img.
+- **slot map** — the table mapping a spec's fields (seed/steps/cfg/prompt/etc.)
+  to the exact node + input in a registered workflow graph. **workflow
+  template** — a registered, reusable graph + its slot map. **subgraph** — a
+  bundle of nodes collapsed into one box (the Z-Image template is one);
+  right-click → Unpack to edit the nodes inside. See [Slot maps](#slot-maps) and
+  [Subgraphs](#subgraphs).
+
+## What to know — gaps worth closing
+
+Orientation for a newcomer operating this agent:
+
+- **Diffusion is iterative, not one-shot.** Changing what's in a frame
+  (wardrobe, pose, layout, position) is normal practice via img2img / inpaint /
+  ControlNet / LoRA — plan for iteration, not a single perfect generation.
+- **Reference images map to technique by count and subject:** 1 → ControlNet
+  structure; ~15+ → a LoRA; stylized character 20–40, photoreal person 70–80.
+  (A dedicated refinement/reference research doc will be cross-linked here if it
+  lands in the repo.)
+- **Z-Image-Turbo does img2img, inpaint, ControlNet, and LoRA — but NOT
+  IP-Adapter/InstantID** (one-photo zero-shot identity). That capability needs
+  SDXL/Flux.
+- **This agent was text-to-image only.** Refinement (img2img/inpaint + iterate-
+  on-a-prior-generation via a spec `source`) has been added in code — the
+  ComfyUI graphs to back it still need building/registering (see
+  [workflow register](#workflow-register-exported-apijson---name-n)).
+- **Pod realities:** a new pod = a new proxy URL (update `$EP`) AND a fresh
+  ComfyUI that does NOT carry over a workflow you built in the browser — so
+  export ([API format](#save-workflow-format-vs-export-api-format)) +
+  `workflow register` to make a graph permanent. Models on a network volume can
+  load slowly/stall vs local container disk. See
+  [RunPod pod lifecycle & costs](#runpod-pod-lifecycle--costs).
+
 ## ComfyUI workflow concepts
 
 ### Subgraphs
@@ -264,6 +330,165 @@ Images saved to the pod's volume (manual UI generations) are only reachable
 while the pod (or its volume, mounted to a running pod) is accessible —
 either by restarting the ComfyUI pod, or via FileBrowser if it's running.
 Locally-saved CLI generations remain on your Mac regardless of pod state.
+
+## Troubleshooting — plain-language guide
+
+A friendly guide for operators who run this agent but aren't diffusion experts.
+Start here when an image doesn't come out the way you expected — it helps you
+work out *which* of the five steps went sideways before you dig into the
+detailed sections below. (Still stuck after this? Check the [FAQ](#faq).)
+
+### Explain Like I'm Five
+
+The whole pipeline is like ordering a custom drawing from a rented art studio.
+There are five steps, and when something looks wrong it's almost always *one* of
+them that broke:
+
+- **Spin up a RunPod pod** = renting a computer that has a powerful graphics
+  card (a GPU) bolted in. The rental meter starts the instant you turn it on —
+  not when the agent connects.
+- **`model sync`** = telling the agent which art supplies (the *models* — the
+  trained "brains" that actually draw) that rented computer has on hand.
+- **`workflow register`** = teaching the agent the layout of the recipe card, so
+  it knows which blank to write each setting into.
+- **`draft` / `vg-spec`** = writing the order ticket: what to draw, at what
+  settings, and what size.
+- **`generate`** = handing the ticket to the kitchen and waiting for the plate
+  to come back.
+
+So when a picture comes out wrong, ask: was the order ticket wrong (the
+`vg-spec` settings)? Did the studio not have the right supplies (`model sync`)?
+Was the recipe card misread (`workflow register`)? Or did the plate never come
+back from the kitchen (`generate`)?
+
+### When something goes wrong
+
+**Image is oversaturated, blown-out red, or distorted.** The order ticket asked
+for standard-SDXL settings (`cfg 7`, ~30 steps, `dpmpp_2m`, `karras`), but the
+studio's actual supply is Z-Image-Turbo — a "turbo" model (a *distilled* model
+trained to draw in far fewer steps) that wants roughly `cfg 1`, 8 steps,
+`res_multistep`, `simple`. Over-driving a turbo model scorches the image. → See
+[Troubleshooting: oversaturated / distorted output](#troubleshooting-oversaturated--distorted-output).
+
+**Run ends instantly with "Generated: 0 / Skipped" and no error.** There are two
+different kinds of "skip", and they mean opposite things:
+
+- **Plan-phase** — `Skipped (no resolvable workflow template)`: the ticket's
+  `workflow_ref` didn't match any registered recipe card, so *nothing was ever
+  sent to the pod*. Re-check the `workflow_ref` name and that you ran
+  `workflow register`. → See [`workflow_ref`](#workflow_ref).
+- **Spend-phase** — a bare `Skipped:` line: the job *was* sent to the pod, but
+  no finished image came back within the polling window, so the ticket was
+  dropped. This usually means a hang (next entry).
+
+**Generation seems to "hang" for ~10 minutes, then skips.** Some image
+resolutions make Z-Image-Turbo wedge and never finish. In this session
+`1152x896` hung indefinitely, while `1024x1024` with otherwise identical
+settings rendered in seconds. The job sits in the pod's running queue, never
+lands in history, the poller hits its 600-second timeout, and the ticket gets
+skipped. **Fix:** use a resolution the model supports — `1024x1024` is confirmed
+working. To tell a real hang from "still working", use the [First-aid
+checklist](#first-aid-checklist) below: a hang shows the job stuck in `/queue`'s
+`queue_running` with nothing new in `/history`.
+
+**CLI aborts with "ComfyUI endpoint unreachable (ReadTimeout)" even though the
+pod is clearly up.** A single slow history poll took longer than the client's
+30-second timeout, and the client wrongly reported it as the pod being down.
+This is a known rough edge — the client treats one slow poll as a dead pod, not
+necessarily a real pod problem. But a slow poll is often caused by the
+resolution hang described above, so before re-running, check `/queue` (see the
+[First-aid checklist](#first-aid-checklist)): if a job is stuck in
+`queue_running`, the issue is the hang (fix the resolution), not a transient
+timeout — re-running only starts another ~10-minute hang and more GPU cost.
+
+**Every endpoint returns 404, or curl returns nothing at all.** Usually one of
+two mundane causes:
+
+- The pod is stopped — RunPod's proxy returns 404 when nothing is listening on
+  port 8188. Re-check that the pod is actually running.
+- Your `$EP` shell variable isn't set in *this* terminal tab (each new tab
+  starts fresh). Re-set `$EP` to the pod's current proxy URL.
+
+**Pods keep piling up with odd "migration" names.** When RunPod reallocates a
+GPU it can spin up a *new* pod with a *new* proxy URL — so any bookmarked URL or
+old `$EP` breaks and must be updated. Stopped/idle pods still cost money through
+their storage volume. Keep one, delete the extras. → See [RunPod pod lifecycle &
+costs](#runpod-pod-lifecycle--costs).
+
+### First-aid checklist
+
+When you're not sure what the pod is doing, these safe, read-only `curl` probes
+inspect its state *without* the CLI. Set `$EP` to the pod's proxy URL first
+(e.g. `https://<pod-id>-8188.proxy.runpod.net`):
+
+- **`curl $EP/system_stats`** — is the GPU actually attached, and how much VRAM
+  is in use (i.e. are models loaded)?
+- **`curl $EP/queue`** — is a job running or stuck? Check the `queue_running`
+  length.
+- **`curl $EP/history`** — did a job finish, and did it produce any images?
+- **`curl -X POST $EP/interrupt`** — cancel a stuck or running job to stop
+  burning GPU time.
+- **`curl "$EP/view?filename=<name>&subfolder=<sf>&type=output" -o image.png`** —
+  download a finished image straight from the pod. The `-o` keeps the binary out
+  of your terminal; the exact `<name>` and `<sf>` (subfolder) values come from
+  the `/history` output above.
+- **`curl $EP/object_info`** — what models the pod actually has (this is exactly
+  what `model sync` reads).
+
+Remember the two-paths rule: images you make by clicking around in the ComfyUI
+web UI are saved *on the pod's storage* (browse them via
+[FileBrowser](#filebrowser-pod-file-access)), while images made by the
+`generate` CLI are downloaded and saved *locally* on your Mac. → See [UI
+generations vs. CLI generations](#ui-generations-vs-cli-generations).
+
+**Cost reminder:** billing starts the moment a pod spins up and keeps running
+until you stop the pod in the RunPod UI — stop it as soon as you're done.
+
+### Deeper diagnostics
+
+Lower-level checks for when the [First-aid checklist](#first-aid-checklist)
+isn't enough. Reminder on which machine runs what: anything with `$EP`/`curl`
+runs on **your Mac** (it reaches the pod over the network); `ls`/`find`/`file`
+inspection runs in the **pod's web terminal**.
+
+**Progress stuck at "8% / CLIP Text Encode 0%".** It's the cold model load, not
+a hang — the 4 GB Qwen CLIP is loading. Tell loading from wedged by watching
+VRAM: run `curl $EP/system_stats | jq '.devices[0].vram_free'` a few times.
+Dropping = loading (wait); flat = wedged (interrupt). On a healthy pod the UNET
+(~6 GB) and CLIP (~7.5 GB) load to ~15–20 GB resident; if VRAM climbs ~6 GB then
+freezes, the CLIP load stalled.
+
+**"Failed" in the job queue is often your OWN interrupt, not a real error.**
+Confirm via `curl $EP/history/<prompt_id> | jq '.[].status'` — `status_str`
+`"error"` with an `execution_interrupted` message = you cancelled it; an
+`execution_error` message = a real failure (read
+`exception_type`/`exception_message`). The UI's "Copy error message" can
+silently fail; the API is the source of truth.
+
+**Can't find the KSampler / cfg / sampler / denoise to edit them.** The Z-Image
+template is a [subgraph](#subgraphs) — the KSampler/cfg/sampler/denoise/empty-
+latent are hidden inside one box. To edit or rewire it (e.g. for img2img),
+right-click → Unpack Subgraph to flatten it to individual nodes.
+
+**"Value not in list / not in []" on Load Checkpoint.** You've loaded the stock
+SD1.5 default workflow on a Z-Image-only pod (no full checkpoint present, just
+UNET/CLIP/VAE) — wrong graph. Load the Z-Image-Turbo template instead.
+
+**Verifying a model file is fully present on the pod.** In the pod's web
+terminal: `find / -name "<file>.safetensors" -exec ls -lh {} \;` — a complete
+Qwen 3-4B encoder is ~7.5 GB.
+
+**Building an img2img graph from the Z-Image template** (for when you rebuild on
+a fresh pod): unpack the subgraph → add a Load Image and a VAE Encode → add a
+Load VAE set to `ae.safetensors` → wire Load Image→pixels, Load VAE→vae,
+VAE Encode LATENT→KSampler `latent_image` → delete EmptySD3LatentImage → set
+KSampler `denoise` to `0.5`. The img2img prompt must describe the desired
+OUTPUT, not a leftover template default.
+
+**Flaky "migration" pods.** stop/start can land a new host; repeated CLIP-load
+stalls on one pod = bad host/volume — deploy a clean fresh pod rather than
+nursing it, and prefer models on local disk over a network volume to avoid slow
+CLIP loads. See [RunPod pod lifecycle & costs](#runpod-pod-lifecycle--costs).
 
 ## Troubleshooting: oversaturated / distorted output
 
