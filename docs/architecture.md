@@ -638,7 +638,7 @@ max_items=1, max_depth=0, max_cost_usd=1.00, max_wall_time_sec=300
 
 ### visual-generation
 
-ComfyUI-backed diffusion image/video collaborator with a first-class platform-tutor role. **Status: Phase 2 complete (MVP).** 152 tests passing.
+ComfyUI-backed diffusion image/video collaborator with a first-class platform-tutor role. **Status: Phase 2 complete (MVP); img2img refinement (edit-mode) shipped.** 188 tests passing.
 
 A standalone, domain-agnostic generation agent modeled on voiceover-direction (cost inversion) and music-curation (curated memory). It inherits by reasoning, not template — three genuine differences (an extreme two-axis cost inversion, a running pod that costs money during otherwise-free prompt-craft, and a node-graph backend plus a tutor role) shaped the decisions below.
 
@@ -668,6 +668,10 @@ The voice-registry analog: a local JSON file holding checkpoints, LoRAs, VAEs, e
 
 `ComfyUIClient` speaks the native pod API: POST `/prompt` → `prompt_id` → poll `/history/{id}` for outputs → fetch assets from `/view`; `/object_info` enumerates installed models. Workflows are in **API format** (node id → `{class_type, inputs}`). `workflow register` walks an exported graph to **infer a candidate slot map** and required models, then **propose → confirm** (you correct once). The slot map is the right primitive because parameterizing a graph is literally writing values into node inputs by id, and positive vs. negative prompts are distinguishable only by which sampler input they feed. **v1 scope line: consume graphs the user builds in ComfyUI, don't author them** (graph authoring deferred). Flux's parameterization differs from SDXL (CFG≈1.0, a separate flux-guidance slot, no negative prompt) — a per-template slot-map detail the draft chain honors.
 
+#### Refinement (img2img / inpaint, edit-mode)
+
+`draft --from <gen_id>` (or `--image <path>`, plus `--mask` for inpaint) refines an existing image instead of generating from scratch. The source attaches as a `VisualSource` on the spec; at `generate` the parent's asset is uploaded to the pod and written into the template's `init_image` (and `mask`) slot, and the child records `parent_id`/`chain_root_id` lineage. Refinement drafts are **edit-mode**: `craft_spec` seeds the new prompt from the parent's prompt (edit, not rewrite), inherits the parent's model/LoRA/dimensions, and **deterministically strips `settings` to `{}`** so the template's own recipe stands (the caller's `--denoise` is the only authored setting — enforced in code, not just by instruction). A draft-time `inert_inheritance` advisory warns when inherited attributes (LoRAs/dims) have no slot in the resolved template. `workflow register` is idempotent (replace-by-name), so re-registering a template name overwrites it rather than duplicating.
+
 #### Retrieval (`retrieval.py`)
 
 `retrieve_context(query, store, memory_store, ...)` composes three collections in parallel via `asyncio.gather`, mirroring music/voiceover: own `visual_generation_memory` (generations through the multimodal query-space, technique_lessons, workflow_templates) + `user_knowledge` (`comfyui_mechanics` and `runpod_mechanics`, 1.25× score boost — `USER_KNOWLEDGE_SCORE_MULTIPLIER`) + `tutorial_research`. Each leg degrades silently to an empty bucket, so the agent stays useful from a cold start. The standing distinction: `user_knowledge` = documented platform/vendor facts; `technique_lesson` = lessons learned by doing; `tutorial_research` = tutorial-derived technique.
@@ -686,7 +690,7 @@ Inline tutoring also rides the free `draft` call (a concise rationale citing ret
 #### CLI subcommands
 
 ```bash
-visual-generation draft "<intent>" [-o batch.md] [--template <name>]
+visual-generation draft "<intent>" [-o batch.md] [--template <name>] [--from <gen_id> | --image <path>] [--mask <path>] [--denoise N]
 visual-generation generate <batch.md> (--section <id> | --all) --endpoint <url> [--gpu-rate N] [--max-session-cost N] [-y]
 visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5] [--notes ...] [--context ...]
 visual-generation model sync --endpoint <url>;  visual-generation model list

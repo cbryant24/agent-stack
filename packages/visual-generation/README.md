@@ -415,6 +415,16 @@ old `$EP` breaks and must be updated. Stopped/idle pods still cost money through
 their storage volume. Keep one, delete the extras. → See [RunPod pod lifecycle &
 costs](#runpod-pod-lifecycle--costs).
 
+**A refined image (`draft --from`) ignored the source style, or its settings look
+wrong.** Refinement drafts now *edit* the parent: they seed the new prompt from the
+parent's prompt (an edit, not a rewrite) and keep the template's recipe, so a
+`draft --from` spec should carry only `denoise` in its `settings` and a prompt that
+reads as an edit of the original. If you instead see invented settings (e.g.
+`cfg 3.5`, `steps 25`) or a prompt that abandoned the source style, you're on a
+pre-"seed-from-parent" build — pull latest. Manual stopgap: fix the spec's `settings`
+in `visual-batch.md` to the Z-Image recipe (`cfg 1`, `steps 8`,
+`sampler res_multistep`, `scheduler simple`) before `generate`.
+
 ### First-aid checklist
 
 When you're not sure what the pod is doing, these safe, read-only `curl` probes
@@ -489,6 +499,30 @@ OUTPUT, not a leftover template default.
 stalls on one pod = bad host/volume — deploy a clean fresh pod rather than
 nursing it, and prefer models on local disk over a network volume to avoid slow
 CLIP loads. See [RunPod pod lifecycle & costs](#runpod-pod-lifecycle--costs).
+
+**Re-registering a workflow left two templates with the same name.**
+`workflow register` is now **replace-by-name**: re-registering a name overwrites it
+and self-heals any existing duplicates. On older builds it inserted a *new* point
+each time, so `recall`/`workflow list` could show two entries sharing one name (and
+`get_template_by_name` returned an arbitrary one). If you see duplicates, re-register
+the name once to collapse them.
+
+**The "Descriptor" prompt set my descriptor to a stray letter.** The "Descriptor
+(what this template serves)" prompt during `workflow register` is a **free-text
+field with the default in brackets — not a yes/no confirm**. Pressing `y` writes the
+literal string "y". Type a real description, or press Enter to accept the default;
+re-running `register` overwrites it.
+
+**`chain show` shows a generation as `[PENDING]` even though it rendered.** Known
+issue (KI-4 in `docs/visual-generation-known-issues.md`): the generation's status is
+never finalized after a successful render. It's cosmetic — lineage and source
+resolution ignore status, so img2img refinement still works against a PENDING parent.
+
+**Editing a refinement: change the `vg-spec`, not the ComfyUI graph.** The registered
+img2img graph already holds the correct recipe; the order ticket is the `vg-spec` in
+`visual-batch.md`. To change a refinement's prompt or settings, edit the spec — its
+settings get written into the graph at generate time and override the baked-in values
+— rather than rewiring the node graph.
 
 ## Troubleshooting: oversaturated / distorted output
 
