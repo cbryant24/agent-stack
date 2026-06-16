@@ -9,6 +9,7 @@ Surface (the native ComfyUI API, "Export Workflow (API)" format):
   - submit(graph)          POST /prompt            → prompt_id
   - history(prompt_id)     GET  /history/{id}      → the run record (outputs/status)
   - view(filename, ...)    GET  /view              → asset bytes
+  - upload_image(data, …)  POST /upload/image      → pod-side input filename
   - object_info()          GET  /object_info       → installed nodes/models
 
 /ws live progress is deferred to Step 4 (the poll loop): a connect method with no
@@ -130,6 +131,34 @@ class ComfyUIClient:
         params = {"filename": filename, "subfolder": subfolder, "type": type}
         response = await self._request("GET", "/view", params=params)
         return response.content
+
+    async def upload_image(
+        self,
+        data: bytes,
+        filename: str,
+        *,
+        subfolder: str = "",
+        overwrite: bool = True,
+    ) -> str:
+        """POST raw image bytes to /upload/image; return the pod-side filename.
+
+        ComfyUI's LoadImage reads from the pod's input dir, so an init image / mask
+        must be uploaded before a graph can reference it. The returned name (prefixed
+        with the subfolder when ComfyUI nests it) is what goes into the LoadImage
+        `image` input. Callers should pass a collision-proof `filename` (e.g. prefixed
+        with the spec/generation id) since the input dir is shared and overwrite=True.
+        """
+        files = {"image": (filename, data, "application/octet-stream")}
+        form: dict[str, str] = {"overwrite": "true" if overwrite else "false"}
+        if subfolder:
+            form["subfolder"] = subfolder
+        response = await self._request("POST", "/upload/image", files=files, data=form)
+        body = response.json()
+        name = body.get("name")
+        if not name:
+            raise ComfyUIError(f"ComfyUI /upload/image returned no name: {body}")
+        sub = body.get("subfolder", "")
+        return f"{sub}/{name}" if sub else name
 
     async def object_info(self) -> dict[str, Any]:
         """GET /object_info — the full node/model enumeration (parsed by model_sync)."""

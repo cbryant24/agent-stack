@@ -50,6 +50,7 @@ _SPEC_META_FIELDS = (
     "height",
     "lora_stack",
     "workflow_ref",
+    "source",
     "project",
     "identity_bearing",
     "rationale",

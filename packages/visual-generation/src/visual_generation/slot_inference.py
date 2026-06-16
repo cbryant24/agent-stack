@@ -23,6 +23,13 @@ from typing import Any
 _SAMPLER_CLASSES = {"KSampler", "KSamplerAdvanced"}
 _LATENT_CLASSES = {"EmptyLatentImage", "EmptySD3LatentImage", "EmptyLatentImageAdvanced"}
 
+# Image-input (img2img / inpaint) topology. The sampler's `latent_image` traces back
+# through a VAE-encode of an uploaded image instead of an empty latent.
+_VAE_ENCODE_CLASSES = {"VAEEncode", "VAEEncodeForInpaint"}
+_INPAINT_LATENT_CLASSES = {"SetLatentNoiseMask"}  # wraps an encoded latent + a mask
+_IMAGE_LOAD_CLASSES = {"LoadImage"}
+_MASK_LOAD_CLASSES = {"LoadImageMask", "LoadImage"}
+
 # Sampler-bound slots: semantic name → the sampler input_key holding the literal.
 # `seed` differs between KSampler ("seed") and KSamplerAdvanced ("noise_seed").
 _SAMPLER_SCALAR_SLOTS = {
@@ -116,6 +123,76 @@ def _resolve_cond(
     if "conditioning" in inputs:
         return _resolve_cond(graph, inputs.get("conditioning"), flux_guidance, visited)
     return "none", None, None
+
+
+def _infer_image_input_slots(
+    graph: dict[str, Any], latent_link: Any
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str]]:
+    """Detect an img2img / inpaint topology off the sampler's `latent_image`.
+
+    Returns (init_image_slot, mask_slot, notes). Both slots are the `image` input of
+    a LoadImage/LoadImageMask node (the runtime-uploaded filename lands there).
+
+    Recognized shapes:
+      img2img : latent_image ← VAEEncode(pixels ← LoadImage)
+      inpaint : latent_image ← VAEEncodeForInpaint(pixels ← LoadImage, mask ← *)
+                latent_image ← SetLatentNoiseMask(samples ← VAEEncode…, mask ← *)
+    An empty-latent (txt2img) or an unrecognized source yields (None, None, []) — no
+    image slots, behavior unchanged. Partial recognition is reported as a note, never
+    guessed (manual declaration in `workflow register` is the fallback).
+    """
+    nid, node = _source(graph, latent_link)
+    if node is None:
+        return None, None, []
+    class_type = node.get("class_type")
+    if class_type in _LATENT_CLASSES:
+        return None, None, []  # txt2img — no image input
+
+    inputs = node.get("inputs", {})
+    pixels_link: Any = None
+    mask_link: Any = None
+
+    if class_type in _VAE_ENCODE_CLASSES:
+        pixels_link = inputs.get("pixels")
+        mask_link = inputs.get("mask")  # present on VAEEncodeForInpaint
+    elif class_type in _INPAINT_LATENT_CLASSES:
+        mask_link = inputs.get("mask")
+        # Follow `samples` to the VAE-encode that holds the pixels source.
+        s_nid, s_node = _source(graph, inputs.get("samples"))
+        if s_node is not None and s_node.get("class_type") in _VAE_ENCODE_CLASSES:
+            pixels_link = s_node.get("inputs", {}).get("pixels")
+            if mask_link is None:
+                mask_link = s_node.get("inputs", {}).get("mask")
+    else:
+        # Some other latent-producing node — not an image input we recognize.
+        return None, None, []
+
+    notes: list[str] = []
+    init_slot: dict[str, Any] | None = None
+    mask_slot: dict[str, Any] | None = None
+
+    if pixels_link is not None:
+        p_nid, p_node = _source(graph, pixels_link)
+        if p_nid is not None and p_node is not None and p_node.get("class_type") in _IMAGE_LOAD_CLASSES:
+            init_slot = _slot(p_nid, "image")
+        elif p_node is not None:
+            notes.append(
+                f"img2img/inpaint: the latent's pixels source is "
+                f"{p_node.get('class_type')!r}, not a LoadImage. Declare the "
+                "init_image slot manually."
+            )
+
+    if mask_link is not None:
+        m_nid, m_node = _source(graph, mask_link)
+        if m_nid is not None and m_node is not None and m_node.get("class_type") in _MASK_LOAD_CLASSES:
+            mask_slot = _slot(m_nid, "image")
+        elif m_node is not None:
+            notes.append(
+                f"inpaint: the mask source is {m_node.get('class_type')!r}, not a "
+                "LoadImageMask/LoadImage. Declare the mask slot manually."
+            )
+
+    return init_slot, mask_slot, notes
 
 
 def _find_sampler(graph: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None, list[str]]:
@@ -246,6 +323,17 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
                 slot_map["width"] = _slot(dim_id, "width")
             if "height" in d_inputs and not _is_link(d_inputs["height"]):
                 slot_map["height"] = _slot(dim_id, "height")
+
+        # image input (img2img / inpaint) — trace latent_image to a VAE-encoded
+        # upload. Empty-latent topologies return nothing here (txt2img unchanged).
+        init_slot, mask_slot, image_notes = _infer_image_input_slots(
+            graph, s_inputs.get("latent_image")
+        )
+        if init_slot is not None:
+            slot_map["init_image"] = init_slot
+        if mask_slot is not None:
+            slot_map["mask"] = mask_slot
+        result.notes.extend(image_notes)
 
     # checkpoint / unet loaders
     for nid, node in graph.items():

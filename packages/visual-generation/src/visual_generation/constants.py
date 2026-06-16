@@ -155,6 +155,13 @@ RESEARCH_GAP_THRESHOLD = 0.35
 DEFAULT_POLL_INTERVAL_SEC = 2.0
 DEFAULT_POLL_TIMEOUT_SEC = 600.0
 
+# ── Refinement (img2img / inpaint) denoise ────────────────────────────────────
+# A source spec with no explicit `denoise` defaults to this at runtime only (the
+# saved batch file is never rewritten). Z-Image-Turbo's coherent working range is
+# ~0.4–0.7; past DENOISE_COHERENCE_WARN the model loses coherence — warn, never block.
+DEFAULT_DENOISE = 0.5
+DENOISE_COHERENCE_WARN = 0.85
+
 # ── Asset write paths + Q8 opsec (under agent_data_dir / AGENT_SUBDIR) ────────
 AGENT_SUBDIR = "visual-generation"
 ASSETS_SUBDIR = "assets"          # non-identity assets

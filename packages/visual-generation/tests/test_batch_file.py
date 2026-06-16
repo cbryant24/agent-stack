@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from visual_generation.batch_file import append_spec, read_batch, write_batch
-from visual_generation.models import GenerationBatch, LoraRef, VisualSpec
+from visual_generation.models import GenerationBatch, LoraRef, VisualSource, VisualSpec
 
 
 def _spec(heading: str, prompt: str, **overrides) -> VisualSpec:
@@ -35,6 +35,33 @@ def test_round_trip_multiple_specs(tmp_path: Path) -> None:
     restored = read_batch(path)
 
     assert restored == batch  # lossless round-trip
+
+
+def test_source_block_round_trips(tmp_path: Path) -> None:
+    # A refinement spec (img2img from a prior generation, with mask) round-trips.
+    batch = GenerationBatch(
+        project="proj",
+        specs=[
+            _spec(
+                "warmer light",
+                "warmer key light",
+                settings={"denoise": 0.55},
+                source=VisualSource(from_generation="gen-abc", mask="/tmp/mask.png"),
+            ),
+            _spec(
+                "from ref",
+                "in the style of",
+                source=VisualSource(image_path="/tmp/ref.png"),
+            ),
+        ],
+    )
+    path = tmp_path / "p.batch.md"
+    write_batch(batch, path)
+    restored = read_batch(path)
+    assert restored == batch
+    assert restored.specs[0].source.from_generation == "gen-abc"
+    assert restored.specs[0].source.mask == "/tmp/mask.png"
+    assert restored.specs[1].source.image_path == "/tmp/ref.png"
 
 
 def test_prompt_is_the_body_not_duplicated(tmp_path: Path) -> None:

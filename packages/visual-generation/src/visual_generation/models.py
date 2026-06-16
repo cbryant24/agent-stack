@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from visual_generation.constants import (
     ASSET_KIND_CHECKPOINT,
@@ -45,6 +45,29 @@ class LoraRef(BaseModel):
 
     name: str
     strength: float = 1.0
+
+
+class VisualSource(BaseModel):
+    """Where a refinement starts from (img2img / inpaint).
+
+    Two mutually-exclusive forms: `from_generation` (a prior VisualGeneration
+    entry_id, resolved to its `asset_path` at spend time — the iterate loop) OR
+    `image_path` (an external image already on disk — a reference start). `mask`
+    is inpaint-only: a user-supplied PNG path where white = the area to change.
+    An absent source on a spec means current text-to-image behavior, unchanged.
+    """
+
+    from_generation: str | None = None
+    image_path: str | None = None
+    mask: str | None = None  # inpaint only; user-supplied PNG, white = area to change
+
+    @model_validator(mode="after")
+    def _exactly_one_origin(self) -> VisualSource:
+        if bool(self.from_generation) == bool(self.image_path):
+            raise ValueError(
+                "source: set exactly one of from_generation / image_path"
+            )
+        return self
 
 
 # ── Memory entry models (Qdrant payload schema) ───────────────────────────────
@@ -97,6 +120,11 @@ class VisualGeneration(BaseModel):
     # Lineage (spans output types).
     parent_id: str | None = None
     chain_root_id: str = ""  # set to own entry_id when this is a chain root
+    # Refinement provenance (img2img / inpaint): the resolved LOCAL paths used as
+    # init image / mask. parent_id carries the from_generation lineage; these
+    # capture the external-image case (no parent) and aid reproduction.
+    source_image_path: str | None = None
+    source_mask_path: str | None = None
     created_at: str = Field(default_factory=_now_iso)
     reacted_at: str | None = None
 
@@ -224,6 +252,9 @@ class VisualSpec(BaseModel):
     height: int | None = None
     lora_stack: list[LoraRef] = Field(default_factory=list)
     workflow_ref: str | None = None  # WorkflowTemplate name
+    # Refinement origin (img2img / inpaint). Absent = text-to-image (unchanged).
+    # denoise is NOT duplicated here — it rides in `settings`.
+    source: VisualSource | None = None
     project: str | None = None
     identity_bearing: bool = False  # pre-fill only — re-derived at generate
     rationale: str | None = None  # concise tutor rationale for the spec
@@ -264,6 +295,7 @@ class DraftResult(BaseModel):
     template_name: str | None = None
     tutor_notes: list[str] = Field(default_factory=list)  # the user's own surfaced lessons
     missing_models: list[str] = Field(default_factory=list)  # required models absent from registry
+    inert_inheritance: list[str] = Field(default_factory=list)  # inherited attrs the template can't apply
     research_offer: str | None = None  # a gap topic to OFFER (never auto-run)
     overall_reasoning: str = ""
     run_id: str = ""
@@ -281,7 +313,8 @@ class GenerationResult(BaseModel):
     call); GPU spend lives in `session_cost_usd`, never in the BudgetEnvelope."""
 
     results: list[VisualResult] = Field(default_factory=list)
-    skipped: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)  # spec ids skipped
+    skip_reasons: list[str] = Field(default_factory=list)  # plain-language, one per skip
     run_id: str = ""
     status: Literal["completed", "partial", "failed"] = "completed"
     items_processed: int = 0

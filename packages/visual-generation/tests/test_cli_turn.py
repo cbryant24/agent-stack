@@ -38,12 +38,50 @@ def test_cli_draft_shows_spec_lessons_missing_models_and_gap(monkeypatch: pytest
     assert "research" in out.output.lower()        # gap → research offer (not run)
 
 
+def test_cli_draft_from_sets_source_and_shows_refining(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_draft_sync(intent, **kwargs):
+        captured.update(kwargs)
+        spec = VisualSpec(
+            spec_id="spec-2", prompt="warmer key light",
+            source=kwargs["source"], settings={"denoise": kwargs.get("denoise") or 0.5},
+        )
+        return DraftResult(spec=spec, batch_path=Path("/tmp/p.batch.md"), template_name="z-img2img")
+
+    monkeypatch.setattr("visual_generation.cli.draft_sync", fake_draft_sync)
+
+    out = CliRunner().invoke(
+        cli, ["draft", "warmer key light", "--from", "gen-parent", "--denoise", "0.6"]
+    )
+    assert out.exit_code == 0, out.output
+    assert captured["source"].from_generation == "gen-parent"
+    assert captured["denoise"] == 0.6
+    assert "Refining" in out.output and "gen-parent" in out.output
+
+
+def test_cli_draft_from_and_image_is_a_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("visual_generation.cli.draft_sync", lambda *a, **k: None)
+    out = CliRunner().invoke(
+        cli, ["draft", "x", "--from", "gen-1", "--image", "/tmp/ref.png"]
+    )
+    assert out.exit_code != 0
+    assert "only one of --from / --image" in out.output
+
+
+def test_cli_draft_mask_without_source_is_a_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("visual_generation.cli.draft_sync", lambda *a, **k: None)
+    out = CliRunner().invoke(cli, ["draft", "x", "--mask", "/tmp/m.png"])
+    assert out.exit_code != 0
+    assert "--mask requires a source" in out.output
+
+
 # ── generate ─────────────────────────────────────────────────────────────────
 
 
 def _fake_plan() -> SimpleNamespace:
     return SimpleNamespace(
-        plans=[object()],
+        plans=[SimpleNamespace(warnings=[])],
         skipped=[],
         per_run_estimate_usd=0.05,
         estimate_source="default",
@@ -80,6 +118,26 @@ def test_cli_generate_gate_and_stop_prompt(monkeypatch: pytest.MonkeyPatch, tmp_
     assert "Batch drained" in out.output
     assert "Stop your pod" in out.output
     assert "Idle warning" in out.output
+
+
+def test_cli_generate_prints_skip_reasons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    batch = tmp_path / "p.batch.md"
+    batch.write_text("<!-- vg-batch: {} -->\n\n## s\n\nbody\n", encoding="utf-8")
+
+    result = _fake_result()
+    result.skipped = ["spec-9"]
+    result.skip_reasons = [
+        "Skipped spec-9: this workflow can't do img2img/inpaint (no init_image slot) "
+        "— use an img2img/inpaint template"
+    ]
+    monkeypatch.setattr("visual_generation.cli.plan_generation_sync", lambda *a, **k: _fake_plan())
+    monkeypatch.setattr("visual_generation.cli.spend_generation_sync", lambda *a, **k: result)
+
+    out = CliRunner().invoke(
+        cli, ["generate", str(batch), "--all", "--endpoint", "http://pod:8188", "--yes"]
+    )
+    assert out.exit_code == 0, out.output
+    assert "no init_image slot" in out.output  # the plain-language reason, not a bare id
 
 
 def test_cli_generate_gate_can_be_declined(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

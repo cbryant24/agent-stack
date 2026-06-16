@@ -15,7 +15,15 @@ from visual_generation.generate import (
 )
 from visual_generation.graph_build import build_prompt_graph
 from visual_generation.gpu_tracker import GpuLedger
-from visual_generation.models import LoraRef, ModelAsset, VisualSpec
+from visual_generation.models import (
+    LoraRef,
+    ModelAsset,
+    VisualGeneration,
+    VisualSource,
+    VisualSpec,
+    WorkflowTemplate,
+)
+from visual_generation.slot_inference import infer_slots
 
 
 class _FakeComfy:
@@ -201,3 +209,223 @@ def test_plan_skips_specs_without_a_resolvable_template(tmp_path: Path) -> None:
 
     assert plan.plans == []
     assert len(plan.skipped) == 1
+
+
+# ── refinement (img2img / inpaint): source resolution + parent_id lineage ─────
+
+
+class _FakeComfyUpload(_FakeComfy):
+    """_FakeComfy + a recording upload_image (the pod-side seam the source loop uses)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.uploads: list[tuple[str, bytes]] = []
+
+    async def upload_image(self, data, filename, *, subfolder="", overwrite=True) -> str:
+        self.uploads.append((filename, data))
+        return f"input/{filename}"
+
+
+def _img2img_template(*, with_mask: bool) -> WorkflowTemplate:
+    graph: dict = {
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "z.safetensors"}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 1]}},
+        "10": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0]}},
+    }
+    if with_mask:
+        graph["12"] = {"class_type": "LoadImageMask", "inputs": {"image": "", "channel": "red"}}
+        graph["11"] = {"class_type": "VAEEncodeForInpaint", "inputs": {
+            "pixels": ["10", 0], "vae": ["4", 2], "mask": ["12", 0]}}
+    else:
+        graph["11"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["10", 0], "vae": ["4", 2]}}
+    graph["3"] = {"class_type": "KSampler", "inputs": {
+        "seed": 0, "steps": 8, "cfg": 1.0, "sampler_name": "euler", "scheduler": "normal",
+        "denoise": 1.0, "model": ["4", 0], "positive": ["6", 0], "negative": ["6", 0],
+        "latent_image": ["11", 0]}}
+    inferred = infer_slots(graph)
+    return WorkflowTemplate(
+        name="z-img2img", descriptor="img2img", graph=graph,
+        slot_map=inferred.slot_map, required_models=inferred.required_models,
+    )
+
+
+def _source_plan(template: WorkflowTemplate, spec: VisualSpec) -> GenerationPlan:
+    graph, unmapped = build_prompt_graph(spec, template)
+    return GenerationPlan(
+        project=spec.project,
+        plans=[SpecPlan(spec=spec, template=template, graph=graph, resolved_seed=spec.seed, unmapped=unmapped)],
+        per_run_estimate_usd=0.05, estimate_source="default", gpu_rate_usd_per_hr=3.0,
+    )
+
+
+def test_from_generation_resolves_uploads_and_sets_parent_lineage(tmp_path: Path, flux_template) -> None:
+    parent_file = tmp_path / "parentframe.png"
+    parent_file.write_bytes(b"\x89PNGparent")
+    parent = VisualGeneration(
+        entry_id="gen-parent", caption="c", asset_path=str(parent_file), chain_root_id="root-1"
+    )
+    store = _store()
+    store.get_generation = AsyncMock(return_value=parent)
+    fake = _FakeComfyUpload()
+    spec = _spec(source=VisualSource(from_generation="gen-parent"), workflow_ref="z-img2img")
+
+    spend_generation_sync(
+        _source_plan(_img2img_template(with_mask=False), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    # The parent's frame was uploaded with a collision-proof (spec-id-prefixed) name.
+    assert len(fake.uploads) == 1
+    assert fake.uploads[0][0] == f"{spec.spec_id}_parentframe.png"
+    assert fake.uploads[0][1] == b"\x89PNGparent"
+    # The returned pod-side filename landed in the LoadImage init_image slot.
+    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{spec.spec_id}_parentframe.png"
+    # Lineage: parent_id set, chain_root_id INHERITED from the parent.
+    gen = store.upsert_generation.call_args[0][0]
+    assert gen.parent_id == "gen-parent"
+    assert gen.chain_root_id == "root-1"
+    assert gen.source_image_path == str(parent_file)
+
+
+def test_image_path_source_uploads_and_records_provenance_no_parent(tmp_path: Path, flux_template) -> None:
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"\x89PNGref")
+    store = _store()
+    store.get_generation = AsyncMock()
+    fake = _FakeComfyUpload()
+    spec = _spec(source=VisualSource(image_path=str(ref)), workflow_ref="z-img2img")
+
+    spend_generation_sync(
+        _source_plan(_img2img_template(with_mask=False), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    store.get_generation.assert_not_called()  # external image → no memory lookup
+    gen = store.upsert_generation.call_args[0][0]
+    assert gen.parent_id is None
+    assert gen.chain_root_id == gen.entry_id  # its own chain root
+    assert gen.source_image_path == str(ref)
+
+
+def test_inpaint_uploads_init_and_mask(tmp_path: Path, flux_template) -> None:
+    init = tmp_path / "init.png"
+    init.write_bytes(b"i")
+    mask = tmp_path / "mask.png"
+    mask.write_bytes(b"m")
+    store = _store()
+    fake = _FakeComfyUpload()
+    spec = _spec(source=VisualSource(image_path=str(init), mask=str(mask)), workflow_ref="z-img2img")
+
+    spend_generation_sync(
+        _source_plan(_img2img_template(with_mask=True), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    names = [n for n, _ in fake.uploads]
+    assert names == [f"{spec.spec_id}_init.png", f"{spec.spec_id}_mask_mask.png"]
+    # Both slots written into the graph.
+    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{spec.spec_id}_init.png"
+    assert fake.submitted[0]["12"]["inputs"]["image"] == f"input/{spec.spec_id}_mask_mask.png"
+    gen = store.upsert_generation.call_args[0][0]
+    assert gen.source_mask_path == str(mask)
+
+
+def test_source_against_txt2img_template_skips_with_reason(tmp_path: Path, flux_template) -> None:
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"r")
+    store = _store()
+    fake = _FakeComfyUpload()
+    # flux_template is txt2img — it has no init_image slot.
+    spec = _spec(source=VisualSource(image_path=str(ref)), workflow_ref="flux-txt2img")
+
+    result = spend_generation_sync(
+        _source_plan(flux_template, spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    store.upsert_generation.assert_not_called()
+    assert spec.spec_id in result.skipped
+    assert any("no init_image slot" in r for r in result.skip_reasons)
+
+
+def test_missing_parent_generation_skips_with_reason_no_upload(tmp_path: Path, flux_template) -> None:
+    store = _store()
+    store.get_generation = AsyncMock(return_value=None)  # parent not in memory
+    fake = _FakeComfyUpload()
+    spec = _spec(source=VisualSource(from_generation="ghost"), workflow_ref="z-img2img")
+
+    result = spend_generation_sync(
+        _source_plan(_img2img_template(with_mask=False), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    assert fake.uploads == []  # bailed before any upload
+    store.upsert_generation.assert_not_called()
+    assert any("ghost" in r and "not found" in r for r in result.skip_reasons)
+
+
+def test_sourceless_spend_uploads_nothing(tmp_path: Path, flux_template) -> None:
+    fake = _FakeComfyUpload()
+    spend_generation_sync(
+        _plan(flux_template, _spec()), endpoint="x", gpu_rate=3.0, store=_store(),
+        client=fake, ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+    assert fake.uploads == []  # text-to-image path never uploads
+
+
+# ── plan-phase: runtime denoise default + coherence warning ──────────────────
+
+
+def _source_batch_file(tmp_path: Path, ref: Path, **spec_overrides) -> Path:
+    from visual_generation.batch_file import write_batch
+    from visual_generation.models import GenerationBatch
+
+    spec = _spec(
+        heading="refine", workflow_ref="z-img2img",
+        source=VisualSource(image_path=str(ref)), **spec_overrides,
+    )
+    path = tmp_path / "p.batch.md"
+    write_batch(GenerationBatch(project="proj", specs=[spec]), path)
+    return path
+
+
+def test_plan_injects_runtime_denoise_default_without_warning(tmp_path: Path) -> None:
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"r")
+    template = _img2img_template(with_mask=False)
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_template_by_name = AsyncMock(return_value=template)
+    store.recent_generation_costs = AsyncMock(return_value=[])
+    store.get_generation = AsyncMock()
+    # spec has no explicit denoise → runtime default injected into the graph only.
+    path = _source_batch_file(tmp_path, ref, settings={})
+
+    plan = plan_generation_sync(path, all_sections=True, gpu_rate=3.0, store=store, memory_store=MagicMock())
+
+    sp = plan.plans[0]
+    assert sp.graph["3"]["inputs"]["denoise"] == 0.5  # DEFAULT_DENOISE, runtime graph
+    assert sp.warnings == []
+
+
+def test_plan_warns_on_incoherent_denoise(tmp_path: Path) -> None:
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"r")
+    template = _img2img_template(with_mask=False)
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_template_by_name = AsyncMock(return_value=template)
+    store.recent_generation_costs = AsyncMock(return_value=[])
+    store.get_generation = AsyncMock()
+    path = _source_batch_file(tmp_path, ref, settings={"denoise": 0.95})
+
+    plan = plan_generation_sync(path, all_sections=True, gpu_rate=3.0, store=store, memory_store=MagicMock())
+
+    assert any("coherence" in w for w in plan.plans[0].warnings)

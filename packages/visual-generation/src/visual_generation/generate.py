@@ -46,15 +46,17 @@ from visual_generation.comfyui_client import ComfyUIClient
 from visual_generation.constants import (
     AGENT_NAME,
     DEFAULT_ASSET_EXT,
+    DEFAULT_DENOISE,
     DEFAULT_GPU_RATE_USD_PER_HR,
     DEFAULT_POLL_INTERVAL_SEC,
     DEFAULT_POLL_TIMEOUT_SEC,
+    DENOISE_COHERENCE_WARN,
     GENERATE_BUDGET,
     GPU_COST_SPAN_ATTR,
     GPU_SECONDS_SPAN_ATTR,
     SESSION_COST_SPAN_ATTR,
 )
-from visual_generation.graph_build import build_prompt_graph
+from visual_generation.graph_build import apply_source_filenames, build_prompt_graph, write_slot
 from visual_generation.gpu_tracker import GpuLedger, SessionMeter, estimate_per_run_cost
 from visual_generation.identity import derive_identity_bearing
 from visual_generation.models import (
@@ -83,6 +85,17 @@ class SpecPlan:
     graph: dict[str, Any]
     resolved_seed: int | None
     unmapped: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)  # advisory (e.g. high denoise)
+
+
+@dataclass
+class SourceProvision:
+    """Result of resolving + uploading a spec's source before submit."""
+
+    parent_id: str | None
+    chain_root_id: str | None
+    source_image_path: str | None
+    source_mask_path: str | None
 
 
 @dataclass
@@ -132,16 +145,136 @@ def _caption_for(spec: VisualSpec) -> str:
     return (spec.prompt or spec.heading or "generation")[:300]
 
 
+def _effective_settings(spec: VisualSpec) -> dict[str, Any]:
+    """Settings as actually run: a copy of the spec's settings with the refinement
+    denoise default merged in when a source is set and denoise is unset. The spec
+    (and the saved batch file) are never mutated — this is recorded on the
+    generation and used to drive the graph at runtime only."""
+    settings = dict(spec.settings)
+    if spec.source is not None and "denoise" not in settings:
+        settings["denoise"] = DEFAULT_DENOISE
+    return settings
+
+
 def _settings_recipe(sp: SpecPlan) -> dict[str, Any]:
     return {
         "model": sp.spec.model,
         "seed": sp.resolved_seed,
         "width": sp.spec.width,
         "height": sp.spec.height,
-        "settings": sp.spec.settings,
+        "settings": _effective_settings(sp.spec),
         "lora_stack": [lr.model_dump() for lr in sp.spec.lora_stack],
         "workflow_ref": sp.spec.workflow_ref,
     }
+
+
+class _SourceSkip(Exception):
+    """A source spec could not be provisioned — carries the user-facing reason."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+async def _plan_source_advisories(
+    spec: VisualSpec, graph: dict[str, Any], slot_map: dict[str, Any], store: VisualGenerationStore
+) -> list[str]:
+    """Plan-time (no upload) advisories for a source spec: inject the runtime denoise
+    default into the graph, warn on incoherent denoise, and check the source resolves
+    locally. Returns warning strings; never raises (spend re-checks authoritatively)."""
+    warnings: list[str] = []
+    denoise = spec.settings.get("denoise")
+    if denoise is None:
+        denoise = DEFAULT_DENOISE
+        write_slot(graph, slot_map, "denoise", denoise)  # runtime graph only
+    if isinstance(denoise, (int, float)) and denoise > DENOISE_COHERENCE_WARN:
+        warnings.append(
+            f"denoise {denoise} > {DENOISE_COHERENCE_WARN}: Z-Image-Turbo loses "
+            "coherence past ~0.85 — expect the source frame to wash out."
+        )
+
+    src = spec.source
+    assert src is not None
+    if src.from_generation:
+        gen = await store.get_generation(src.from_generation)
+        if gen is None:
+            warnings.append(f"source generation {src.from_generation} not found in memory.")
+        elif not gen.asset_path or not Path(gen.asset_path).exists():
+            warnings.append(
+                f"source generation {src.from_generation} has no readable image on disk."
+            )
+    elif src.image_path and not Path(src.image_path).exists():
+        warnings.append(f"source image {src.image_path} does not exist.")
+    if src.mask and not Path(src.mask).exists():
+        warnings.append(f"mask {src.mask} does not exist.")
+    return warnings
+
+
+async def _provision_source(
+    client: ComfyUIClient, store: VisualGenerationStore, sp: SpecPlan
+) -> SourceProvision | None:
+    """Resolve + upload a spec's source before submit, writing the pod-side filenames
+    into the graph's init_image/mask slots. Returns None for a sourceless (txt2img)
+    spec. Raises `_SourceSkip` (with a plain reason) when the source can't be honored."""
+    src = sp.spec.source
+    if src is None:
+        return None
+
+    parent_id: str | None = None
+    chain_root_id: str | None = None
+    if src.from_generation:
+        gen = await store.get_generation(src.from_generation)
+        local = Path(gen.asset_path) if (gen and gen.asset_path) else None
+        if gen is None or local is None or not local.exists():
+            raise _SourceSkip(
+                f"Skipped {sp.spec.spec_id}: source generation {src.from_generation} "
+                "not found / its image is missing"
+            )
+        parent_id = src.from_generation
+        chain_root_id = gen.chain_root_id or src.from_generation
+    else:
+        local = Path(src.image_path or "")
+        if not src.image_path or not local.exists():
+            raise _SourceSkip(
+                f"Skipped {sp.spec.spec_id}: source image {src.image_path} does not exist"
+            )
+
+    # Collision-proof pod names: the input dir is shared and overwrite=True.
+    pod_init = await client.upload_image(local.read_bytes(), f"{sp.spec.spec_id}_{local.name}")
+
+    pod_mask: str | None = None
+    mask_path: str | None = None
+    if src.mask:
+        mask_local = Path(src.mask)
+        if not mask_local.exists():
+            raise _SourceSkip(
+                f"Skipped {sp.spec.spec_id}: mask {src.mask} does not exist"
+            )
+        pod_mask = await client.upload_image(
+            mask_local.read_bytes(), f"{sp.spec.spec_id}_mask_{mask_local.name}"
+        )
+        mask_path = str(mask_local)
+
+    unmapped = apply_source_filenames(
+        sp.graph, sp.template.slot_map, init_image=pod_init, mask=pod_mask
+    )
+    if "init_image" in unmapped:
+        raise _SourceSkip(
+            f"Skipped {sp.spec.spec_id}: this workflow can't do img2img/inpaint "
+            "(no init_image slot) — use an img2img/inpaint template"
+        )
+    if "mask" in unmapped:
+        raise _SourceSkip(
+            f"Skipped {sp.spec.spec_id}: this workflow has no mask slot for inpaint "
+            "— use an inpaint template or drop the mask"
+        )
+
+    return SourceProvision(
+        parent_id=parent_id,
+        chain_root_id=chain_root_id,
+        source_image_path=str(local),
+        source_mask_path=mask_path,
+    )
 
 
 def _record_gpu(per_run_seconds: float, per_run_cost: float, session_cost: float) -> None:
@@ -181,6 +314,9 @@ async def plan_generation(
             skipped.append(spec.spec_id)
             continue
         graph, unmapped = build_prompt_graph(spec, template)
+        warnings: list[str] = []
+        if spec.source is not None:
+            warnings = await _plan_source_advisories(spec, graph, template.slot_map, store)
         plans.append(
             SpecPlan(
                 spec=spec,
@@ -188,6 +324,7 @@ async def plan_generation(
                 graph=graph,
                 resolved_seed=_resolve_seed(spec),
                 unmapped=unmapped,
+                warnings=warnings,
             )
         )
 
@@ -240,6 +377,11 @@ async def spend_generation(
     wall_time_sec = 0.0
     results: list[VisualResult] = []
     skipped = list(plan.skipped)
+    skip_reasons: list[str] = [
+        f"Skipped {sid}: no resolvable workflow template (set workflow_ref to a "
+        "registered template)"
+        for sid in plan.skipped
+    ]
     tracker_ref: BudgetTracker | None = None
 
     try:
@@ -259,6 +401,15 @@ async def spend_generation(
                         break
 
                     t0 = clock()
+                    # Source refinement: resolve + upload the init image (and mask),
+                    # writing the pod-side filenames into the graph before submit.
+                    try:
+                        provision = await _provision_source(client, store, sp)
+                    except _SourceSkip as skip:
+                        skipped.append(sp.spec.spec_id)
+                        skip_reasons.append(skip.reason)
+                        continue
+
                     prompt_id = await client.submit(sp.graph)
                     record = await _poll_history(
                         client, prompt_id, poll_interval, poll_timeout, clock
@@ -267,6 +418,10 @@ async def spend_generation(
                     if not images:
                         # No output produced — leave it for the user to re-run; don't fabricate.
                         skipped.append(sp.spec.spec_id)
+                        skip_reasons.append(
+                            f"Skipped {sp.spec.spec_id}: the pod produced no image "
+                            "output (re-run, or check the graph/endpoint)"
+                        )
                         continue
 
                     img = images[0]
@@ -296,7 +451,7 @@ async def spend_generation(
                         asset_path=str(asset_path),
                         prompt=sp.spec.prompt,
                         negative_prompt=sp.spec.negative_prompt,
-                        settings=sp.spec.settings,
+                        settings=_effective_settings(sp.spec),
                         model=sp.spec.model,
                         lora_stack=sp.spec.lora_stack,
                         workflow_ref=sp.spec.workflow_ref,
@@ -306,6 +461,12 @@ async def spend_generation(
                         cost_usd=per_run_cost,
                         identity_bearing=identity,
                         project=sp.spec.project,
+                        # Lineage: parent_id + inherited chain root for from_generation;
+                        # resolved source paths for provenance/repro. None for txt2img.
+                        parent_id=provision.parent_id if provision else None,
+                        chain_root_id=(provision.chain_root_id or "") if provision else "",
+                        source_image_path=provision.source_image_path if provision else None,
+                        source_mask_path=provision.source_mask_path if provision else None,
                     )
                     await store.upsert_generation(gen)
                     _record_gpu(per_run_seconds, per_run_cost, running_cost)
@@ -348,6 +509,7 @@ async def spend_generation(
     return GenerationResult(
         results=results,
         skipped=skipped,
+        skip_reasons=skip_reasons,
         run_id=run_id,
         status=status,
         items_processed=len(results),

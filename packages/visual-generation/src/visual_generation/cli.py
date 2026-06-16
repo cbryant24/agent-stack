@@ -53,7 +53,7 @@ from visual_generation.inspect import (
 )
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
-from visual_generation.models import TechniqueLesson, WorkflowTemplate
+from visual_generation.models import TechniqueLesson, VisualSource, WorkflowTemplate
 from visual_generation.report import report_sync
 from visual_generation.research import register_delegate_handlers, render_research, research_sync
 from visual_generation.slot_inference import infer_slots
@@ -270,9 +270,43 @@ def workflow_list(query: str, limit: int) -> None:
 @click.option("--template", "template_name", default=None,
               help="Workflow template name to target (default: the top retrieved template).")
 @click.option("--project", default=None, help="Project tag for the spec.")
-def draft(intent: str, output: str | None, template_name: str | None, project: str | None) -> None:
-    """Craft a settled generation spec from INTENT and append it to a batch file. Free."""
-    result = draft_sync(intent, batch_path=output, template_name=template_name, project=project)
+@click.option("--from", "from_generation", default=None,
+              help="Refine a prior generation by id (img2img/inpaint) — its saved frame "
+                   "becomes the source. Mutually exclusive with --image.")
+@click.option("--image", "image_path", type=click.Path(dir_okay=False), default=None,
+              help="Refine from an external image on disk. Mutually exclusive with --from.")
+@click.option("--mask", "mask_path", type=click.Path(dir_okay=False), default=None,
+              help="Inpaint mask PNG (white = area to change). Requires --from or --image.")
+@click.option("--denoise", type=float, default=None,
+              help="Refinement denoise (default 0.5; coherent range ~0.4–0.7).")
+def draft(intent: str, output: str | None, template_name: str | None, project: str | None,
+          from_generation: str | None, image_path: str | None, mask_path: str | None,
+          denoise: float | None) -> None:
+    """Craft a settled generation spec from INTENT and append it to a batch file. Free.
+
+    With --from/--image the spec becomes a refinement (img2img/inpaint): INTENT is the
+    change to make, the source is resolved + uploaded at `generate`, and the new
+    generation records parent lineage. No hand-editing of the batch JSON needed.
+    """
+    if from_generation and image_path:
+        raise click.UsageError("Use only one of --from / --image (a source has one origin).")
+    if mask_path and not (from_generation or image_path):
+        raise click.UsageError("--mask requires a source (--from or --image).")
+
+    source: VisualSource | None = None
+    if from_generation or image_path:
+        source = VisualSource(
+            from_generation=from_generation, image_path=image_path, mask=mask_path
+        )
+
+    result = draft_sync(
+        intent,
+        batch_path=output,
+        template_name=template_name,
+        project=project,
+        source=source,
+        denoise=denoise,
+    )
 
     if result.status == "failed":
         click.echo("Draft failed (no spec produced).", err=True)
@@ -285,6 +319,16 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
     click.echo(f"Template: {result.template_name or '(none — settings are unconstrained)'}")
     click.echo(f"Model:    {spec.model or '(none chosen)'}"
                + ("  [identity-bearing]" if spec.identity_bearing else ""))
+    if spec.source is not None:
+        origin = (
+            f"generation {spec.source.from_generation}"
+            if spec.source.from_generation
+            else f"image {spec.source.image_path}"
+        )
+        mode = "inpaint" if spec.source.mask else "img2img"
+        click.echo(f"Refining: {origin}  [{mode}]"
+                   + (f"  mask {spec.source.mask}" if spec.source.mask else ""))
+        click.echo(f"Denoise:  {spec.settings.get('denoise', '0.5 (runtime default)')}")
     click.echo(f"\nPrompt:   {spec.prompt}")
     if spec.negative_prompt:
         click.echo(f"Negative: {spec.negative_prompt}")
@@ -292,6 +336,10 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
         click.echo(f"Settings: {spec.settings}")
     if spec.lora_stack:
         click.echo("LoRAs:    " + ", ".join(f"{lr.name}@{lr.strength}" for lr in spec.lora_stack))
+    if result.inert_inheritance:
+        click.echo("\n⚠ Inherited but not applied (this template lacks the slots):")
+        for w in result.inert_inheritance:
+            click.echo(f"  • {w}")
     if result.overall_reasoning:
         click.echo(f"\nRationale: {result.overall_reasoning}")
 
@@ -369,6 +417,11 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
         click.echo(f"  Declared budget:    ${remaining:.4f} remaining after this gate")
     if plan.skipped:
         click.echo(f"  Skipped (no template): {', '.join(plan.skipped)}")
+    plan_warnings = [w for sp in plan.plans for w in sp.warnings]
+    if plan_warnings:
+        click.echo("  ⚠ Refinement advisories:")
+        for w in plan_warnings:
+            click.echo(f"      • {w}")
     if max_session_cost is not None:
         click.echo(f"  Hard ceiling:       ${max_session_cost:.2f} (--max-session-cost)")
         if est > max_session_cost:
@@ -390,7 +443,11 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
         click.echo(f"GPU cost: ${r.gpu_cost_usd:.4f}  (running ${r.session_cost_running_usd:.4f})")
         if r.rationale:
             click.echo(f"Recipe:   {r.rationale}")
-    if result.skipped:
+    if result.skip_reasons:
+        click.echo("\nSkipped:")
+        for reason in result.skip_reasons:
+            click.echo(f"  • {reason}")
+    elif result.skipped:
         click.echo(f"\nSkipped: {', '.join(result.skipped)}")
 
     # ── Drain → stop-prompt + idle warning (Q4: advisory; no RunPod stop) ───

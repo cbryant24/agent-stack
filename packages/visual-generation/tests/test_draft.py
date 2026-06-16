@@ -6,8 +6,22 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from visual_generation.batch_file import read_batch
-from visual_generation.models import ModelAsset, TechniqueLesson
+from visual_generation.models import (
+    ModelAsset,
+    TechniqueLesson,
+    VisualGeneration,
+    VisualSource,
+    WorkflowTemplate,
+)
 from visual_generation.retrieval import RetrievedContext
+
+
+def _template(name: str, slots: set[str]) -> WorkflowTemplate:
+    """A slot-explicit template — the inert-inheritance advisory only reads slot_map."""
+    return WorkflowTemplate(
+        name=name, descriptor="d", graph={},
+        slot_map={s: {"node_id": "1", "input_key": s} for s in slots},
+    )
 
 
 def _crafted(**overrides) -> dict:
@@ -117,3 +131,77 @@ def test_draft_prefills_identity_from_registry(
     )
     # The honest pre-fill derives identity from the registry's LoRA flag.
     assert result.spec.identity_bearing is True
+
+
+def _refinement_store(template: WorkflowTemplate, parent: VisualGeneration | None) -> MagicMock:
+    store = _store(template, [ModelAsset(name="z.safetensors", kind="checkpoint")])
+    store.get_generation = AsyncMock(return_value=parent)
+    return store
+
+
+def test_draft_warns_inherited_lora_and_dims_template_lacks_slots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from visual_generation.draft import draft_sync
+
+    crafted = _crafted(
+        lora_stack=[{"name": "felt.safetensors", "strength": 0.7}], width=832, height=1216,
+    )
+    _patch_chain(monkeypatch, RetrievedContext(), crafted)
+    parent = VisualGeneration(caption="c", lora_stack=[], width=832, height=1216)
+    # img2img-style template: no LoRA loader slot, no width/height slots.
+    template = _template("z-img2img", {"positive", "init_image", "steps", "denoise"})
+    store = _refinement_store(template, parent)
+
+    result = draft_sync(
+        "warmer key light", batch_path=tmp_path / "p.batch.md", template_name="z-img2img",
+        source=VisualSource(from_generation="gen-p"),
+        store=store, memory_store=MagicMock(), llm_client=MagicMock(),
+    )
+
+    assert len(result.inert_inheritance) == 2
+    assert any("LoRA" in w for w in result.inert_inheritance)
+    assert any("dimensions" in w for w in result.inert_inheritance)
+
+
+def test_draft_no_warning_when_template_exposes_slots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from visual_generation.draft import draft_sync
+
+    crafted = _crafted(
+        lora_stack=[{"name": "felt.safetensors", "strength": 0.7}], width=832, height=1216,
+    )
+    _patch_chain(monkeypatch, RetrievedContext(), crafted)
+    parent = VisualGeneration(caption="c", lora_stack=[], width=832, height=1216)
+    template = _template("z-i2i-lora", {"lora_0", "width", "height", "positive", "init_image"})
+    store = _refinement_store(template, parent)
+
+    result = draft_sync(
+        "warmer key light", batch_path=tmp_path / "p.batch.md", template_name="z-i2i-lora",
+        source=VisualSource(from_generation="gen-p"),
+        store=store, memory_store=MagicMock(), llm_client=MagicMock(),
+    )
+
+    assert result.inert_inheritance == []
+
+
+def test_draft_txt2img_has_no_inert_inheritance_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from visual_generation.draft import draft_sync
+
+    # A txt2img draft (no source/parent) carries LoRAs + dims but the gate is off.
+    crafted = _crafted(
+        lora_stack=[{"name": "felt.safetensors", "strength": 0.7}], width=832, height=1216,
+    )
+    _patch_chain(monkeypatch, RetrievedContext(), crafted)
+    template = _template("txt2img", {"positive", "steps"})  # no lora/dim slots either
+    store = _refinement_store(template, parent=None)
+
+    result = draft_sync(
+        "a wolf in neon rain", batch_path=tmp_path / "p.batch.md", template_name="txt2img",
+        store=store, memory_store=MagicMock(), llm_client=MagicMock(),
+    )
+
+    assert result.inert_inheritance == []

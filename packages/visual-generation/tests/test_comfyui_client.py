@@ -125,6 +125,46 @@ async def test_object_info_returns_parsed_json() -> None:
     assert "KSampler" in info
 
 
+# ── upload_image (/upload/image) ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upload_image_posts_multipart_and_returns_name() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = request.content
+        return httpx.Response(200, json={"name": "spec1_init.png", "subfolder": "", "type": "input"})
+
+    name = await _client(handler).upload_image(b"\x89PNGbytes", "spec1_init.png")
+    assert name == "spec1_init.png"
+    assert seen["path"] == "/upload/image"
+    assert seen["method"] == "POST"
+    # Multipart body carries the file field and the filename.
+    assert b"spec1_init.png" in seen["body"]
+    assert b"\x89PNGbytes" in seen["body"]
+
+
+@pytest.mark.asyncio
+async def test_upload_image_prefixes_subfolder_when_nested() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"name": "m.png", "subfolder": "clipspace", "type": "input"})
+
+    name = await _client(handler).upload_image(b"x", "m.png", subfolder="clipspace")
+    assert name == "clipspace/m.png"
+
+
+@pytest.mark.asyncio
+async def test_upload_image_raises_when_no_name() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"subfolder": ""})
+
+    with pytest.raises(ComfyUIError, match="no name"):
+        await _client(handler).upload_image(b"x", "i.png")
+
+
 # ── unreachable endpoint ─────────────────────────────────────────────────────
 
 

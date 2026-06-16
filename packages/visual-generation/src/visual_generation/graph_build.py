@@ -26,6 +26,48 @@ _SETTING_SLOTS = {
 }
 
 
+def write_slot(
+    graph: dict[str, Any], slot_map: dict[str, Any], slot: str, value: Any
+) -> bool:
+    """Write `value` into graph[node_id]["inputs"][input_key] for `slot`.
+
+    Returns True if the template exposes the slot (and the target node exists),
+    False otherwise — the caller decides whether a miss is advisory. This is the
+    single place a value lands in a node input; `build_prompt_graph` (spec values)
+    and `apply_source_filenames` (uploaded init_image/mask) both go through it.
+    """
+    target = slot_map.get(slot)
+    if target is None:
+        return False
+    node = graph.get(target["node_id"])
+    if not isinstance(node, dict):
+        return False
+    node.setdefault("inputs", {})[target["input_key"]] = value
+    return True
+
+
+def apply_source_filenames(
+    graph: dict[str, Any],
+    slot_map: dict[str, Any],
+    *,
+    init_image: str | None = None,
+    mask: str | None = None,
+) -> list[str]:
+    """Write uploaded pod-side filenames into the image-input slots.
+
+    Used at spend time (after `ComfyUIClient.upload_image`) to place the init image
+    and, for inpaint, the mask. Returns the names of any requested slots the template
+    lacks (advisory) — notably an `init_image` miss means the template is txt2img and
+    cannot do img2img/inpaint.
+    """
+    unmapped: list[str] = []
+    if init_image is not None and not write_slot(graph, slot_map, "init_image", init_image):
+        unmapped.append("init_image")
+    if mask is not None and not write_slot(graph, slot_map, "mask", mask):
+        unmapped.append("mask")
+    return unmapped
+
+
 def build_prompt_graph(spec: VisualSpec, template: WorkflowTemplate) -> tuple[dict[str, Any], list[str]]:
     """Return (concrete_graph, unmapped_values).
 
@@ -38,15 +80,8 @@ def build_prompt_graph(spec: VisualSpec, template: WorkflowTemplate) -> tuple[di
     unmapped: list[str] = []
 
     def put(slot: str, value: Any, *, advise_as: str | None = None) -> None:
-        target = slot_map.get(slot)
-        if target is None:
+        if not write_slot(graph, slot_map, slot, value):
             unmapped.append(advise_as or slot)
-            return
-        node = graph.get(target["node_id"])
-        if not isinstance(node, dict):
-            unmapped.append(advise_as or slot)
-            return
-        node.setdefault("inputs", {})[target["input_key"]] = value
 
     if spec.prompt:
         put("positive", spec.prompt)

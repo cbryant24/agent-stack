@@ -30,7 +30,14 @@ from visual_generation.batch_file import append_spec
 from visual_generation.chains import craft_spec
 from visual_generation.constants import AGENT_NAME, DRAFT_BUDGET, RESEARCH_GAP_THRESHOLD
 from visual_generation.identity import derive_identity_bearing
-from visual_generation.models import DraftResult, LoraRef, VisualSpec, WorkflowTemplate
+from visual_generation.models import (
+    DraftResult,
+    LoraRef,
+    VisualGeneration,
+    VisualSource,
+    VisualSpec,
+    WorkflowTemplate,
+)
 from visual_generation.retrieval import RetrievedContext, retrieve_context
 from visual_generation.store import VisualGenerationStore
 
@@ -61,12 +68,19 @@ async def draft(
     batch_path: str | Path | None = None,
     template_name: str | None = None,
     project: str | None = None,
+    source: VisualSource | None = None,
+    denoise: float | None = None,
     budget: BudgetEnvelope | None = None,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
     llm_client: AsyncAnthropic | None = None,
 ) -> DraftResult:
-    """Craft a spec from `intent` and append it to the batch file."""
+    """Craft a spec from `intent` and append it to the batch file.
+
+    When `source` is set, the crafted spec becomes a refinement (img2img / inpaint):
+    the prompt still comes from `intent` (the change to make), and the source —
+    a prior generation or an external image, plus an optional mask — is attached so
+    `generate` resolves + uploads it and records the parent lineage."""
     memory_store = memory_store or get_memory_store()
     store = store or VisualGenerationStore(memory_store)
     await store.ensure_collection()
@@ -81,6 +95,7 @@ async def draft(
     template: WorkflowTemplate | None = None
     tutor_notes: list[str] = []
     missing_models: list[str] = []
+    inert_inheritance: list[str] = []
     research_offer: str | None = None
     overall_reasoning = ""
     tracker_ref: BudgetTracker | None = None
@@ -93,6 +108,12 @@ async def draft(
                 ctx = await retrieve_context(intent, store, memory_store)
                 template = await _resolve_template(store, template_name, ctx)
                 models = store.list_models()
+
+                # Edit-mode refinement: seed from the parent generation so the draft
+                # preserves the source's style/composition rather than rewriting it.
+                parent: VisualGeneration | None = None
+                if source is not None and source.from_generation:
+                    parent = await store.get_generation(source.from_generation)
 
                 client = llm_client or AsyncAnthropic(api_key=get_config().anthropic_api_key)
                 crafted = await craft_spec(intent, ctx, template, models, client)
@@ -109,9 +130,15 @@ async def draft(
                     height=crafted["height"],
                     lora_stack=[LoraRef(**lr) for lr in crafted["lora_stack"]],
                     workflow_ref=template.name if template else None,
+                    source=source,
                     project=project,
                     rationale=crafted["rationale"],
                 )
+                # Explicit refinement denoise overrides the crafted settings (persisted
+                # in the spec; generate's runtime default only applies when unset).
+                if denoise is not None:
+                    spec.settings["denoise"] = denoise
+
                 # Pre-fill identity_bearing honestly from the registry (the same
                 # derivation generate re-runs authoritatively at spend time).
                 spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
@@ -122,6 +149,26 @@ async def draft(
                 if template is not None:
                     known = {a.name for a in models}
                     missing_models = [m for m in template.required_models if m not in known]
+
+                # Warn about attributes inherited from the parent that the resolved
+                # template has no slot for (advisory only — the values stay on the spec
+                # to future-proof for a template that can apply them).
+                if parent is not None and template is not None:
+                    slots = template.slot_map
+                    if spec.lora_stack and not any(k.startswith("lora_") for k in slots):
+                        inert_inheritance.append(
+                            f"{len(spec.lora_stack)} source LoRA(s) won't apply: "
+                            "this template has no LoRA loader slots."
+                        )
+                    if (
+                        (spec.width is not None or spec.height is not None)
+                        and "width" not in slots
+                        and "height" not in slots
+                    ):
+                        inert_inheritance.append(
+                            "Inherited dimensions are ignored for this template; "
+                            "img2img output size follows the init image."
+                        )
 
                 # Research is OFFERED on a gap, never run here (Step 5 owns `research`).
                 if ctx.is_empty() or ctx.max_local_score() < RESEARCH_GAP_THRESHOLD:
@@ -153,6 +200,7 @@ async def draft(
         template_name=template.name if template else None,
         tutor_notes=tutor_notes,
         missing_models=missing_models,
+        inert_inheritance=inert_inheritance,
         research_offer=research_offer,
         overall_reasoning=overall_reasoning,
         run_id=run_id,
