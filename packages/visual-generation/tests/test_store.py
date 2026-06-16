@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from qdrant_client.models import Filter
 
 from visual_generation.constants import (
     COLLECTION_NAME,
@@ -34,6 +35,9 @@ def _make_store(registry: ModelRegistry | None = None) -> tuple[VisualGeneration
     mock_memory.retrieve_points = AsyncMock(return_value=[])
     mock_memory.query_by_vector = AsyncMock(return_value=[])
     mock_memory.ensure_collection = AsyncMock()
+    # Template upserts insert-then-prune via the raw qdrant client's delete.
+    mock_memory._client = MagicMock()
+    mock_memory._client.delete = AsyncMock()
     store = VisualGenerationStore(mock_memory, model_registry=registry)
     return store, mock_memory
 
@@ -346,6 +350,92 @@ async def test_search_templates_filters_by_memory_type() -> None:
     await store.search_templates("flux still")
     matched = _match_values(mock_memory.query_by_vector.call_args.kwargs["filters"])
     assert matched["memory_type"] == MEMORY_TYPE_WORKFLOW_TEMPLATE
+
+
+def _name_match_any(selector: Filter) -> list[str]:
+    """Pull the `name` MatchAny values out of a prune delete selector."""
+    name_cond = next(c for c in selector.must if c.key == "name")
+    return list(name_cond.match.any)
+
+
+@pytest.mark.asyncio
+async def test_upsert_template_inserts_then_prunes_same_name() -> None:
+    """Re-registering a name inserts the new point BEFORE pruning older same-name
+    points (crash-safe: a point for the name always exists), and last-write-wins."""
+    store, mock_memory = _make_store()
+
+    order: list[str] = []
+    mock_memory.upsert_raw_points = AsyncMock(side_effect=lambda *a, **k: order.append("upsert"))
+    mock_memory._client.delete = AsyncMock(side_effect=lambda *a, **k: order.append("prune"))
+
+    tmpl1 = WorkflowTemplate(name="img2img", descriptor="first")
+    tmpl2 = WorkflowTemplate(name="img2img", descriptor="second")
+    await store.upsert_template(tmpl1)
+    await store.upsert_template(tmpl2)
+
+    # Insert precedes prune within every register.
+    assert order == ["upsert", "prune", "upsert", "prune"]
+
+    # Last write wins: the second descriptor is what was written on the second call.
+    second_point = mock_memory.upsert_raw_points.call_args_list[1][0][1][0]
+    assert WorkflowTemplate.from_payload(second_point.payload).descriptor == "second"
+
+    # The prune targets workflow_template AND this name, keeping the just-written id.
+    selector = mock_memory._client.delete.call_args.kwargs["points_selector"]
+    must = {c.key: c for c in selector.must}
+    assert must["memory_type"].match.value == MEMORY_TYPE_WORKFLOW_TEMPLATE
+    assert _name_match_any(selector) == ["img2img"]
+    assert selector.must_not[0].has_id == [tmpl2.entry_id]
+
+
+@pytest.mark.asyncio
+async def test_upsert_template_prune_does_not_touch_other_names() -> None:
+    """Each register prunes only its own name — no cross-name over-deletion."""
+    store, mock_memory = _make_store()
+    alpha = WorkflowTemplate(name="alpha", descriptor="a")
+    beta = WorkflowTemplate(name="beta", descriptor="b")
+    await store.upsert_template(alpha)
+    await store.upsert_template(beta)
+
+    first, second = mock_memory._client.delete.call_args_list
+    assert _name_match_any(first.kwargs["points_selector"]) == ["alpha"]
+    assert first.kwargs["points_selector"].must_not[0].has_id == [alpha.entry_id]
+    assert _name_match_any(second.kwargs["points_selector"]) == ["beta"]
+    assert second.kwargs["points_selector"].must_not[0].has_id == [beta.entry_id]
+
+
+@pytest.mark.asyncio
+async def test_upsert_templates_bulk_dedupes_by_name() -> None:
+    """Bulk seeding collapses same-name specs (last wins) and prunes per distinct name."""
+    store, mock_memory = _make_store()
+    mock_memory.embedding_client.embed = AsyncMock(return_value=[[0.1] * 1024, [0.1] * 1024])
+
+    dup1 = WorkflowTemplate(name="same", descriptor="first")
+    dup2 = WorkflowTemplate(name="same", descriptor="second")
+    other = WorkflowTemplate(name="other", descriptor="o")
+    await store.upsert_templates_bulk([dup1, dup2, other])
+
+    # One point per distinct name; the same-name spec resolves to the last occurrence.
+    points = mock_memory.upsert_raw_points.call_args[0][1]
+    by_name = {p.payload["name"]: p for p in points}
+    assert set(by_name) == {"same", "other"}
+    assert WorkflowTemplate.from_payload(by_name["same"].payload).descriptor == "second"
+
+    # One prune per distinct name, each keeping the id actually written for that name.
+    pruned = {
+        _name_match_any(call.kwargs["points_selector"])[0]: call.kwargs["points_selector"]
+        for call in mock_memory._client.delete.call_args_list
+    }
+    assert set(pruned) == {"same", "other"}
+    assert pruned["same"].must_not[0].has_id == [dup2.entry_id]
+    assert pruned["other"].must_not[0].has_id == [other.entry_id]
+
+
+@pytest.mark.asyncio
+async def test_prune_templates_by_name_noop_on_empty() -> None:
+    store, mock_memory = _make_store()
+    await store.prune_templates_by_name([], "whatever")
+    mock_memory._client.delete.assert_not_called()
 
 
 # ── Model/LoRA registry passthrough (no sync_models on the store) ─────────────

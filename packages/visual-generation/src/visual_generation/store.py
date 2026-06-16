@@ -25,7 +25,14 @@ from typing import Any
 from agent_runtime.memory.embeddings import MultimodalInput
 from agent_runtime.memory.store import MemoryStore
 from agent_runtime.tracing.decorators import record_memory_query
-from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    HasIdCondition,
+    MatchAny,
+    MatchValue,
+    PointStruct,
+)
 
 from visual_generation.constants import (
     COLLECTION_NAME,
@@ -252,23 +259,66 @@ class VisualGenerationStore:
 
     # ── Workflow-template writes ─────────────────────────────────────────────
 
+    async def prune_templates_by_name(self, names: list[str], keep_entry_id: str) -> None:
+        """Delete every workflow_template point whose name is in `names`, EXCEPT the
+        point with id `keep_entry_id`.
+
+        This is the prune half of an insert-then-prune upsert (see `upsert_template`):
+        the template's identity is its `name`, not its uuid `entry_id`, so registering a
+        name must collapse to a single point. We insert the new point FIRST and prune
+        older same-name points (including pre-existing duplicates) AFTER, so at every
+        instant at least one point for the name exists.
+
+        Crash semantics: insert-first means a crash between the insert and this prune
+        leaves a transient same-name duplicate — never data loss; the next register of
+        that name self-heals it. (A delete-then-insert would risk dropping the template
+        outright on a crash in the gap.)
+        """
+        if not names:
+            return
+        await self._store._client.delete(
+            collection_name=self._collection,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(
+                        key="memory_type",
+                        match=MatchValue(value=MEMORY_TYPE_WORKFLOW_TEMPLATE),
+                    ),
+                    FieldCondition(key="name", match=MatchAny(any=names)),
+                ],
+                must_not=[HasIdCondition(has_id=[keep_entry_id])],
+            ),
+        )
+
     async def upsert_template(self, tmpl: WorkflowTemplate) -> None:
-        """Embed the descriptor (text) and upsert as a workflow_template point."""
+        """Embed the descriptor (text) and upsert as a workflow_template point.
+
+        Replace-by-name: insert the new point, then prune any older points sharing this
+        name (keeping the one just written). Idempotent and self-healing for existing
+        same-name duplicates.
+        """
         embedder = self._store.embedding_client
         [vector] = await embedder.embed([tmpl.descriptor], input_type="document")
         point = PointStruct(id=tmpl.entry_id, vector=vector, payload=tmpl.to_payload())
         await self._store.upsert_raw_points(self._collection, [point])
+        await self.prune_templates_by_name([tmpl.name], tmpl.entry_id)
 
     async def upsert_templates_bulk(self, tmpls: list[WorkflowTemplate]) -> None:
         if not tmpls:
             return
+        # Collapse in-batch duplicate names, keeping the last occurrence (last-write-wins),
+        # so a single bulk call can't seed same-name duplicates.
+        deduped = list({t.name: t for t in tmpls}.values())
         embedder = self._store.embedding_client
-        vectors = await embedder.embed([t.descriptor for t in tmpls], input_type="document")
+        vectors = await embedder.embed([t.descriptor for t in deduped], input_type="document")
         points = [
             PointStruct(id=t.entry_id, vector=v, payload=t.to_payload())
-            for t, v in zip(tmpls, vectors)
+            for t, v in zip(deduped, vectors)
         ]
         await self._store.upsert_raw_points(self._collection, points)
+        # Prune older same-name points, keeping the id actually written for each name.
+        for t in deduped:
+            await self.prune_templates_by_name([t.name], t.entry_id)
 
     async def search_templates(
         self,
