@@ -7,6 +7,7 @@ import pytest
 
 from visual_generation.batch_file import read_batch
 from visual_generation.models import (
+    LoraRef,
     ModelAsset,
     TechniqueLesson,
     VisualGeneration,
@@ -205,3 +206,120 @@ def test_draft_txt2img_has_no_inert_inheritance_warning(
     )
 
     assert result.inert_inheritance == []
+
+
+# ── Edit-mode seed-from-parent inheritance (real craft_spec) ──────────────────
+
+
+def _fake_client(json_text: str) -> MagicMock:
+    """An AsyncAnthropic stand-in whose single response carries `json_text`."""
+    msg = MagicMock()
+    msg.usage.input_tokens = 200
+    msg.usage.output_tokens = 80
+    msg.content = [MagicMock(text=json_text)]
+    client = MagicMock()
+    client.messages.create = AsyncMock(return_value=msg)
+    return client
+
+
+# A craft response that INVENTS a recipe and REWRITES the prompt — exactly what
+# edit-mode enforcement must override (settings) / preserve (prompt).
+_INVENTED_JSON = """\
+{
+  "prompt": "warmer key light on the felt puppet, cozy studio glow",
+  "negative_prompt": null,
+  "settings": {"steps": 25, "cfg": 3.5, "sampler": "euler"},
+  "model": "wrong-model.safetensors",
+  "seed_strategy": "fixed",
+  "seed": 7,
+  "width": 1024,
+  "height": 1024,
+  "lora_stack": [{"name": "invented.safetensors", "strength": 1.0}],
+  "rationale": "Bumped steps for detail."
+}"""
+
+
+def _parent_gen() -> VisualGeneration:
+    return VisualGeneration(
+        caption="c",
+        prompt="a felt puppet wolf, soft studio lighting, shallow depth of field",
+        model="z.safetensors",
+        lora_stack=[LoraRef(name="felt.safetensors", strength=0.7)],
+        width=832,
+        height=1216,
+    )
+
+
+@pytest.mark.asyncio
+async def test_craft_spec_edit_mode_inherits_parent_and_strips_recipe() -> None:
+    from visual_generation.chains import craft_spec
+
+    parent = _parent_gen()
+    template = _template("z-img2img", {"positive", "init_image", "steps", "denoise"})
+    models = [ModelAsset(name="z.safetensors", kind="checkpoint")]
+    client = _fake_client(_INVENTED_JSON)
+
+    spec = await craft_spec(
+        "warmer key light", RetrievedContext(), template, models, client,
+        parent=parent, refinement=True,
+    )
+
+    # Invented recipe stripped — the template recipe stands, caller owns denoise.
+    assert spec["settings"] == {}
+    # Identity-bearing attrs inherited from the parent, not the model's guesses.
+    assert spec["model"] == "z.safetensors"
+    assert spec["lora_stack"] == [{"name": "felt.safetensors", "strength": 0.7}]
+    assert spec["width"] == 832
+    assert spec["height"] == 1216
+    # The craft's edited prompt is kept (this is an edit, not a no-op).
+    assert spec["prompt"] == "warmer key light on the felt puppet, cozy studio glow"
+    # The source prompt was anchored into the user message Sonnet received.
+    _, kwargs = client.messages.create.call_args
+    user_msg = kwargs["messages"][0]["content"]
+    assert parent.prompt in user_msg
+
+
+def test_draft_from_parent_appends_denoise_only_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from visual_generation.draft import draft_sync
+
+    # Patch ONLY retrieve_context — exercise the real craft_spec + enforcement.
+    import importlib
+
+    draft_mod = importlib.import_module("visual_generation.draft")
+    monkeypatch.setattr(draft_mod, "retrieve_context", AsyncMock(return_value=RetrievedContext()))
+
+    parent = _parent_gen()
+    template = _template("z-img2img", {"positive", "init_image", "steps", "denoise"})
+    store = _refinement_store(template, parent)
+
+    out = tmp_path / "p.batch.md"
+    result = draft_sync(
+        "warmer key light", batch_path=out, template_name="z-img2img",
+        source=VisualSource(from_generation="gen-p"), denoise=0.55,
+        store=store, memory_store=MagicMock(), llm_client=_fake_client(_INVENTED_JSON),
+    )
+
+    # Denoise is the ONLY settings key — the invented recipe was stripped first.
+    assert result.spec.settings == {"denoise": 0.55}
+    assert result.spec.model == "z.safetensors"
+    batch = read_batch(out)
+    assert batch.specs[0].settings == {"denoise": 0.55}
+    assert batch.specs[0].model == "z.safetensors"
+
+
+@pytest.mark.asyncio
+async def test_craft_spec_txt2img_keeps_invented_recipe() -> None:
+    from visual_generation.chains import craft_spec
+
+    # No parent, refinement=False → enforcement is gated off, recipe survives.
+    template = _template("txt2img", {"positive", "steps", "cfg"})
+    models = [ModelAsset(name="wrong-model.safetensors", kind="checkpoint")]
+    spec = await craft_spec(
+        "a felt puppet wolf", RetrievedContext(), template, models,
+        _fake_client(_INVENTED_JSON),
+    )
+
+    assert spec["settings"] == {"steps": 25, "cfg": 3.5, "sampler": "euler"}
+    assert spec["model"] == "wrong-model.safetensors"

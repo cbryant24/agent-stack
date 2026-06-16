@@ -21,7 +21,7 @@ from anthropic.types import Message
 from agent_runtime.tracing import record_llm_call
 
 from visual_generation.constants import MAX_DRAFT_TOKENS, MODEL_DIRECTOR
-from visual_generation.models import ModelAsset, WorkflowTemplate
+from visual_generation.models import ModelAsset, VisualGeneration, WorkflowTemplate
 from visual_generation.retrieval import RetrievedContext, build_context_prompt
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,15 @@ Output STRICT JSON of this exact shape:
 Output JSON only.
 """
 
+_EDIT_MODE_SYSTEM = """\
+
+EDIT MODE — this intent REFINES an existing image (img2img / inpaint), it does not
+create one from scratch. Preserve the source's style, medium, and composition; change
+ONLY what the intent asks for — this is an EDIT, not a rewrite. The recipe is fixed by
+the template and the denoise by the caller: do NOT author settings and do NOT cite
+recipe or denoise numbers in your rationale.
+"""
+
 _RETRY_SUFFIX = (
     "\n\nIMPORTANT: your previous response was not valid JSON of the required shape. "
     "Reproduce your full JSON response exactly as specified (prompt, negative_prompt, "
@@ -108,6 +117,7 @@ def _build_user_message(
     ctx: RetrievedContext,
     template: WorkflowTemplate | None,
     models: list[ModelAsset],
+    parent: VisualGeneration | None = None,
 ) -> str:
     context_block = build_context_prompt(ctx) if not ctx.is_empty() else "(no prior context)"
     if template is not None:
@@ -118,6 +128,28 @@ def _build_user_message(
         )
     else:
         template_block = "Template: (none chosen — propose generic settings; no slot constraints)"
+
+    if parent is not None:
+        # Refinement: anchor on the source prompt and frame this as an edit, so Sonnet
+        # tweaks rather than rewrites. Settings are enforced by the caller — the model
+        # is told not to author them.
+        return f"""Source prompt: {parent.prompt}
+
+Apply ONLY this change: {intent}
+
+Preserve the source's style/medium/composition — EDIT, not rewrite. The recipe is
+fixed by the template and denoise by the caller; do not author settings or cite
+recipe/denoise numbers.
+
+{template_block}
+
+Available models (pick model/LoRA names from these):
+{_format_models(models)}
+
+Relevant context:
+{context_block}
+
+Craft one settled generation spec that applies this change to the source."""
 
     return f"""Creative intent:
 {intent}
@@ -139,27 +171,39 @@ async def craft_spec(
     template: WorkflowTemplate | None,
     models: list[ModelAsset],
     client: AsyncAnthropic,
+    *,
+    parent: VisualGeneration | None = None,
+    refinement: bool = False,
 ) -> dict:
-    """Run the craft chain once (retry once on a parse failure), returning the spec dict."""
-    user_message = _build_user_message(intent, ctx, template, models)
+    """Run the craft chain once (retry once on a parse failure), returning the spec dict.
+
+    On a `refinement` the chain is framed as an EDIT (gated edit-mode system prompt +,
+    when `parent` is given, a source-anchored user message), and the parsed spec is
+    deterministically reconciled to the source: the invented recipe is stripped (the
+    template's recipe stands; the caller owns denoise) and model/LoRAs/dimensions are
+    inherited from the parent rather than re-guessed."""
+    # Build the effective system + user message ONCE so the parse-retry reuses the
+    # identical edit-mode framing instead of falling back to the txt2img prompts.
+    system = _SYSTEM_PROMPT + _EDIT_MODE_SYSTEM if refinement else _SYSTEM_PROMPT
+    user_message = _build_user_message(intent, ctx, template, models, parent)
     valid_model_names = {m.name for m in models}
 
     response = await client.messages.create(
         model=MODEL_DIRECTOR,
         max_tokens=MAX_DRAFT_TOKENS,
-        system=_SYSTEM_PROMPT,
+        system=system,
         messages=[{"role": "user", "content": user_message}],
     )
     _record_llm(MODEL_DIRECTOR, response.usage.input_tokens, response.usage.output_tokens)
 
     try:
-        return _parse_spec_response(response, valid_model_names, template)
+        spec = _parse_spec_response(response, valid_model_names, template)
     except DraftParseError:
         logger.warning("Craft response unparseable; retrying once with explicit reminder")
         retry = await client.messages.create(
             model=MODEL_DIRECTOR,
             max_tokens=MAX_DRAFT_TOKENS,
-            system=_SYSTEM_PROMPT,
+            system=system,
             messages=[
                 {"role": "user", "content": user_message},
                 {"role": "assistant", "content": response.content[0].text},
@@ -167,7 +211,26 @@ async def craft_spec(
             ],
         )
         _record_llm(MODEL_DIRECTOR, retry.usage.input_tokens, retry.usage.output_tokens)
-        return _parse_spec_response(retry, valid_model_names, template)
+        spec = _parse_spec_response(retry, valid_model_names, template)
+
+    if refinement:
+        _enforce_refinement(spec, parent)
+    return spec
+
+
+def _enforce_refinement(spec: dict, parent: VisualGeneration | None) -> None:
+    """Reconcile a crafted spec to its source (mutates in place).
+
+    Strip every recipe knob — the template's recipe stands and the caller owns denoise
+    — and, when a parent is present, inherit its identity-bearing attributes
+    (model/LoRA stack/dimensions) rather than honoring whatever the model re-guessed.
+    The craft's prompt/negative/rationale/seed are kept."""
+    spec["settings"] = {}
+    if parent is not None:
+        spec["model"] = parent.model
+        spec["lora_stack"] = [lr.model_dump() for lr in parent.lora_stack]
+        spec["width"] = parent.width
+        spec["height"] = parent.height
 
 
 def _parse_spec_response(

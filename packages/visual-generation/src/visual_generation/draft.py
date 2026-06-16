@@ -116,7 +116,10 @@ async def draft(
                     parent = await store.get_generation(source.from_generation)
 
                 client = llm_client or AsyncAnthropic(api_key=get_config().anthropic_api_key)
-                crafted = await craft_spec(intent, ctx, template, models, client)
+                crafted = await craft_spec(
+                    intent, ctx, template, models, client,
+                    parent=parent, refinement=(source is not None),
+                )
 
                 spec = VisualSpec(
                     heading=(crafted["prompt"] or intent)[:60],
