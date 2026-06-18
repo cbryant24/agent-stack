@@ -3,10 +3,19 @@ from __future__ import annotations
 import click
 
 from tutorial_research.agent import research_sync
-from tutorial_research.constants import DEFAULT_BUDGET
+from tutorial_research.constants import (
+    DEFAULT_BUDGET,
+    DIFFUSION_MASTERY_COURSE,
+    TUTORIAL_RESEARCH_COLLECTION,
+)
 
 
-@click.command()
+@click.group()
+def cli() -> None:
+    """Research, ingest, or retrieve tutorial knowledge."""
+
+
+@cli.command("research")
 @click.argument("request")
 @click.option(
     "--type",
@@ -41,11 +50,11 @@ from tutorial_research.constants import DEFAULT_BUDGET
 )
 @click.option(
     "--collection",
-    default="tutorial_research",
+    default=TUTORIAL_RESEARCH_COLLECTION,
     show_default=True,
     help="Qdrant collection name.",
 )
-def cli(
+def research_cmd(
     request: str,
     request_type: str | None,
     synthesize: bool | None,
@@ -105,3 +114,30 @@ def cli(
 
     if result.report_path:
         click.echo(f"\nReport: {result.report_path}")
+
+
+@cli.command("ingest-docs")
+@click.argument("folder")
+@click.option(
+    "--course",
+    default=DIFFUSION_MASTERY_COURSE,
+    show_default=True,
+    help="Only ingest files whose frontmatter `course` matches this value.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Parse and show the candidate breakdown without embedding or writing.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt and write every candidate.",
+)
+def ingest_docs_cmd(folder: str, course: str, dry_run: bool, yes: bool) -> None:
+    """Bulk-ingest course markdown in FOLDER into the tutorial_research collection."""
+    from tutorial_research.docs_ingest import ingest_docs_sync
+
+    ingest_docs_sync(folder, course=course, dry_run=dry_run, auto_confirm=yes)

@@ -3,14 +3,23 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from agent_runtime.memory import MemoryStore, get_memory_store
-from agent_runtime.memory.store import filter_by_source_type
 
 from tutorial_research.models import RetrievedChunk
 
 logger = logging.getLogger(__name__)
+
+# tutorial_research holds both YouTube-tutorial chunks and bulk-ingested course-doc chunks
+# (see docs_ingest.py). Both are tutorial-derived technique, so retrieval surfaces both.
+_TUTORIAL_SOURCE_TYPES = ["youtube_tutorial", "course_doc"]
+
+
+def _filter_by_source_types(source_types: list[str]) -> Filter:
+    return Filter(
+        must=[FieldCondition(key="source_type", match=MatchAny(any=source_types))]
+    )
 
 USER_KNOWLEDGE_SCORE_MULTIPLIER = 1.25
 USER_KNOWLEDGE_COLLECTION = "user_knowledge"
@@ -78,7 +87,7 @@ async def retrieve_chunks(
         collection,
         query_text=query,
         limit=limit,
-        filters=filter_by_source_type("youtube_tutorial"),
+        filters=_filter_by_source_types(_TUTORIAL_SOURCE_TYPES),
     )
     uk_task = _fetch_user_knowledge_chunks(ms, query, limit=uk_limit)
 

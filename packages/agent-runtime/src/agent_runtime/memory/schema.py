@@ -13,7 +13,7 @@ class MemoryPoint(BaseModel):
     text: str
     source_id: str
     source_type: Literal[
-        "youtube_tutorial", "web_page", "user_note", "agent_summary"
+        "youtube_tutorial", "web_page", "user_note", "agent_summary", "course_doc"
     ]
     source_url: str | None = None
     source_title: str | None = None
