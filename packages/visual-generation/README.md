@@ -524,6 +524,39 @@ img2img graph already holds the correct recipe; the order ticket is the `vg-spec
 settings get written into the graph at generate time and override the baked-in values
 — rather than rewiring the node graph.
 
+**Credentialed commands fail with "Provided API key is invalid" (Voyage/Anthropic).**
+The repo's `.env` stores secrets as 1Password references (`op://…`), not literal keys —
+python-dotenv loads the placeholder string and hands *that* to the API, which rejects it.
+Run anything that writes to the store or embeds — `workflow register`, `fact ingest-docs`,
+`lesson add`, `draft`, `generate` — through the 1Password CLI:
+`op run --env-file=".env" -- uv run --package visual-generation visual-generation …`.
+`load_dotenv` defaults to `override=False`, so the op-injected value wins over the
+placeholder. Needs an authenticated 1Password session (biometric in iTerm2, or an
+`OP_SERVICE_ACCOUNT_TOKEN` for non-interactive shells like Claude Code).
+
+**Re-running `lesson add` (or a seeding block) duplicated my lessons.** `lesson add` is
+**not** dedup-by-content — each run writes a fresh point, so the same statement run twice
+leaves two copies that both surface in `recall` and waste retrieval slots. Add each lesson
+once. To clean existing dupes, scroll the `technique_lesson` points and delete all-but-one
+per identical statement (no CLI for this yet — a one-off store script keyed on the
+statement).
+
+**`fact ingest-docs` parsed fewer sections than expected (or none for a page).** The ingest
+reads a folder **non-recursively, `*.md` only**, and turns every **H2-or-deeper** heading
+into one entry — prose above the first heading, and any heading-less page, is dropped.
+ComfyUI/RunPod docs ship `.mdx` in nested folders, so stage them first: flatten to one
+folder of `.md`, strip MDX `import`/JSX component lines (leave fenced code intact), re-add
+each page's frontmatter `title:` as a top-level `## ` so intros and short pages still
+produce an entry, and add a frontmatter `url:` line so the ingest records the live doc URL
+as `source_ref`. Run under `op run`, `--dry-run` first to see the candidate count.
+
+**Fixing a template's descriptor without disturbing its slot map.** A weak descriptor (e.g.
+the template name itself) ranks badly in `recall`/`draft` because the descriptor is the
+embedded text. Don't `workflow register` again just to fix it — that re-infers the slot map
+from the graph and can drop manual slot corrections. Update in place instead: load the
+template (`get_template_by_name`), set `.descriptor`, and `upsert_template` — it re-embeds
+the new descriptor, preserves graph + slot_map + entry_id, and collapses same-name dupes.
+
 ## Troubleshooting: oversaturated / distorted output
 
 **Symptom:** a `generate` run completes successfully (no errors), but the

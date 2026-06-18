@@ -638,7 +638,7 @@ max_items=1, max_depth=0, max_cost_usd=1.00, max_wall_time_sec=300
 
 ### visual-generation
 
-ComfyUI-backed diffusion image/video collaborator with a first-class platform-tutor role. **Status: Phase 2 complete (MVP); img2img refinement (edit-mode) shipped.** 188 tests passing.
+ComfyUI-backed diffusion image/video collaborator with a first-class platform-tutor role. **Status: Phase 2 complete (MVP); img2img + inpaint refinement (edit-mode) shipped; user_knowledge doc-ingestion wired.** 191 tests passing.
 
 A standalone, domain-agnostic generation agent modeled on voiceover-direction (cost inversion) and music-curation (curated memory). It inherits by reasoning, not template — three genuine differences (an extreme two-axis cost inversion, a running pod that costs money during otherwise-free prompt-craft, and a node-graph backend plus a tutor role) shaped the decisions below.
 
@@ -674,7 +674,7 @@ The voice-registry analog: a local JSON file holding checkpoints, LoRAs, VAEs, e
 
 #### Retrieval (`retrieval.py`)
 
-`retrieve_context(query, store, memory_store, ...)` composes three collections in parallel via `asyncio.gather`, mirroring music/voiceover: own `visual_generation_memory` (generations through the multimodal query-space, technique_lessons, workflow_templates) + `user_knowledge` (`comfyui_mechanics` and `runpod_mechanics`, 1.25× score boost — `USER_KNOWLEDGE_SCORE_MULTIPLIER`) + `tutorial_research`. Each leg degrades silently to an empty bucket, so the agent stays useful from a cold start. The standing distinction: `user_knowledge` = documented platform/vendor facts; `technique_lesson` = lessons learned by doing; `tutorial_research` = tutorial-derived technique.
+`retrieve_context(query, store, memory_store, ...)` composes three collections in parallel via `asyncio.gather`, mirroring music/voiceover: own `visual_generation_memory` (generations through the multimodal query-space, technique_lessons, workflow_templates) + `user_knowledge` (`comfyui_mechanics` and `runpod_mechanics`, 1.25× score boost — `USER_KNOWLEDGE_SCORE_MULTIPLIER`) + `tutorial_research`. Each leg degrades silently to an empty bucket, so the agent stays useful from a cold start. The standing distinction: `user_knowledge` = documented platform/vendor facts; `technique_lesson` = lessons learned by doing; `tutorial_research` = tutorial-derived technique. `user_knowledge` is seeded two ways: single facts via `fact add`, and whole doc folders via `fact ingest-docs` — a CLI wrapper over `agent_runtime.knowledge.docs_ingest` (the shared, domain-agnostic pipeline: H2+-section chunking, `source_ref` from frontmatter `url:`, idempotent re-ingest, `bulk_load_verified` under the chosen domain).
 
 #### Asset storage + identity opsec
 
@@ -698,6 +698,7 @@ visual-generation workflow register <exported-api.json>;  visual-generation work
 visual-generation review-pending;  visual-generation recall "<query>";  visual-generation chain show <root_id>
 visual-generation lesson add "<statement>" --scope <prompt|settings|workflow|model> --valence <positive|negative>
 visual-generation fact add "<statement>" --domain <comfyui_mechanics|runpod_mechanics>
+visual-generation fact ingest-docs <folder> --domain <comfyui_mechanics|runpod_mechanics> [--dry-run] [--yes]
 visual-generation explain "<concept>" [--level full|concise|quiet]
 visual-generation research "<topic>"
 ```
