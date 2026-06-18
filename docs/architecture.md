@@ -190,7 +190,7 @@ uv run yt-pipeline <url> --collection my_col # custom collection name
 
 | Field | Value |
 |---|---|
-| `source_type` | `"youtube_tutorial"` |
+| `source_type` | `"youtube_tutorial"` (video chunks) or `"course_doc"` (course-doc chunks) |
 | `content_type` | `"text"` or `"image_with_caption"` |
 | `source_id` | `"youtube:<video_id>"` |
 | `image_path` | path in `~/agent-data/...` (multimodal points only) |
@@ -200,7 +200,7 @@ uv run yt-pipeline <url> --collection my_col # custom collection name
 
 ### tutorial-research
 
-The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete.** 52 tests passing.
+The tutorial research agent. Uses `yt-intelligence-pipeline` as a library to ingest videos, then retrieves relevant content from Qdrant to answer research questions. **Status: complete; course-doc bulk ingest (`ingest-docs`) added.** 58 tests passing.
 
 #### Request modes
 
@@ -220,7 +220,7 @@ Mode is inferred from the request string (`classify_request()`) or set explicitl
 4. **Ingestion plan** — top-N candidates (≤ `max_items`) sorted by score. `estimated_cost_usd` is informational. Emits `event_subtype="ingestion_plan"` TraceEvent.
 5. **Ingestion** — `process_video(url, human_output=False, agent_output=True, collection_name=...)` for each selected candidate. `check_budget()` runs at the top of each iteration (before calling `process_video`) so the loop exits cleanly when the budget is reached without falsely marking the run partial. Non-budget exceptions log a warning and continue; if fewer items are ingested than `plan.estimated_items`, the run is marked `partial` after the loop.
 6. **Coverage assessment** — after post-ingestion retrieval, emits `event_subtype="coverage_assessment"` TraceEvent with labels `empty / sparse / thin / adequate` (thresholds: sparse < 0.55 max score; thin ≤ 2 distinct sources). Appended to the Obsidian run report as a "## Coverage Assessment" section.
-7. **Retrieval** — `RetrievedChunk` carries `score`, `source_id`, `content`, `source_title`, `source_url`, `chunk_index`, and `collection_name`. Both `tutorial_research` and `user_knowledge` are queried in parallel via `asyncio.gather`. `user_knowledge` hits receive a 1.25× score multiplier (`USER_KNOWLEDGE_SCORE_MULTIPLIER`) and are capped at 30% of the requested limit. If the `user_knowledge` collection is absent or Qdrant is unreachable, that leg degrades silently to empty. Retrieved chunks are appended to the run report in separate "## Retrieved Content — Tutorial Research" and "## Retrieved Content — User Knowledge" sections when both are present.
+7. **Retrieval** — `RetrievedChunk` carries `score`, `source_id`, `content`, `source_title`, `source_url`, `chunk_index`, and `collection_name`. Both `tutorial_research` and `user_knowledge` are queried in parallel via `asyncio.gather`. `user_knowledge` hits receive a 1.25× score multiplier (`USER_KNOWLEDGE_SCORE_MULTIPLIER`) and are capped at 30% of the requested limit. If the `user_knowledge` collection is absent or Qdrant is unreachable, that leg degrades silently to empty. Retrieved chunks are appended to the run report in separate "## Retrieved Content — Tutorial Research" and "## Retrieved Content — User Knowledge" sections when both are present. Retrieval over `tutorial_research` filters `source_type ∈ {youtube_tutorial, course_doc}` (`MatchAny`), so video-derived and course-derived chunks surface together (and reach `visual-generation explain`, which already filters nothing).
 8. **Synthesis** — Sonnet 4.6 synthesis with source attribution, capped at `MAX_SYNTHESIS_TOKENS` (8192) output tokens. Default on for `research` mode; off for `ingest` and `retrieve`. The cap matches Sonnet 4.6's output ceiling to prevent mid-sentence truncation. The synthesis system prompt instructs Sonnet to treat `[USER-KNOWLEDGE: ...]`-prefixed chunks as authoritative (prefer over tutorial chunks on conflict) and cite them with provenance-aware language ("per the user's verified notes" / "per verified knowledge").
 
 #### Run lifecycle
@@ -259,11 +259,17 @@ result = research_sync("python asyncio patterns", synthesize=False, dry_run=True
 
 #### CLI
 
+The CLI is a `click.group()` — the old bare `tutorial-research "<query>"` form was dropped (nothing imports it programmatically; a bare positional and subcommands can't coexist). Research now lives under the `research` subcommand:
+
 ```bash
-uv run tutorial-research "python asyncio patterns"
-uv run tutorial-research "python asyncio patterns" --plan-only
-uv run tutorial-research "python asyncio patterns" --type retrieve --no-synthesize
+uv run tutorial-research research "python asyncio patterns"
+uv run tutorial-research research "python asyncio patterns" --type retrieve --no-synthesize
+uv run tutorial-research ingest-docs <folder> [--course "<frontmatter course>"] [--dry-run] [--yes]
 ```
+
+#### Course-doc bulk ingest (`ingest-docs`)
+
+The document analogue of video ingestion: `ingest-docs <folder>` turns each kept H2 section of a course markdown note into one `MemoryPoint` (`source_type="course_doc"`, `content_type="text"`) in the `tutorial_research` collection — so course material is retrievable alongside the YouTube-derived chunks and by `visual-generation explain`. A file is ingested only if its frontmatter `course` matches `--course` (default `DIFFUSION_MASTERY_COURSE`); within a file only the keep-set H2s are taken (Quick Review / Key Concepts / Practical Applications / Important Details), empty bodies skipped. `source_id` is `course:diffusion-mastery/<file-stem>` (stems are unique where lecture titles collide). Re-runs are idempotent — a scroll skips chunks already present under that `source_id` (keyed on `topic_tags` + text), so re-ingesting the folder writes zero. Embeds via Voyage inside `upsert_points`, so the store must be reachable (run under `op run` for the keys). Course docs are tutorial-derived **technique** — deliberately not `user_knowledge` (platform facts) or `technique_lesson` (learned-by-doing).
 
 #### Model constants
 

@@ -65,21 +65,31 @@ print(result.report_path)            # path to Obsidian run report
 ## CLI
 
 ```bash
+# NOTE: the CLI is a command group — the bare `tutorial-research "<query>"` form
+# is gone. Use the `research` subcommand.
+
 # Research mode (default)
-uv run tutorial-research "python asyncio patterns"
+uv run tutorial-research research "python asyncio patterns"
 
 # Plan only — scores candidates but skips ingestion
-uv run tutorial-research "python asyncio patterns" --plan-only
+uv run tutorial-research research "python asyncio patterns" --plan-only
 
-# Explicit type override
-uv run tutorial-research "python asyncio patterns" --type retrieve
-
-# Skip synthesis
-uv run tutorial-research "python asyncio patterns" --no-synthesize
+# Explicit type override / skip synthesis
+uv run tutorial-research research "python asyncio patterns" --type retrieve --no-synthesize
 
 # Budget overrides
-uv run tutorial-research "python asyncio patterns" --max-items 10 --max-cost 5.00
+uv run tutorial-research research "python asyncio patterns" --max-items 10 --max-cost 5.00
+
+# Bulk-ingest local course markdown into tutorial_research (course_doc chunks)
+uv run tutorial-research ingest-docs ~/agent-data/<course-docs-folder> --dry-run
+uv run tutorial-research ingest-docs ~/agent-data/<course-docs-folder> --yes
 ```
+
+## Course-doc ingest (`ingest-docs`)
+
+`ingest-docs <folder>` bulk-loads local course markdown into the `tutorial_research` collection as `course_doc` chunks — one `MemoryPoint` per kept H2 section — so course material is retrievable alongside the YouTube-derived chunks (and by `visual-generation explain`). A file is ingested only if its frontmatter `course` matches `--course` (default: the Diffusion Mastery course); within a file only the keep-set H2s are kept (Quick Review / Key Concepts / Practical Applications / Important Details), empty bodies skipped. `source_id` is `course:diffusion-mastery/<file-stem>`. Re-runs are idempotent — chunks already present under that `source_id` are skipped. It embeds via Voyage, so the store must be reachable: wrap in `op run --env-file=".env"` for the keys, and `--dry-run` first to see the per-section breakdown.
+
+Course docs are tutorial-derived *technique* — intentionally **not** `user_knowledge` (platform facts, via visual-generation's `fact ingest-docs`) or `technique_lesson` (learned-by-doing).
 
 ## Default budget
 
@@ -106,7 +116,7 @@ Coverage thresholds:
 ## Running tests
 
 ```bash
-uv run pytest packages/tutorial-research/tests/ -v   # 41 tests
+uv run pytest packages/tutorial-research/tests/ -v   # 58 tests
 ```
 
 Tests that require Qdrant on `localhost:6333` are skipped automatically if it's not running.
