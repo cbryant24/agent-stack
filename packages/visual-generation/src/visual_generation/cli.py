@@ -14,6 +14,7 @@ Usage:
     visual-generation recall "<query>" [--limit N]
     visual-generation lesson add "<statement>" [--scope ...] [--valence ...]
     visual-generation fact add "<statement>" [--domain ...]
+    visual-generation fact ingest-docs <folder> --domain ... [--dry-run] [--yes]
     visual-generation explain "<concept>" [--level full|concise|quiet]
     visual-generation research "<topic>"
 """
@@ -577,6 +578,21 @@ def fact_add(statement: str, domain: str, confidence: str) -> None:
         click.echo(f"Entry ID: {entry_ids[0]}")
 
     asyncio.run(_run())
+
+
+@fact.command("ingest-docs")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False))
+@click.option("--domain", type=click.Choice(MECHANICS_DOMAINS), required=True,
+              help="comfyui_mechanics (backend) or runpod_mechanics (platform).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Parse and show candidate counts without writing.")
+@click.option("--yes", is_flag=True, default=False,
+              help="Confirm and write every candidate without prompting.")
+def fact_ingest_docs(folder: str, domain: str, dry_run: bool, yes: bool) -> None:
+    """Parse local ComfyUI/RunPod docs in FOLDER into verified user_knowledge (y/n/edit/defer)."""
+    from agent_runtime import ingest_docs_sync
+
+    ingest_docs_sync(folder, domain=domain, dry_run=dry_run, auto_confirm=yes)
 
 
 # ── Tutor (explain / research) ────────────────────────────────────────────────

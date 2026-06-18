@@ -127,6 +127,42 @@ def test_fact_add_requires_domain() -> None:
     assert result.exit_code != 0  # --domain is required
 
 
+# ── fact ingest-docs ─────────────────────────────────────────────────────────
+
+
+def test_fact_ingest_docs_dry_run_parses_without_writing(monkeypatch, tmp_path) -> None:
+    # A tiny staged doc: H1 page title + one H2 section (the candidate).
+    doc = tmp_path / "comfyui.md"
+    doc.write_text(
+        "# ComfyUI Notes\n\n## KSampler\n\nEuler + simple is a reliable default on Flux.\n",
+        encoding="utf-8",
+    )
+    # Guard: dry-run must hit no live store. Any store construction is a failure.
+    monkeypatch.setattr(
+        "agent_runtime.UserKnowledgeStore",
+        lambda *a, **k: pytest.fail("dry-run must not touch the store"),
+    )
+
+    result = CliRunner().invoke(
+        cli, ["fact", "ingest-docs", str(tmp_path), "--domain", "comfyui_mechanics", "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Parsed 1 candidate" in result.output
+    assert "dry run" in result.output.lower()
+
+
+def test_fact_ingest_docs_rejects_unknown_domain(tmp_path) -> None:
+    result = CliRunner().invoke(
+        cli, ["fact", "ingest-docs", str(tmp_path), "--domain", "suno_mechanics", "--dry-run"],
+    )
+    assert result.exit_code != 0  # not a visual-generation mechanics domain
+
+
+def test_fact_ingest_docs_requires_domain(tmp_path) -> None:
+    result = CliRunner().invoke(cli, ["fact", "ingest-docs", str(tmp_path), "--dry-run"])
+    assert result.exit_code != 0  # --domain is required
+
+
 # ── explain / research ──────────────────────────────────────────────────────────
 
 
