@@ -4,8 +4,21 @@ A diffusion image/video generation collaborator — prompt-craft, platform tutor
 and generation/iteration over a ComfyUI backend on RunPod. Modeled on
 `voiceover-direction` (cost inversion) and `music-curation` (curated memory).
 
-**Status: Phase 2 in progress — data foundation only.** This package currently
-contains the storage + retrieval layer:
+**Status: Phase 2 complete (MVP) — stills + img2img/inpaint refinement shipped.**
+The full turn is built and working: `draft` → `generate` → `report`, the ComfyUI
+client, `model sync`, `workflow register` (slot-map propose→confirm), asset writing,
+the dual Claude/GPU budgets, the three-memory-type collection, and the tutor role
+(`explain` / `research`). Stills run on Z-Image-Turbo and Flux/SDXL; img2img + inpaint
+(edit-mode refinement) is wired.
+
+**Video (WAN 2.2) — setup done, agent integration is Phase 2 (not yet built).** WAN
+2.2 14B text-to-video and image-to-video have been stood up and verified **manually in
+ComfyUI** on the pod (models installed, graphs captured, recipes recorded). Driving WAN
+through the agent CLI — the `output` field, keyframe extraction, the cost/sanity-check
+additions — is the Phase 2 build. See "Video generation (WAN 2.2)" below and
+`docs/handoffs/visual-generation-video-phase1-handoff.md`.
+
+The data + retrieval foundation:
 
 - `visual_generation_memory` — one Qdrant collection, three memory types
   discriminated by a `memory_type` payload field:
@@ -26,9 +39,6 @@ contains the storage + retrieval layer:
   (primary) + `user_knowledge` (`comfyui_mechanics`/`runpod_mechanics`,
   score-boosted) + `tutorial_research`. Each leg degrades silently; usable
   cold-start.
-
-The CLI, the ComfyUI client, the generation turn (`draft`/`generate`/`report`),
-`model sync`, and asset writing land in later steps.
 
 ## How a generation actually happens (pipeline overview)
 
@@ -55,6 +65,88 @@ different system. It's easy to lose track of which step you're on:
 A generation you create by clicking around in the ComfyUI web UI never
 touches steps 2-5 — it's a completely separate path (see "UI generations vs.
 CLI generations" below).
+
+## Video generation (WAN 2.2)
+
+**Status: manual ComfyUI workflow today; agent CLI integration is Phase 2 (not yet
+built).** The steps below are the *operational* path for producing WAN clips in ComfyUI
+on the pod, plus what was decided during setup. The agent does not yet drive WAN.
+
+**Model:** WAN 2.2 14B (open-weights, Apache-2.0 — the reason it runs self-hosted on
+RunPod; WAN 2.5/2.6 are closed APIs and were rejected). Two modes in scope: **T2V**
+(text→video) and **I2V** (image→video, a seed image becomes frame 1). VACE is deferred.
+WAN 2.2 14B uses a **Mixture-of-Experts split**: a high-noise expert (structure/motion)
+hands off to a low-noise expert (detail) at a *boundary step* — so the graph loads two
+model files and runs two sampler passes.
+
+**Installed on the pod** (`/workspace/runpod-slim/ComfyUI/models/`): four fp8-scaled 14B
+experts (t2v + i2v, high/low) in `diffusion_models/`, `umt5_xxl_fp8_e4m3fn_scaled` in
+`text_encoders/`, `wan_2.1_vae` in `vae/`, and the lightx2v 4-step LoRAs (t2v + i2v) in
+`loras/`. Captured graphs + full recipes: `workflows/` and
+`docs/handoffs/visual-generation-video-phase1-research-signals.md`.
+
+### Getting started (manual run in ComfyUI)
+
+1. **Spin up the pod** (RTX PRO 6000, US-NE-1) so the `gen-usne1` network volume mounts
+   at `/workspace`. Billing starts here. ComfyUI serves on port 8188.
+2. **Confirm the models are present** (they persist on the volume across pods):
+   `ls -lh /workspace/runpod-slim/ComfyUI/models/{diffusion_models,text_encoders,vae,loras}/`.
+3. **Load the template:** ComfyUI → Browse Templates → Video → **Wan 2.2 14B Text to
+   Video** (or **Image to Video**). The current ComfyUI ships these with the **lightx2v
+   4-step LoRAs baked in** (a "Enable 4steps LoRA?" toggle on I2V) — so by default you're
+   on the fast 4-step recipe, not the plain 20-step one.
+4. **Check the loaders** auto-filled: the two diffusion-model loaders (high/low), the
+   `umt5_xxl_fp8` encoder, `wan_2.1_vae`, and the LoRAs. If a "missing models" dialog
+   appears for files you know are on disk, the model list is stale — press **R** to
+   re-scan; only genuinely-absent files should remain.
+5. **Set a cheap first run:** 832×480 (T2V) or square to match the seed (I2V), and
+   **length 33** (frame count must be 4n+1: 33, 49, 81…). Leave the sampler defaults —
+   they *are* the recipe to record.
+6. **Queue.** First run cold-loads ~40 GB of weights (slow once, fast after). Output
+   lands on the **pod** under `ComfyUI/output/video/` (manual UI runs save pod-side, not
+   to your Mac — pull with scp or view in FileBrowser).
+
+**Fast vs. quality:** the I2V graph's "Enable 4steps LoRA?" toggle flips the whole recipe
+between the 4-step path (`cfg 1`, steps 4, boundary 2 — fast/cheap) and the 20-step path
+(`cfg 3.5`, steps 20, boundary 10 — higher quality, no LoRA). One graph, both paths.
+
+### Using a seed image for I2V — get it onto the pod with scp, not the browser
+
+The I2V `Load Image` node needs the seed frame in `ComfyUI/input/`. **The browser upload
+through the RunPod proxy corrupts image files** (broken thumbnails, `PIL cannot identify`,
+500 errors). Do **not** use it. Instead copy the image directly with **scp over the
+direct-TCP SSH endpoint** (RunPod Connect → "SSH over exposed TCP — Supports SCP"; the
+`ssh.runpod.io` proxy is interactive-only and supports neither scp nor file-piping):
+
+```bash
+# from your Mac (IP/port change each time the pod is recreated — read them from Connect)
+scp -P <PORT> -i ~/.ssh/id_ed25519 "/path/to/seed.png" \
+  root@<IP>:/workspace/runpod-slim/ComfyUI/input/seed.png
+# verify on the pod: file .../input/seed.png  → "PNG image data"
+```
+
+Then in ComfyUI press **R** and pick the file from the Load Image **dropdown** (not
+"choose file to upload"). For the agent path (Phase 2), I2V will reuse the built img2img
+seed mechanism (`/upload/image` + `VisualSource` lineage) so a prior still can seed a clip.
+
+### If you have to migrate to a new pod
+
+GPU availability churns, so you'll periodically lose a pod and start a new one. What
+carries over and what changes:
+
+- **Models, graphs, outputs persist** — they live on the `gen-usne1` network volume,
+  which survives pod stop *and* terminate and re-attaches to any new US-NE-1 pod. A new
+  pod does **not** require re-downloading anything. (Container disk is wiped; nothing you
+  care about lives there.)
+- **The endpoint changes** — both the ComfyUI proxy URL (`https://<pod-id>-8188.proxy.runpod.net`)
+  and the direct-TCP SSH IP/port are new per pod. Update them wherever you use them
+  (`--endpoint` for the agent later; the scp `-P`/host; any `$EP` shell var). Read the
+  current values from RunPod → pod → Connect.
+- **Datacenter is fixed** — the volume is locked to US-NE-1, so a replacement pod must be
+  US-NE-1 to mount it (that's why the RTX PRO 6000 there was chosen).
+- **Nothing to re-install or re-configure** beyond pointing at the new endpoint. If a
+  "migrate pod data" prompt appears, it concerns the disposable container disk, not your
+  volume — you don't need to wait on it for the models.
 
 ## Glossary — plain language
 
@@ -111,10 +203,12 @@ Orientation for a newcomer operating this agent:
 - **Z-Image-Turbo does img2img, inpaint, ControlNet, and LoRA — but NOT
   IP-Adapter/InstantID** (one-photo zero-shot identity). That capability needs
   SDXL/Flux.
-- **This agent was text-to-image only.** Refinement (img2img/inpaint + iterate-
-  on-a-prior-generation via a spec `source`) has been added in code — the
-  ComfyUI graphs to back it still need building/registering (see
-  [workflow register](#workflow-register-exported-apijson---name-n)).
+- **Refinement (img2img/inpaint) is built and wired.** `draft --from <gen_id>` /
+  `--image <path>` (+ `--mask`) attaches a `VisualSource`; at `generate` the source is
+  uploaded (`/upload/image`) and written into the template's init-image slot, with
+  `parent_id`/`chain_root_id` lineage. The one thing that's a *user* task (not missing
+  code) is registering an actual img2img/inpaint ComfyUI graph to point at — graph
+  authoring is deferred (see [workflow register](#workflow-register-exported-apijson---name-n)).
 - **Pod realities:** a new pod = a new proxy URL (update `$EP`) AND a fresh
   ComfyUI that does NOT carry over a workflow you built in the browser — so
   export ([API format](#save-workflow-format-vs-export-api-format)) +
@@ -424,6 +518,44 @@ reads as an edit of the original. If you instead see invented settings (e.g.
 pre-"seed-from-parent" build — pull latest. Manual stopgap: fix the spec's `settings`
 in `visual-batch.md` to the Z-Image recipe (`cfg 1`, `steps 8`,
 `sampler res_multistep`, `scheduler simple`) before `generate`.
+
+### Setup-phase gotchas (volume, uploads, downloads) — learned 2026-06-19
+
+These all surfaced standing up WAN 2.2 on the pod. Most trace back to **the network
+volume hitting its quota**, which fails in confusing, indirect ways.
+
+- **"Disk quota exceeded" is the root cause of a whole cluster of errors.** A full
+  `/workspace` volume shows up as: scp transferring to 100% then `write/close remote:
+  Failure`; a model file downloading as **0 bytes** (→ later `ValueError: cannot mmap an
+  empty file` when ComfyUI loads it); `comfy.settings.json` getting **corrupted** (→
+  "user settings file is corrupted" + a frontend **`TypeError: Load failed`** popup);
+  and image uploads failing. **Fix:** free space (delete a redundant model — e.g. an
+  unused `umt5_xxl_fp16` if the templates use `fp8`) and/or **resize the network volume**
+  (RunPod → Storage → `gen-usne1` → increase; volumes only grow). The 100 GB default is
+  too small for z-image + full WAN t2v+i2v 14B; 200 GB gives working room.
+- **`TypeError: Load failed` after a *successful* run is a frontend glitch, not a
+  generation failure.** Check the log: if it ends with `Prompt executed in N seconds` and
+  the sampler bars hit 100%, the clip was produced and saved under `output/video/` — the
+  popup is just the browser failing to fetch the preview through the proxy.
+- **Browser image upload corrupts files; use scp over direct-TCP.** See
+  [Video generation → seed image](#using-a-seed-image-for-i2v--get-it-onto-the-pod-with-scp-not-the-browser).
+  Symptoms: broken thumbnails in Media Assets, `PIL UnidentifiedImageError`, "Invalid
+  image file". `ssh.runpod.io` is interactive-PTY only (no scp/sftp, no `cat >` piping —
+  "doesn't support PTY"); use the "SSH over exposed TCP (Supports SCP)" endpoint instead.
+- **A partial download leaves a 0-byte file that ComfyUI thinks "exists."** It won't
+  re-offer the download. Delete the empty file (`find .../loras -name '*name*' -size 0
+  -delete`) then re-trigger the download (free space first). Verify safetensors integrity
+  cheaply by reading the header — see below.
+- **Verify a safetensors file is intact without loading it:** read the 8-byte header
+  length + JSON header; if it parses, the file isn't truncated. (One-off Python:
+  `struct.unpack('<Q', f.read(8))` then `json.loads(f.read(n))`.)
+- **The "missing models" dialog over-reports right after a pod is recreated** — it scans
+  before the volume finishes mounting/indexing. Press **R** to re-scan; only genuinely
+  absent files should remain (after a fresh pod, that was just the i2v LoRAs).
+- **fp16 vs fp8 encoder:** the WAN templates default to `umt5_xxl_fp8_e4m3fn_scaled`. The
+  fp16 encoder is a marginal quality lever and pure dead weight if unused — delete it to
+  reclaim ~11 GB. The real quality levers are fp16 *diffusion experts* + the 20-step
+  (no-LoRA) path, both gated on volume size (see the v2-refinements doc).
 
 ### First-aid checklist
 

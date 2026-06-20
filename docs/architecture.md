@@ -644,7 +644,7 @@ max_items=1, max_depth=0, max_cost_usd=1.00, max_wall_time_sec=300
 
 ### visual-generation
 
-ComfyUI-backed diffusion image/video collaborator with a first-class platform-tutor role. **Status: Phase 2 complete (MVP); img2img + inpaint refinement (edit-mode) shipped; user_knowledge doc-ingestion wired.** 191 tests passing.
+ComfyUI-backed diffusion image/video collaborator with a first-class platform-tutor role. **Status: Phase 2 complete (MVP); img2img + inpaint refinement (edit-mode) shipped; user_knowledge doc-ingestion wired.** 191 tests passing. **Video (WAN 2.2): Phase 1 discovery complete + pod/ComfyUI setup verified manually; agent video code is the next Phase 2 build** (see "Video (WAN 2.2)" below).
 
 A standalone, domain-agnostic generation agent modeled on voiceover-direction (cost inversion) and music-curation (curated memory). It inherits by reasoning, not template — three genuine differences (an extreme two-axis cost inversion, a running pod that costs money during otherwise-free prompt-craft, and a node-graph backend plus a tutor role) shaped the decisions below.
 
@@ -673,6 +673,50 @@ The voice-registry analog: a local JSON file holding checkpoints, LoRAs, VAEs, e
 #### ComfyUI backend + templates
 
 `ComfyUIClient` speaks the native pod API: POST `/prompt` → `prompt_id` → poll `/history/{id}` for outputs → fetch assets from `/view`; `/object_info` enumerates installed models. Workflows are in **API format** (node id → `{class_type, inputs}`). `workflow register` walks an exported graph to **infer a candidate slot map** and required models, then **propose → confirm** (you correct once). The slot map is the right primitive because parameterizing a graph is literally writing values into node inputs by id, and positive vs. negative prompts are distinguishable only by which sampler input they feed. **v1 scope line: consume graphs the user builds in ComfyUI, don't author them** (graph authoring deferred). Flux's parameterization differs from SDXL (CFG≈1.0, a separate flux-guidance slot, no negative prompt) — a per-template slot-map detail the draft chain honors.
+
+#### Video (WAN 2.2) — designed (Phase 1 complete), Phase 2 build pending
+
+Video is **not a new agent** — it's the largest deferred item inside visual-generation,
+which the Phase 2 architecture was built to accept ("one path, not two": lineage spans
+output types, so an I2V clip's parent can be a prior still). Phase 1 discovery is
+complete and the WAN environment is set up + verified manually in ComfyUI on the pod;
+the *agent code* for video is the next build. Design rationale:
+`docs/handoffs/visual-generation-video-phase1-handoff.md`; captured recipes + slot maps:
+`docs/handoffs/visual-generation-video-phase1-research-signals.md`; reference graphs:
+`packages/visual-generation/workflows/`; deferred items:
+`docs/v2-refinements/visual-generation-v2-refinements.md`.
+
+**Model:** WAN 2.2 14B (open-weights — runs self-hosted on RunPod; WAN 2.5/2.6 rejected
+as closed APIs). Modes for v1: **T2V + I2V** (VACE deferred). The 14B is a Mixture-of-
+Experts split by denoising stage — a high-noise then a low-noise expert across two
+`KSamplerAdvanced` passes with a boundary step; the registered graph loads two model
+files. The ComfyUI default templates ship with lightx2v 4-step LoRAs baked in, and the
+I2V graph exposes a toggle between the 4-step (cfg 1, steps 4, boundary 2) and 20-step
+(cfg 3.5, steps 20, boundary 10) recipes — so one graph covers both fast and quality.
+
+**Planned Phase 2 code deltas (all additive — they keep the "one path" primitives):**
+
+- `VisualSpec` gains an explicit `output: "image" | "video"` field (default `image`);
+  `WorkflowTemplate` declares its kind for a cross-check. The marker also tells the
+  sanity check which recipe ranges apply and the cost estimator which kind to segment.
+- `VisualGeneration` gains an optional `keyframe_path`; `_generation_input` uses
+  `keyframe_path or asset_path` so the multimodal embed gets a still even when the asset
+  is an `.mp4`. The keyframe is the clip's **middle frame** (extracted via ffmpeg, from
+  the produced clip — for I2V, never the seed). Contact-sheet keyframe deferred.
+- `generate.py` branches source-provisioning on `output`: image → img2img (denoise
+  applies); video → I2V seed frame (no denoise; written to the I2V graph's load-image
+  slot, reusing the built `/upload/image` + `VisualSource` path). After writing an mp4,
+  extract the middle-frame keyframe.
+- `gpu_tracker.estimate_per_run_cost` segments the learned estimate by `output` kind
+  (video clips average against video, with a video cold-start default). Size-aware
+  bucketing deferred. A **thin WAN-aware sanity check** at the gate echoes the resolved
+  recipe and flags out-of-range values (ranges conditional on the LoRA stack) before
+  spending — motivated by the cost asymmetry (minutes of GPU per clip).
+- `report` gains an optional `composition | motion | both` aspect on video reactions
+  (threaded into the note/lesson plumbing) so a `disliked` distinguishes a bad look from
+  bad motion. Finer temporal taxonomy deferred.
+- Registry + slot map: two WAN expert entries; slot map targets both loaders + the WAN
+  settings. ffmpeg becomes a runtime dependency (already used elsewhere in the workspace).
 
 #### Refinement (img2img / inpaint, edit-mode)
 
