@@ -333,7 +333,13 @@ is a fast-follow on the same path.
 
 ```bash
 visual-generation draft "<intent>" [-o batch.md] [--template <name>]
+visual-generation draft "<edit>" [--from <gen_id> | --image <path>] [--mask <path>] [--denoise N]   # refine / iterate
 ```
+
+`draft --from <gen_id>` (or `--image <path>`, plus `--mask` for inpaint) refines an existing
+image instead of generating from scratch — an outcome-change edit that uploads the prior image
+to the pod and records `parent_id`/`chain_root_id` lineage on the new generation. Supported in
+the spec/CLI; it **requires a registered img2img/inpaint workflow template** to point at.
 
 **Generate in one warm session** (spends GPU — soft-inform gate; you spin the pod up):
 
