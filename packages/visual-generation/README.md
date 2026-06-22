@@ -203,12 +203,14 @@ Orientation for a newcomer operating this agent:
 - **Z-Image-Turbo does img2img, inpaint, ControlNet, and LoRA — but NOT
   IP-Adapter/InstantID** (one-photo zero-shot identity). That capability needs
   SDXL/Flux.
-- **Refinement (img2img/inpaint) is built and wired.** `draft --from <gen_id>` /
+- **Refinement (img2img/inpaint) is built, wired, and proven end-to-end.** `draft --from <gen_id>` /
   `--image <path>` (+ `--mask`) attaches a `VisualSource`; at `generate` the source is
-  uploaded (`/upload/image`) and written into the template's init-image slot, with
-  `parent_id`/`chain_root_id` lineage. The one thing that's a *user* task (not missing
-  code) is registering an actual img2img/inpaint ComfyUI graph to point at — graph
-  authoring is deferred (see [workflow register](#workflow-register-exported-apijson---name-n)).
+  uploaded (`/upload/image`) and written into the template's init-image (and mask) slot, with
+  `parent_id`/`chain_root_id` lineage. The **`visual-workflow-inpaint` graph is registered and
+  has been run through the CLI end-to-end** (editing a single TV screen inside a stop-motion bar
+  plate), so registering a graph is no longer an open prerequisite for inpaint. Authoring
+  *new* graphs (e.g. an img2img+LoRA template) remains a user task (see
+  [workflow register](#workflow-register-exported-apijson---name-n)).
 - **Pod realities:** a new pod = a new proxy URL (update `$EP`) AND a fresh
   ComfyUI that does NOT carry over a workflow you built in the browser — so
   export ([API format](#save-workflow-format-vs-export-api-format)) +
@@ -518,6 +520,43 @@ reads as an edit of the original. If you instead see invented settings (e.g.
 pre-"seed-from-parent" build — pull latest. Manual stopgap: fix the spec's `settings`
 in `visual-batch.md` to the Z-Image recipe (`cfg 1`, `steps 8`,
 `sampler res_multistep`, `scheduler simple`) before `generate`.
+
+**An inpaint of a screen/prop came out as flat *framed art* instead of a lit display.**
+Two causes, usually together: the prompt used "flat colors / graphic style / poster"
+language, and the **mask covered the prop's frame/bezel**, so the surrounding frame got
+repainted into a picture frame. **Fix the recipe, not the code:** (1) mask the
+**glass/region only**, inset *inside* the surrounding frame, so the object's own frame is
+preserved; (2) prompt it as a **lit display from a broadcast/camera angle** and explicitly
+negate "poster / framed art / flat / picture frame / matte border"; (3) use **denoise ~0.8**.
+(Learned editing a TV screen to show a basketball game in the stop-motion bar plate.)
+
+**What denoise to use for inpaint — it's *higher* than whole-image img2img.** A masked
+inpaint only regenerates the masked region, so a low denoise leaves the original content
+ghosting through. Use **0.8–0.9** to fully replace masked content. The CLI's ">0.85 loses
+coherence" warning is about *whole-image* coherence and is **benign for masked inpaint** —
+the rest of the frame isn't denoised. Whole-image img2img stays at **0.4–0.7** (≈0.65 is the
+calibrated "redo every surface, keep the room's geometry" dial for turning a photo into a set).
+
+**`draft` dies with `FileNotFoundError: …/batches/batch.batch.md`.** The batch directory
+doesn't exist and `write_batch` doesn't create it (KI-6). One-time fix:
+`mkdir -p ~/agent-data/visual-generation/batches`. The "Error communicating with Voyage" line
+printed just above is unrelated and non-fatal (next entry). The redundant `batch.batch.md`
+name is the default-project quirk (KI-7) — point `generate` at the path on the `Appended to:`
+line, **not** the generic `<batch.md>` placeholder in the `Next:` hint.
+
+**`draft` prints "Error communicating with Voyage" and/or picks no template.** `draft` does
+template auto-retrieval via the Voyage embeddings API; a transient failure **degrades
+gracefully to no template**. For txt2img that just means unconstrained settings, but for
+**inpaint it means the `init_image`/`mask` slots are never wired — the mask silently won't
+apply.** Watch the `Template:` line in the draft output: if it reads
+`(none — settings are unconstrained)`, re-run (usually transient) or pass
+`--template visual-workflow-inpaint` explicitly to bypass retrieval.
+
+**You can drop `--package visual-generation` from the `uv run` command.** The
+`visual-generation` console script is installed in the shared workspace venv, so
+`uv run visual-generation …` resolves it; `--package` only matters for disambiguation or
+package-specific sync. The `op run --env-file=".env" --` prefix is still required for any
+credentialed command (embeds/store writes) — see the Voyage/Anthropic key entry below.
 
 ### Setup-phase gotchas (volume, uploads, downloads) — learned 2026-06-19
 

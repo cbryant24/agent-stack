@@ -338,8 +338,11 @@ visual-generation draft "<edit>" [--from <gen_id> | --image <path>] [--mask <pat
 
 `draft --from <gen_id>` (or `--image <path>`, plus `--mask` for inpaint) refines an existing
 image instead of generating from scratch — an outcome-change edit that uploads the prior image
-to the pod and records `parent_id`/`chain_root_id` lineage on the new generation. Supported in
-the spec/CLI; it **requires a registered img2img/inpaint workflow template** to point at.
+to the pod and records `parent_id`/`chain_root_id` lineage on the new generation. It resolves a
+registered workflow template (`visual-workflow-img2img` / `visual-workflow-inpaint`) — both are
+registered, and the inpaint path has been **run end-to-end through the CLI** (a masked
+single-region edit). For inpaint, the mask PNG marks white = repaint; mask the target region
+only, and use a higher denoise (≈0.8) than whole-image img2img (≈0.65).
 
 **Generate in one warm session** (spends GPU — soft-inform gate; you spin the pod up):
 

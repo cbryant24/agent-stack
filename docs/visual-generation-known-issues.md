@@ -50,3 +50,29 @@ in `generate.py`.
 stashing — HEAD shows the identical count and per-file distribution). Most are in untouched
 files (e.g. `chains.py`). The refinement, seed-from-parent, advisory, and dedupe changes
 introduce zero new type errors. Clearing the baseline is separate tech-debt.
+
+## KI-6 — `draft` crashes when the batch directory doesn't exist
+**Status: open bug — fix needed**
+
+On a machine where `~/agent-data/visual-generation/batches/` has never been created, `draft`
+dies after crafting the spec with `FileNotFoundError: …/batches/batch.batch.md` —
+`write_batch`/`append_spec` (`batch_file.py`) writes the batch file without creating its
+parent directory. The spec is lost (the crash happens mid-write, before anything is printed
+or persisted), and the Voyage retrieval line just above it is an unrelated, non-fatal
+"degrading gracefully" message.
+
+Workaround: `mkdir -p ~/agent-data/visual-generation/batches` once. Fix: add
+`path.parent.mkdir(parents=True, exist_ok=True)` before the write in `write_batch`, and add a
+regression test that `draft` succeeds with no pre-existing `batches/` dir. (Hit while running
+the first end-to-end inpaint from the CLI.)
+
+## KI-7 — Default batch file is named `batch.batch.md`; `Next:` hint prints a placeholder
+**Status: accepted (cosmetic)**
+
+With no `--project`/`--output`, the batch path is `<project>.batch.md` and `project` defaults
+to the literal string `"batch"`, yielding the redundant `batch.batch.md`. Separately, the
+`draft` success output prints `Next: visual-generation generate <batch.md> --section …` — a
+generic `<batch.md>` placeholder rather than the real path, which is the one on the
+`Appended to:` line. Functionally harmless (point `generate` at the `Appended to:` path), but
+confusing. Fix: default the project to a non-`batch` name (or special-case the suffix so it
+isn't doubled), and interpolate the actual batch path into the `Next:` hint.
