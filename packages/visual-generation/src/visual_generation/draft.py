@@ -58,7 +58,7 @@ async def _resolve_template(
 
 
 def _default_batch_path(project: str | None) -> Path:
-    stem = project or "batch"
+    stem = project or "default"
     return get_config().agent_data_dir / "visual-generation" / "batches" / f"{stem}.batch.md"
 
 

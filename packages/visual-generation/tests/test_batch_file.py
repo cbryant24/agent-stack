@@ -83,6 +83,16 @@ def test_append_spec_creates_then_grows(tmp_path: Path) -> None:
     assert batch.project == "proj"
 
 
+def test_write_batch_creates_missing_parent_dir(tmp_path: Path) -> None:
+    # KI-6: writing under a not-yet-created batches/ dir must succeed, not crash.
+    batch = GenerationBatch(project="proj", specs=[_spec("wolf", "a wolf in neon rain")])
+    path = tmp_path / "nonexistent" / "batches" / "p.batch.md"
+    assert not path.parent.exists()
+    write_batch(batch, path)
+    assert path.exists()
+    assert read_batch(path) == batch
+
+
 def test_hand_edited_spec_without_metadata_comment(tmp_path: Path) -> None:
     # A human writes a section with no vg-spec comment — body is read as the prompt.
     path = tmp_path / "hand.batch.md"

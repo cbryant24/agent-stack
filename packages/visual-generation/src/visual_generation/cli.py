@@ -362,7 +362,7 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
 
     if result.batch_path:
         click.echo(f"\nAppended to: {result.batch_path}")
-        click.echo("Next: visual-generation generate <batch.md> --section "
+        click.echo(f"Next: visual-generation generate {result.batch_path} --section "
                    f"{spec.spec_id} --endpoint <url>")
 
 
