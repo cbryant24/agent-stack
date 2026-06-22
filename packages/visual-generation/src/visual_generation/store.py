@@ -257,6 +257,80 @@ class VisualGenerationStore:
             (pid, score, TechniqueLesson.from_payload(payload)) for pid, score, payload in raw
         ]
 
+    async def list_lessons(
+        self,
+        *,
+        confirmed_only: bool = True,
+        scope: str | None = None,
+        valence: str | None = None,
+    ) -> list[TechniqueLesson]:
+        """Filter-scroll (no vector) every technique_lesson point, oldest first.
+
+        The management inverse of `search_lessons`/recall: no embedding, no fixed-limit
+        truncation, and the caller reads `lesson.entry_id` to target one for removal.
+        """
+        conditions: list[FieldCondition] = [
+            FieldCondition(key="memory_type", match=MatchValue(value=MEMORY_TYPE_TECHNIQUE_LESSON))
+        ]
+        if confirmed_only:
+            conditions.append(FieldCondition(key="confirmed", match=MatchValue(value=True)))
+        if scope is not None:
+            conditions.append(FieldCondition(key="scope", match=MatchValue(value=scope)))
+        if valence is not None:
+            conditions.append(FieldCondition(key="valence", match=MatchValue(value=valence)))
+        filters = Filter(must=conditions)
+
+        lessons: list[TechniqueLesson] = []
+        offset = None
+        while True:
+            records, offset = await self._store._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=filters,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+            )
+            lessons.extend(TechniqueLesson.from_payload(r.payload or {}) for r in records)
+            if offset is None:
+                break
+        return sorted(lessons, key=lambda le: le.created_at)
+
+    async def get_lesson(self, entry_id: str) -> TechniqueLesson | None:
+        """Retrieve a technique_lesson by id.
+
+        Returns None if no point has that id. Raises ValueError(<memory_type>) if a point
+        exists but is NOT a technique_lesson — so callers can refuse to delete a generation
+        or workflow_template addressed by its id.
+        """
+        records = await self._store.retrieve_points(self._collection, [entry_id])
+        if not records:
+            return None
+        payload = records[0].payload or {}
+        mt = payload.get("memory_type")
+        if mt != MEMORY_TYPE_TECHNIQUE_LESSON:
+            raise ValueError(mt or "unknown")
+        return TechniqueLesson.from_payload(payload)
+
+    async def delete_lesson(self, entry_id: str) -> None:
+        """Delete the technique_lesson with `entry_id`.
+
+        Reuses the raw qdrant client delete pattern from `prune_templates_by_name`. The
+        selector is scoped to `memory_type == technique_lesson` AND this `entry_id`, so it can
+        only ever remove the one targeted lesson — never a generation or workflow_template.
+        """
+        await self._store._client.delete(
+            collection_name=self._collection,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(
+                        key="memory_type",
+                        match=MatchValue(value=MEMORY_TYPE_TECHNIQUE_LESSON),
+                    ),
+                    FieldCondition(key="entry_id", match=MatchValue(value=entry_id)),
+                ],
+            ),
+        )
+
     # ── Workflow-template writes ─────────────────────────────────────────────
 
     async def prune_templates_by_name(self, names: list[str], keep_entry_id: str) -> None:

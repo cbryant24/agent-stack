@@ -319,6 +319,54 @@ async def test_search_lessons_can_include_unconfirmed() -> None:
     assert "confirmed" not in matched
 
 
+@pytest.mark.asyncio
+async def test_list_lessons_returns_stored_lessons() -> None:
+    store, mock_memory = _make_store()
+    lessons = [
+        TechniqueLesson(statement="Euler+simple is reliable on flux", valence="positive",
+                        scope="settings", confirmed=True),
+        TechniqueLesson(statement="CFG>7 washes skin", valence="negative",
+                        scope="settings", confirmed=True),
+    ]
+    records = [SimpleNamespace(id=le.entry_id, payload=le.to_payload()) for le in lessons]
+    mock_memory._client.scroll = AsyncMock(return_value=(records, None))
+
+    out = await store.list_lessons()
+    matched = _match_values(mock_memory._client.scroll.call_args.kwargs["scroll_filter"])
+    assert matched["memory_type"] == MEMORY_TYPE_TECHNIQUE_LESSON
+    assert matched["confirmed"] is True  # confirmed_only default
+    assert {le.statement for le in out} == {le.statement for le in lessons}
+
+
+@pytest.mark.asyncio
+async def test_delete_lesson_targets_only_that_id() -> None:
+    store, mock_memory = _make_store()
+    await store.delete_lesson("lesson-abc")
+
+    selector = mock_memory._client.delete.call_args.kwargs["points_selector"]
+    matched = _match_values(selector)
+    assert matched["memory_type"] == MEMORY_TYPE_TECHNIQUE_LESSON
+    assert matched["entry_id"] == "lesson-abc"
+
+
+@pytest.mark.asyncio
+async def test_get_lesson_returns_none_when_missing(png_asset) -> None:
+    store, mock_memory = _make_store()
+    mock_memory.retrieve_points = AsyncMock(return_value=[])
+    assert await store.get_lesson("nope") is None
+
+
+@pytest.mark.asyncio
+async def test_get_lesson_refuses_non_lesson(png_asset) -> None:
+    store, mock_memory = _make_store()
+    gen = _gen(png_asset)  # a generation, not a lesson
+    mock_memory.retrieve_points = AsyncMock(return_value=[_record(gen)])
+
+    with pytest.raises(ValueError, match=MEMORY_TYPE_GENERATION):
+        await store.get_lesson(gen.entry_id)
+    mock_memory._client.delete.assert_not_called()
+
+
 # ── Workflow templates ───────────────────────────────────────────────────────
 
 

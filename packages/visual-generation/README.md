@@ -400,6 +400,20 @@ each individual generation in the run:
 - It does **not** stop the pod, and does **not** stop GPU billing — the pod
   keeps running and accruing cost until you stop it yourself in the RunPod UI.
 
+### `lesson list [--include-unconfirmed] [--scope S] [--valence V]`
+
+Lists technique lessons one per line as `entry_id  [valence/scope] statement`. The
+management inverse of `recall` (which hides ids on purpose): here the `entry_id` is the
+whole point, so you can target one for removal. Confirmed-only by default;
+`--include-unconfirmed` also shows unconfirmed lessons. `--scope`/`--valence` filter the
+list.
+
+### `lesson rm <entry_id> [--yes]`
+
+Deletes the technique lesson with `entry_id`. Refuses an id that resolves to a `generation`
+or `workflow_template` (errors clearly), and errors if no point has that id. Prompts for
+confirmation unless `--yes` is passed. Use `lesson list` to find the id.
+
 ## UI generations vs. CLI generations
 
 These are two completely independent paths that happen to produce images
@@ -708,9 +722,8 @@ placeholder. Needs an authenticated 1Password session (biometric in iTerm2, or a
 **Re-running `lesson add` (or a seeding block) duplicated my lessons.** `lesson add` is
 **not** dedup-by-content — each run writes a fresh point, so the same statement run twice
 leaves two copies that both surface in `recall` and waste retrieval slots. Add each lesson
-once. To clean existing dupes, scroll the `technique_lesson` points and delete all-but-one
-per identical statement (no CLI for this yet — a one-off store script keyed on the
-statement).
+once. To clean existing dupes, run `lesson list` to see every lesson with its `entry_id`,
+then `lesson rm <entry_id>` to remove all-but-one per identical statement.
 
 **`fact ingest-docs` parsed fewer sections than expected (or none for a page).** The ingest
 reads a folder **non-recursively, `*.md` only**, and turns every **H2-or-deeper** heading

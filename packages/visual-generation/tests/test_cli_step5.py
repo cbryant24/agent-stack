@@ -98,6 +98,70 @@ def test_lesson_add_rejects_bad_scope(monkeypatch) -> None:
     assert result.exit_code != 0  # closed-vocab via click.Choice
 
 
+# ── lesson list / lesson rm ─────────────────────────────────────────────────────
+
+
+def _lesson(**overrides) -> TechniqueLesson:
+    base = dict(statement="Euler+simple is reliable on flux", valence="positive",
+                scope="settings", confirmed=True)
+    base.update(overrides)
+    return TechniqueLesson(**base)
+
+
+def test_lesson_list_shows_stored_lessons(monkeypatch) -> None:
+    le = _lesson()
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.list_lessons = AsyncMock(return_value=[le])
+    monkeypatch.setattr("visual_generation.cli._get_stores", lambda: (store, MagicMock()))
+
+    result = CliRunner().invoke(cli, ["lesson", "list"])
+    assert result.exit_code == 0, result.output
+    assert le.entry_id in result.output  # the id is the whole point
+    assert "Euler+simple is reliable on flux" in result.output
+    assert store.list_lessons.call_args.kwargs["confirmed_only"] is True
+
+
+def test_lesson_rm_deletes_targeted_lesson(monkeypatch) -> None:
+    le = _lesson()
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_lesson = AsyncMock(return_value=le)
+    store.delete_lesson = AsyncMock()
+    monkeypatch.setattr("visual_generation.cli._get_stores", lambda: (store, MagicMock()))
+
+    result = CliRunner().invoke(cli, ["lesson", "rm", le.entry_id, "--yes"])
+    assert result.exit_code == 0, result.output
+    assert store.delete_lesson.call_args.args[0] == le.entry_id
+    assert "Removed technique lesson" in result.output
+
+
+def test_lesson_rm_refuses_non_lesson(monkeypatch) -> None:
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_lesson = AsyncMock(side_effect=ValueError("generation"))
+    store.delete_lesson = AsyncMock()
+    monkeypatch.setattr("visual_generation.cli._get_stores", lambda: (store, MagicMock()))
+
+    result = CliRunner().invoke(cli, ["lesson", "rm", "some-generation-id"])
+    assert result.exit_code != 0
+    assert "not a technique_lesson" in result.output
+    store.delete_lesson.assert_not_called()
+
+
+def test_lesson_rm_errors_on_missing_id(monkeypatch) -> None:
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_lesson = AsyncMock(return_value=None)
+    store.delete_lesson = AsyncMock()
+    monkeypatch.setattr("visual_generation.cli._get_stores", lambda: (store, MagicMock()))
+
+    result = CliRunner().invoke(cli, ["lesson", "rm", "nope"])
+    assert result.exit_code != 0
+    assert "No technique lesson with id" in result.output
+    store.delete_lesson.assert_not_called()
+
+
 def test_fact_add_writes_to_user_knowledge_with_domain(monkeypatch) -> None:
     uks = MagicMock()
     uks.ensure_collection = AsyncMock()

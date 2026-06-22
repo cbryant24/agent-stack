@@ -551,6 +551,59 @@ def lesson_add(statement: str, scope: str, valence: str) -> None:
     asyncio.run(_run())
 
 
+@lesson.command("list")
+@click.option("--include-unconfirmed", is_flag=True, default=False,
+              help="Also list unconfirmed lessons (confirmed-only by default).")
+@click.option("--scope", type=click.Choice(
+    [LESSON_SCOPE_PROMPT, LESSON_SCOPE_SETTINGS, LESSON_SCOPE_WORKFLOW, LESSON_SCOPE_MODEL]),
+    default=None, help="Filter by scope.")
+@click.option("--valence", type=click.Choice(["positive", "negative"]), default=None,
+              help="Filter by valence.")
+def lesson_list(include_unconfirmed: bool, scope: str | None, valence: str | None) -> None:
+    """List technique lessons with their entry_ids (target one with `lesson rm`)."""
+
+    async def _run() -> None:
+        store, _ = _get_stores()
+        await store.ensure_collection()
+        lessons = await store.list_lessons(
+            confirmed_only=not include_unconfirmed, scope=scope, valence=valence)
+        if not lessons:
+            click.echo("No technique lessons.")
+            return
+        click.echo(f"Technique lessons ({len(lessons)}):")
+        for le in lessons:
+            conf = "" if le.confirmed else " (unconfirmed)"
+            click.echo(f"  {le.entry_id}  [{le.valence}/{le.scope}]{conf} {le.statement[:80]}")
+
+    asyncio.run(_run())
+
+
+@lesson.command("rm")
+@click.argument("entry_id")
+@click.option("--yes", is_flag=True, default=False,
+              help="Delete without the confirmation prompt.")
+def lesson_rm(entry_id: str, yes: bool) -> None:
+    """Delete the technique lesson with ENTRY_ID (refuses non-lesson ids)."""
+
+    async def _run() -> None:
+        store, _ = _get_stores()
+        await store.ensure_collection()
+        try:
+            le = await store.get_lesson(entry_id)
+        except ValueError as exc:
+            raise click.ClickException(
+                f"Entry {entry_id} is a {exc}, not a technique_lesson; refusing to delete.")
+        if le is None:
+            raise click.ClickException(f"No technique lesson with id {entry_id}.")
+        if not yes:
+            click.confirm(
+                f"Remove [{le.valence}/{le.scope}] {le.statement[:60]}?", abort=True)
+        await store.delete_lesson(entry_id)
+        click.echo(f"Removed technique lesson {entry_id}: {le.statement[:60]}")
+
+    asyncio.run(_run())
+
+
 @cli.group()
 def fact() -> None:
     """Manage documented platform/vendor facts in user_knowledge (vs. learned-by-doing lessons)."""
