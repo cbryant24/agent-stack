@@ -188,6 +188,12 @@ Short, jargon-free definitions. The most important one is the first.
   bundle of nodes collapsed into one box (the Z-Image template is one);
   right-click → Unpack to edit the nodes inside. See [Slot maps](#slot-maps) and
   [Subgraphs](#subgraphs).
+- **`report --context` vs `--notes`** — when you react to a generation with
+  `report <gen_id>`, `--context` (reasoning-oriented: *why* you reacted) is embedded with
+  the generation record and **reaches the drafting Claude on later related drafts** as a
+  retrieved prior-generation signal; `--notes` (action-oriented: *what to change next
+  time*) is stored but **currently NOT read by `draft`**. So put any steering feedback you
+  want to actually influence future drafts in **`--context`**, not `--notes`.
 
 ## What to know — gaps worth closing
 
@@ -324,6 +330,16 @@ but the `visual-generation` CLI parses as JSON:
   these choices were made), `created_at`.
 - The plain prose paragraph below each `vg-spec` is the actual image prompt
   text sent to the model.
+
+**A `spec_id` is not a generation id.** The `spec_id` identifies the *order ticket* (one
+`vg-spec` in a batch) — it is **not** the id of the image that gets produced. At `generate`
+time a fresh **`gen_id`** is minted for each rendered image; that `gen_id` is also the asset
+filename (`assets/<project>/<gen_id>.png`) and the Qdrant point id of the stored
+`generation` record. So when you want to inspect or act on a *generation* —
+`report`, `recall`, `chain show` — use the `gen_id` surfaced by `review-pending` / `recall`,
+**not** the batch's `spec_id`. (The two only coincide in error paths: a spec whose metadata
+fails to parse falls back to a freshly-generated `spec_id`, which is why a malformed
+`workflow_ref` can change the `spec_id` that gets reported — see [`workflow_ref`](#workflow_ref).)
 
 ### `workflow_ref`
 
@@ -571,6 +587,35 @@ apply.** Watch the `Template:` line in the draft output: if it reads
 `uv run visual-generation …` resolves it; `--package` only matters for disambiguation or
 package-specific sync. The `op run --env-file=".env" --` prefix is still required for any
 credentialed command (embeds/store writes) — see the Voyage/Anthropic key entry below.
+
+**`docker ps` hangs and the local Qdrant stack won't come up.** *Symptom:* `docker ps`
+(or `docker compose … up`) hangs with no output and never returns. *Cause:* the Docker
+Desktop daemon has wedged — the CLI is waiting on a backend that's no longer answering.
+*Fix:* force-kill the whole Docker process tree, then relaunch:
+`osascript -e 'quit app "Docker"'` to ask it to quit, then
+`pkill -9 -f '[Dd]ocker'` (or `pkill -9 com.docker`) to kill the stragglers, then
+`open -a Docker` to start fresh. **Never delete the Docker VM data / "reset to factory
+defaults"** — the `visual_generation_memory` Qdrant volume lives inside that VM, so
+wiping it destroys your generations/lessons/templates. If `docker ps` still hangs after a
+relaunch, kick the network helper: `sudo launchctl kickstart -k system/com.docker.vmnetd`.
+*Recurrence:* this is an intermittent Docker Desktop fault, not something the repo causes;
+the quit + `pkill -9` + relaunch sequence is the routine recovery, and as long as you
+never wipe the VM the Qdrant data survives every cycle.
+
+**Qdrant container fails to start with `bind: can't assign requested address`.**
+*Symptom:* `docker compose -f infrastructure/docker-compose.yml up` errors on the Qdrant
+port mapping with `bind: can't assign requested address`. *Cause:* the compose file pinned
+the host side of `6333` to a specific IP that *this* machine doesn't currently own — e.g. a
+Tailscale IP copied from another host, or one that changed. The kernel can only bind an
+address the host actually holds. *Fix:* bind to an address this host owns. Either use this
+machine's own Tailscale IP (`tailscale ip -4` — this M1 = `100.79.253.62`) or, preferably,
+bind **all interfaces** with a plain `"6333:6333"` mapping, which serves both `localhost`
+*and* the Tailscale address at once. A pinned non-loopback IP loses `localhost`, so the
+local tests/CLI that hit `localhost:6333` can no longer reach Qdrant. *Recurrence:* a
+pinned IP breaks again whenever the Tailscale IP rotates or the volume moves to another
+host; `"6333:6333"` is the durable choice that survives both. (Don't hand-edit
+`infrastructure/docker-compose.yml` as part of an unrelated change — this entry just
+records what the binding should be.)
 
 ### Setup-phase gotchas (volume, uploads, downloads) — learned 2026-06-19
 
