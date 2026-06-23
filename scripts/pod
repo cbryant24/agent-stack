@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+#
+# pod — RunPod lifecycle controller & idle-cost watchdog for the visual-generation
+#       ComfyUI pod (image runpod/comfyui:1.3.0-cuda12.8, US-NE-1, ~$2.09/hr).
+#
+# LIFECYCLE: create-fresh / delete (NOT start/stop).
+#
+# This pod uses a network volume (gen-usne1, US-NE-1) and a scarce GPU (RTX PRO 6000
+# Blackwell). RunPod pins a STOPPED pod to its original physical host; for this GPU the
+# host's GPUs are taken by the time you'd resume, so `pod start` reliably fails ("not
+# enough free GPUs on the host machine") and stopped pods can also be reclaimed. The
+# correct lifecycle is therefore create-fresh / delete: the network volume SURVIVES pod
+# deletion, and a fresh `pod create` schedules onto any available host. Everything
+# persistent lives on the volume; the pod is disposable scaffolding.
+#
+# HARD RULES (enforced in code):
+#   - NEVER call `runpodctl network-volume` (any subcommand). The volume is sacrosanct;
+#     this script has no reason to read or modify it.
+#   - NEVER call `pod start` or `pod stop`. This script is create/delete ONLY.
+#
+# Subcommands:
+#   up      Ensure a running pod exists. If one matching POD_NAME is already RUNNING with
+#           a GPU, reuse it; otherwise create a fresh pod and verify it came up RUNNING
+#           with gpuCount >= 1 (a 0-GPU result is capacity failure -> delete + retry).
+#   down    Delete ALL pods matching the target (running OR exited) so stale pods don't
+#           accumulate. NEVER touches the network volume.
+#   status  Print id, name, desiredStatus, gpuCount, costPerHr for each matching pod
+#           (uses `pod list --all` so stopped/exited pods are visible).
+#   watch   Dead-man's switch: guard an ALREADY-running pod against idle cost by prompting
+#           on the Mac periodically and auto-DELETING if no one confirms.
+#           NOTE: `watch` uses `osascript display dialog`, which needs a local GUI
+#           session — run it ON THE MAC, not over SSH.
+#
+# Env knobs (constants — all overridable):
+#   POD_NAME           Pod name to target.                       Default: visual-generation
+#   POD_ID             Target a specific pod id instead of name. Default: unset.
+#   IMAGE              Container image.        Default: runpod/comfyui:1.3.0-cuda12.8
+#   GPU_ID             GPU type.   Default: NVIDIA RTX PRO 6000 Blackwell Server Edition
+#   CLOUD_TYPE         Cloud type.                               Default: SECURE
+#   DATACENTER         Data center id.                           Default: US-NE-1
+#   NETWORK_VOLUME_ID  Network volume to mount.                  Default: 3wqkq1t8bq
+#   VOLUME_MOUNT_PATH  Mount path for the volume.                Default: /workspace
+#   CONTAINER_DISK_GB  Container disk size in GB.                Default: 150
+#   PORTS              Exposed ports.                            Default: 8188/http,22/tcp
+#   CREATE_RETRIES     Capacity-error retries on create.         Default: 3
+#   CREATE_RETRY_DELAY Seconds between create retries.           Default: 15
+#   CHECKIN_INTERVAL   Seconds between `watch` confirmations.    Default: 1800 (30m)
+#   GRACE              Seconds to respond before `watch` deletes. Default: 180 (3m)
+#
+# External dependencies: runpodctl, jq.
+
+set -euo pipefail
+
+POD_NAME="${POD_NAME:-visual-generation}"
+IMAGE="${IMAGE:-runpod/comfyui:1.3.0-cuda12.8}"
+GPU_ID="${GPU_ID:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
+CLOUD_TYPE="${CLOUD_TYPE:-SECURE}"
+DATACENTER="${DATACENTER:-US-NE-1}"
+NETWORK_VOLUME_ID="${NETWORK_VOLUME_ID:-3wqkq1t8bq}"
+VOLUME_MOUNT_PATH="${VOLUME_MOUNT_PATH:-/workspace}"
+CONTAINER_DISK_GB="${CONTAINER_DISK_GB:-150}"
+PORTS="${PORTS:-8188/http,22/tcp}"
+CREATE_RETRIES="${CREATE_RETRIES:-3}"
+CREATE_RETRY_DELAY="${CREATE_RETRY_DELAY:-15}"
+CHECKIN_INTERVAL="${CHECKIN_INTERVAL:-1800}"
+GRACE="${GRACE:-180}"
+
+# --- helpers ---------------------------------------------------------------
+
+log() {
+  printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*"
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: pod <up|down|status|watch>
+
+  up      Ensure a running pod exists: reuse a RUNNING pod with a GPU, else create a
+          fresh one and verify it came up with gpuCount >= 1.
+  down    Delete ALL pods matching the target (running or exited). Never touches the
+          network volume.
+  status  Print id, name, desiredStatus, gpuCount, costPerHr for each matching pod
+          (includes stopped/exited pods).
+  watch   Periodically prompt (macOS dialog) to keep an already-running pod alive;
+          auto-DELETE it if no one confirms. Run on the Mac, not over SSH.
+
+Lifecycle is create/delete ONLY — this script never calls pod start, pod stop, or any
+network-volume subcommand. The network volume survives pod deletion.
+
+Env knobs (see header for full list / defaults):
+  POD_NAME           Pod name to target (default: visual-generation).
+  POD_ID             Target a specific pod id instead of name (default: unset).
+  CREATE_RETRIES     Capacity-error retries on create (default: 3).
+  CREATE_RETRY_DELAY Seconds between create retries (default: 15).
+  CHECKIN_INTERVAL   Seconds between watch confirmations (default: 1800).
+  GRACE              Seconds to respond before watch deletes (default: 180).
+EOF
+  exit 2
+}
+
+preflight() {
+  if ! command -v runpodctl >/dev/null 2>&1; then
+    echo "error: runpodctl not found on PATH. Install it with:" >&2
+    echo "    brew install runpod/runpodctl/runpodctl" >&2
+    exit 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "error: jq not found on PATH. Install it with:" >&2
+    echo "    brew install jq" >&2
+    exit 1
+  fi
+}
+
+# Echo the resolved pod id(s), newline-separated (possibly empty). Zero matches is NOT an
+# error here — callers (down/status/watch) decide what zero means; only `up` acts on zero.
+# Uses `pod list --all` so STOPPED/EXITED pods are visible (the default list hides them,
+# which is what broke the old start/status). If POD_ID is set, target that id specifically.
+resolve_pod() {
+  local list
+  list="$(runpodctl pod list --all -o json)"
+
+  if [[ -n "${POD_ID:-}" ]]; then
+    if jq -e --arg id "$POD_ID" 'any(.[]; .id == $id)' >/dev/null <<<"$list"; then
+      printf '%s\n' "$POD_ID"
+      return 0
+    fi
+    echo "error: POD_ID '$POD_ID' is set but no such pod exists in the account." >&2
+    exit 1
+  fi
+
+  jq -r --arg name "$POD_NAME" '.[] | select(.name == $name) | .id' <<<"$list"
+}
+
+# pod_get <id> -> echo the full pod JSON (single API call per logical step).
+pod_get() {
+  runpodctl pod get "$1" -o json
+}
+
+# delete_pod <id> -> delete a pod. NEVER stop, NEVER touch the volume.
+delete_pod() {
+  runpodctl pod delete "$1" >/dev/null
+  log "deleted pod $1."
+}
+
+# True if the given create/error output looks like a transient capacity/host-full problem.
+is_capacity_error() {
+  grep -qiE 'not enough free gpus|not enough resources|no longer any instances|no instances available|host (is )?full|insufficient (capacity|resources)' <<<"$1"
+}
+
+# Create a fresh pod with the verified deploy command, retrying on capacity errors.
+# Echoes the verified pod id on success; exits nonzero on non-capacity error or exhausted
+# retries.
+create_pod() {
+  local attempt=1 out rc id json status gpu
+  while (( attempt <= CREATE_RETRIES )); do
+    log "creating pod '$POD_NAME' (attempt $attempt/$CREATE_RETRIES)..."
+
+    rc=0
+    out="$(runpodctl pod create \
+      --name "$POD_NAME" \
+      --image "$IMAGE" \
+      --gpu-id "$GPU_ID" \
+      --cloud-type "$CLOUD_TYPE" \
+      --data-center-ids "$DATACENTER" \
+      --network-volume-id "$NETWORK_VOLUME_ID" \
+      --volume-mount-path "$VOLUME_MOUNT_PATH" \
+      --container-disk-in-gb "$CONTAINER_DISK_GB" \
+      --ports "$PORTS" 2>&1)" || rc=$?
+
+    if (( rc != 0 )); then
+      if is_capacity_error "$out"; then
+        log "capacity error on create; retrying in ${CREATE_RETRY_DELAY}s..."
+        log "  (runpodctl: $(head -n1 <<<"$out"))"
+        sleep "$CREATE_RETRY_DELAY"
+        (( attempt++ ))
+        continue
+      fi
+      echo "error: pod create failed (non-capacity error):" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+    fi
+
+    # Parse the new pod id from create output (runpodctl prints something like
+    #: pod "<id>"). Fall back to resolving the newest matching pod by name.
+    id="$(grep -oE '[a-z0-9]{12,}' <<<"$out" | head -n1 || true)"
+    if [[ -z "$id" ]]; then
+      log "could not parse pod id from create output; resolving newest '$POD_NAME'..."
+      id="$(resolve_pod | tail -n1)"
+    fi
+    if [[ -z "$id" ]]; then
+      echo "error: pod create reported success but no pod id could be resolved:" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+    fi
+
+    # Single read to verify the GPU attached (create returns RUNNING + gpuCount inline,
+    # so no polling loop is needed).
+    json="$(pod_get "$id")"
+    status="$(jq -r '.desiredStatus' <<<"$json")"
+    gpu="$(jq -r '.gpuCount' <<<"$json")"
+
+    if [[ "$status" == "RUNNING" && "$gpu" -ge 1 ]]; then
+      log "pod $id RUNNING with $gpu GPU(s)."
+      printf '%s\n' "$id"
+      return 0
+    fi
+
+    # Came up with 0 GPUs (capacity) — treat as a failed attempt. Delete the orphan so
+    # stopped/0-GPU pods don't accumulate, then retry.
+    log "pod $id came up with status=$status gpuCount=$gpu (no GPU — capacity). Deleting orphan and retrying."
+    delete_pod "$id" || true
+    sleep "$CREATE_RETRY_DELAY"
+    (( attempt++ ))
+  done
+
+  echo "" >&2
+  echo "!!! ERROR: could not create a pod with a GPU after $CREATE_RETRIES attempt(s) — US-NE-1 capacity for '$GPU_ID' is exhausted. Try again later." >&2
+  exit 1
+}
+
+# --- subcommands -----------------------------------------------------------
+
+cmd_up() {
+  local ids id json status gpu
+  ids="$(resolve_pod)"
+
+  # Reuse an existing RUNNING pod with a GPU if one is already up.
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    json="$(pod_get "$id")"
+    status="$(jq -r '.desiredStatus' <<<"$json")"
+    gpu="$(jq -r '.gpuCount' <<<"$json")"
+    if [[ "$status" == "RUNNING" && "$gpu" -ge 1 ]]; then
+      log "reusing pod $id (RUNNING with $gpu GPU(s))."
+      return 0
+    fi
+  done <<<"$ids"
+
+  create_pod >/dev/null
+}
+
+cmd_down() {
+  local ids id had=0
+  ids="$(resolve_pod)"
+
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    had=1
+    delete_pod "$id"
+  done <<<"$ids"
+
+  if (( had == 0 )); then
+    log "no pods matching '${POD_ID:-$POD_NAME}'; nothing to delete."
+  fi
+}
+
+cmd_status() {
+  local ids id json found=0
+  ids="$(resolve_pod)"
+
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    found=1
+    json="$(pod_get "$id")"
+    jq -r '"id:            \(.id)
+name:          \(.name)
+desiredStatus: \(.desiredStatus)
+gpuCount:      \(.gpuCount)
+costPerHr:     \(.costPerHr)
+"' <<<"$json"
+  done <<<"$ids"
+
+  if (( found == 0 )); then
+    log "no pods matching '${POD_ID:-$POD_NAME}'."
+  fi
+}
+
+cmd_watch() {
+  local ids count id json status name
+  ids="$(resolve_pod)"
+  count="$(grep -c . <<<"$ids" || true)"
+
+  if (( count == 0 )); then
+    echo "error: no pod matching '${POD_ID:-$POD_NAME}' — nothing to watch. Run 'pod up' first." >&2
+    exit 1
+  fi
+  if (( count > 1 )); then
+    echo "error: $count pods match '$POD_NAME' — set POD_ID to disambiguate:" >&2
+    while IFS= read -r pid; do echo "       $pid" >&2; done <<<"$ids"
+    exit 1
+  fi
+
+  id="$ids"
+  json="$(pod_get "$id")"
+  status="$(jq -r '.desiredStatus' <<<"$json")"
+  name="$(jq -r '.name' <<<"$json")"
+
+  if [[ "$status" != "RUNNING" ]]; then
+    echo "error: pod $id is $status — not running. Run 'pod up' first; watch does not create pods." >&2
+    exit 1
+  fi
+
+  local session_start=$SECONDS
+  log "watching pod $id ($name): check-in every ${CHECKIN_INTERVAL}s, ${GRACE}s grace."
+
+  while true; do
+    sleep "$CHECKIN_INTERVAL"
+
+    # Re-get must survive a pod that vanished (reclaimed/deleted externally): a failed
+    # or empty get must not abort under `set -euo pipefail`.
+    json="$(pod_get "$id" 2>/dev/null || true)"
+    if [[ -z "$json" ]]; then
+      log "pod $id no longer exists (reclaimed/deleted externally). Exiting."
+      return 0
+    fi
+    status="$(jq -r '.desiredStatus // empty' <<<"$json" 2>/dev/null || true)"
+    if [[ -z "$status" ]]; then
+      log "pod $id no longer exists (reclaimed/deleted externally). Exiting."
+      return 0
+    fi
+    if [[ "$status" != "RUNNING" ]]; then
+      log "pod $id is now $status (stopped/reclaimed externally). Exiting."
+      return 0
+    fi
+
+    # Elapsed runtime since this watch session began.
+    local elapsed=$((SECONDS - session_start))
+    local elapsed_str
+    elapsed_str="$(printf '%dh%02dm' $((elapsed / 3600)) $(((elapsed % 3600) / 60)))"
+
+    # osascript display dialog needs a local GUI session — run this on the Mac, not SSH.
+    local result
+    result="$(osascript -e "display dialog \"agent-stack pod $name has been running ~$elapsed_str. It bills ~\$2.09/hr. Still working?\" buttons {\"Delete pod\",\"Still working\"} default button \"Still working\" with title \"RunPod watchdog\" giving up after $GRACE" 2>/dev/null || true)"
+
+    if [[ "$result" == *"button returned:Still working"* ]]; then
+      log "confirmed still working; continuing."
+    elif [[ "$result" == *"button returned:Delete pod"* ]]; then
+      log "user chose to delete pod."
+      delete_pod "$id"
+      return 0
+    elif [[ "$result" == *"gave up:true"* ]]; then
+      log "no response within ${GRACE}s — deleting."
+      delete_pod "$id"
+      return 0
+    else
+      # Unexpected/empty result (e.g. dialog dismissed). Be conservative: keep watching.
+      log "unrecognized dialog result; continuing. (raw: ${result:-<empty>})"
+    fi
+  done
+}
+
+# --- dispatch --------------------------------------------------------------
+
+main() {
+  preflight
+  local cmd="${1:-}"
+  case "$cmd" in
+    up)     cmd_up ;;
+    down)   cmd_down ;;
+    status) cmd_status ;;
+    watch)  cmd_watch ;;
+    *)      usage ;;
+  esac
+}
+
+main "$@"

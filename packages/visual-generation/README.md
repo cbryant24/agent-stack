@@ -261,6 +261,36 @@ real failure mode — over-driving a distilled model's guidance massively
 oversaturates and distorts the image (this is exactly what happened in the
 "sports bar" generation; see Troubleshooting below).
 
+**Known limitations** (learned generating the `celeste-you-dangerous` batch):
+
+- **Text and logos render unreliably.** 8-step turbo diffusion renders text
+  inconsistently — short common words *sometimes* land legibly ("wrong" rendered
+  clean) but not reliably ("right" garbled to pseudo-text in the very same pass);
+  complex stylized marks (team logos, wordmarks, branded graphics) garble
+  *reliably*. Rule of thumb: treat legibility-critical text and any logo/wordmark
+  as an edit-stage composite on a clean plate (see
+  [Edit-stage compositing vs. in-diffusion generation](#edit-stage-compositing-vs-in-diffusion-generation)),
+  not something to generate. → Troubleshooting:
+  [garbled text/logos](#when-something-goes-wrong).
+- **Small per-character face details drop out in multi-character prompts.**
+  Coraline-style button eyes rendered reliably on a *solo* render but dropped on
+  the second/detail-heavier character in a two-character prompt, and on *both*
+  characters in a face-forward two-shot — even with parallel phrasing and an
+  explicit "button eyes clearly visible" instruction. Treat button eyes (and
+  similarly small details like alternating nail colors) as unreliable in
+  multi-character face-forward shots; mitigations are a targeted eye inpaint after
+  the base render, or keeping such details to solo/close compositions. →
+  Troubleshooting: [missing button-eyes](#when-something-goes-wrong).
+- **text2img has no region isolation.** Changing any part of a text2img prompt
+  regenerates the whole frame; a fixed seed keeps the result *similar* but does
+  not lock any region. To change one region while protecting another (e.g. fix a
+  skin tone while keeping the existing TV screens), use **inpaint** (mask the
+  region; everything outside is copied pixel-exact) or a **low-denoise img2img**
+  (light global touch) — see the inpaint/denoise entries under
+  [When something goes wrong](#when-something-goes-wrong). Adding *large new*
+  elements (thought bubbles, text overlays) can't be done by a light-touch edit;
+  it needs a re-roll or edit-stage compositing.
+
 ### KSampler parameters
 
 The `KSampler` node (whether visible on the canvas or hidden inside a
@@ -293,6 +323,27 @@ subgraph) is where the diffusion denoising loop actually runs. Its inputs:
 `vae_name` (on `VAELoader`) is not a KSampler parameter but is part of the
 same pipeline: it's the model used for the final latent→pixel decode step
 (`VAEDecode`) that turns the denoised latent into the actual image.
+
+### Edit-stage compositing vs. in-diffusion generation
+
+Logos, wordmarks, branded graphics, legibility-critical text, and graphic
+overlays (e.g. thought bubbles) are **composited in the editor (DaVinci) on a
+clean generated plate, not generated** — because the model renders text and
+marks unreliably (see the Z-Image
+[Known limitations](#z-image-turbo-what-it-is-and-why-its-settings-are-different)).
+
+**Benefits:** crisp, correct, legible output; preserves an otherwise-good plate
+(no re-roll); faster and cheaper iteration; a clean separation for IP-sensitive
+assets. **Tradeoffs:** extra editing labor; the plate must intentionally leave
+room for the overlay (clear headroom, blank-ish screens); IP responsibility
+shifts to composite time.
+
+### Character continuity: validate before propagating
+
+Prove a character's locked descriptor block on a **single** render before
+reusing it across other beats. For two-character beats, validate the **two-shot
+itself** (distinct puppets, no identity bleed — which held) before relying on it,
+rather than assuming a descriptor that works solo will compose cleanly.
 
 ### Save (workflow) format vs. Export (API) format
 
@@ -567,6 +618,21 @@ coherence" warning is about *whole-image* coherence and is **benign for masked i
 the rest of the frame isn't denoised. Whole-image img2img stays at **0.4–0.7** (≈0.65 is the
 calibrated "redo every surface, keep the room's geometry" dial for turning a photo into a set).
 
+**Rendered text or logos come out garbled** (words on screens/clothing render as pseudo-text
+or smeared marks). 8-step turbo diffusion renders text *unreliably* and complex marks (logos,
+wordmarks, branded graphics) *reliably* garbled — see the Z-Image
+[Known limitations](#z-image-turbo-what-it-is-and-why-its-settings-are-different). **Fix /
+future:** composite these at the edit stage on a clean plate (see
+[Edit-stage compositing](#edit-stage-compositing-vs-in-diffusion-generation)); if you must
+attempt text in-diffusion, expect only short common words to *sometimes* land.
+
+**Button eyes (or other small face details) missing in multi-character renders** — button eyes
+render as ordinary eyes on one or both characters in a face-forward two-shot. Small
+per-character attributes drop in multi-character prompts (see the Z-Image
+[Known limitations](#z-image-turbo-what-it-is-and-why-its-settings-are-different)). **Fix /
+future:** validate on solo/close shots, and consider a targeted eye inpaint after the base
+render — parallel phrasing and an explicit "clearly visible" instruction alone are insufficient.
+
 **`draft` dies with `FileNotFoundError: …/batches/batch.batch.md`.** The batch directory
 doesn't exist and `write_batch` doesn't create it (KI-6). One-time fix:
 `mkdir -p ~/agent-data/visual-generation/batches`. The "Error communicating with Voyage" line
@@ -581,6 +647,15 @@ gracefully to no template**. For txt2img that just means unconstrained settings,
 apply.** Watch the `Template:` line in the draft output: if it reads
 `(none — settings are unconstrained)`, re-run (usually transient) or pass
 `--template visual-workflow-inpaint` explicitly to bypass retrieval.
+
+**A semantic command reports an *invalid* Voyage key (distinct from the transient failure
+above).** If `workflow list` — or any embed/semantic command — errors as if the key is
+invalid, the likely cause is that it was run *without* `op run`, so the `op://` reference in
+`.env` was never resolved: an **absent** key looks identical to a **rejected** one. **Fix:** run
+under `op run --env-file=.env -- …` (the same prefix called out in the next entry). **Future:**
+any command that embeds or does semantic retrieval (`draft`, `generate`, `recall`,
+`workflow list`) must run under `op run`; exact-match DB reads (e.g. template lookup by name) do
+not.
 
 **You can drop `--package visual-generation` from the `uv run` command.** The
 `visual-generation` console script is installed in the shared workspace venv, so
