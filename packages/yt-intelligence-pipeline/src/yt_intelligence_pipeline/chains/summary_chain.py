@@ -34,10 +34,10 @@ Focus on technical accuracy. Use the video title and channel to improve tag rele
 _chain = None
 
 
-def _get_chain():  # type: ignore[return]
+def _get_chain(api_key: str):  # type: ignore[return]
     global _chain
     if _chain is None:
-        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
+        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0, api_key=api_key)
         structured_llm = llm.with_structured_output(SummaryResult)
         prompt = ChatPromptTemplate.from_messages([
             ("system", SUMMARY_SYSTEM_PROMPT),
@@ -52,8 +52,10 @@ def _get_chain():  # type: ignore[return]
 
 
 @with_retries
-def run_summary_chain(cleaned_transcript: str, video_metadata: VideoMetadata) -> SummaryResult:
-    return _get_chain().invoke({
+def run_summary_chain(
+    cleaned_transcript: str, video_metadata: VideoMetadata, api_key: str
+) -> SummaryResult:
+    return _get_chain(api_key).invoke({
         "title": video_metadata.title,
         "channel": video_metadata.channel,
         "transcript": cleaned_transcript,

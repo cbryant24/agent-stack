@@ -41,10 +41,10 @@ Return only timestamps that are likely to be visually meaningful.
 _chain = None
 
 
-def _get_chain():  # type: ignore[return]
+def _get_chain(api_key: str):  # type: ignore[return]
     global _chain
     if _chain is None:
-        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
+        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0, api_key=api_key)
         structured_llm = llm.with_structured_output(_TimestampResult)
         prompt = ChatPromptTemplate.from_messages([
             ("system", TIMESTAMP_SYSTEM_PROMPT),
@@ -55,8 +55,8 @@ def _get_chain():  # type: ignore[return]
 
 
 @with_retries
-def run_timestamp_chain(timed_transcript: str) -> list[TimestampEntry]:
-    result: _TimestampResult = _get_chain().invoke({"timed_transcript": timed_transcript})
+def run_timestamp_chain(timed_transcript: str, api_key: str) -> list[TimestampEntry]:
+    result: _TimestampResult = _get_chain(api_key).invoke({"timed_transcript": timed_transcript})
     return [
         TimestampEntry(timestamp_seconds=t.timestamp_seconds, label=t.label)
         for t in result.timestamps

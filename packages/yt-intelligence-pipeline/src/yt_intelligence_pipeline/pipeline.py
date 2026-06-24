@@ -87,17 +87,17 @@ def run_pipeline(
 
         # Step 3: Cleanup
         logger.info("Running transcript cleanup chain...")
-        cleaned = run_cleanup_chain(job.raw_transcript)
+        cleaned = run_cleanup_chain(job.raw_transcript, config.anthropic_api_key)
 
         # Step 4: Summary + Takeaways + Tags
         logger.info("Running summary chain...")
-        summary_result = run_summary_chain(cleaned, job.video_metadata)
+        summary_result = run_summary_chain(cleaned, job.video_metadata, config.anthropic_api_key)
 
         # Step 5: Timestamp identification (conditional)
         timestamps: list[TimestampEntry] | None = None
         if use_screenshots:
             logger.info("Identifying screenshot timestamps...")
-            timestamps = run_timestamp_chain(job.raw_transcript_timed)
+            timestamps = run_timestamp_chain(job.raw_transcript_timed, config.anthropic_api_key)
             logger.info(f"Claude identified {len(timestamps)} screenshot moments")
 
         output = ProcessedOutput(

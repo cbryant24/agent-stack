@@ -23,10 +23,10 @@ Clean up the raw transcript provided by the user. Follow these rules exactly:
 _chain = None
 
 
-def _get_chain():  # type: ignore[return]
+def _get_chain(api_key: str):  # type: ignore[return]
     global _chain
     if _chain is None:
-        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
+        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0, api_key=api_key)
         prompt = ChatPromptTemplate.from_messages([
             ("system", CLEANUP_SYSTEM_PROMPT),
             ("human", "{transcript}"),
@@ -36,5 +36,5 @@ def _get_chain():  # type: ignore[return]
 
 
 @with_retries
-def run_cleanup_chain(raw_transcript: str) -> str:
-    return _get_chain().invoke({"transcript": raw_transcript})
+def run_cleanup_chain(raw_transcript: str, api_key: str) -> str:
+    return _get_chain(api_key).invoke({"transcript": raw_transcript})
