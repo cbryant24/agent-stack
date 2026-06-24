@@ -64,7 +64,7 @@ async def test_research_delegates_then_cheap_retrieve(monkeypatch) -> None:
     target, request, child_budget = delegate_mock.call_args.args[:3]
     assert target == "tutorial-research"
     assert request == {"request": "runpod headless comfyui",
-                       "request_type": "research", "synthesize": False}
+                       "request_type": "research", "synthesize": False, "dry_run": False}
     # The child budget is the Claude-only envelope (no GPU dimension exists on it).
     assert child_budget is RESEARCH_CHILD_BUDGET
     assert child_budget.max_cost_usd is not None
@@ -93,7 +93,7 @@ async def test_research_no_hits_yet_message(monkeypatch) -> None:
 async def test_handler_adapts_delegate_contract_to_research(monkeypatch) -> None:
     fake = SimpleNamespace(
         status="completed", request_type="research", items_processed=2,
-        retrieved=[1, 2, 3], synthesis="S", run_id="tr",
+        retrieved=[1, 2, 3], synthesis="S", run_id="tr", plan=None,
     )
     research_fn = AsyncMock(return_value=fake)
     monkeypatch.setattr("tutorial_research.research", research_fn)
@@ -105,10 +105,59 @@ async def test_handler_adapts_delegate_contract_to_research(monkeypatch) -> None
 
     assert out == {"status": "completed", "request_type": "research",
                    "items_processed": 2, "retrieved_count": 3,
-                   "synthesis": "S", "run_id": "tr"}
+                   "synthesis": "S", "run_id": "tr", "plan": None}
     research_fn.assert_awaited_once_with(
-        "q", budget=RESEARCH_CHILD_BUDGET, request_type="research", synthesize=False
+        "q", budget=RESEARCH_CHILD_BUDGET, request_type="research",
+        synthesize=False, dry_run=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_dry_run_passes_flag_and_skips_re_retrieve(monkeypatch) -> None:
+    """Dry-run threads dry_run=True to delegate, surfaces the plan, and does NOT re-query."""
+    research_mod = importlib.import_module("visual_generation.research")
+    plan = SimpleNamespace(candidates=["c"], selected=["c"])
+    result = _delegation_result()
+    result.result["plan"] = plan
+    delegate_mock = AsyncMock(return_value=result)
+    fetch_mock = AsyncMock(return_value=[(0.9, "stale chunk")])
+    monkeypatch.setattr(research_mod, "delegate", delegate_mock)
+    monkeypatch.setattr(research_mod, "_fetch_tutorial", fetch_mock)
+
+    outcome = await research("a topic", dry_run=True, memory_store=MagicMock())
+
+    request = delegate_mock.call_args.args[1]
+    assert request["dry_run"] is True
+    # Re-retrieval skipped on dry runs — would surface stale chunks as if ingested.
+    assert fetch_mock.await_count == 0
+    assert outcome.dry_run is True
+    assert outcome.plan is plan
+    assert outcome.tutorial_hits == []
+
+
+def test_render_dry_run_lists_candidates_no_ingest_footer() -> None:
+    from visual_generation.research import ResearchOutcome, render_research
+
+    sel = SimpleNamespace(url="https://yt/sel", title="Selected Vid", score=4,
+                          rationale="Highly relevant.")
+    other = SimpleNamespace(url="https://yt/other", title="Other Vid", score=1,
+                            rationale="Marginal.")
+    plan = SimpleNamespace(candidates=[sel, other], selected=[sel])
+    outcome = ResearchOutcome(
+        topic="python asyncio", delegation_status="completed",
+        dry_run=True, plan=plan, cost_usd=0.0042,
+    )
+
+    out = render_research(outcome)
+
+    assert "dry-run" in out and "NOTHING ingested" in out
+    assert "$0.0042" in out  # real, non-zero scoring cost — never $0/free
+    assert "would ingest top 1 of 2" in out
+    assert "→ [4] Selected Vid" in out
+    assert "https://yt/sel" in out and "Highly relevant." in out
+    assert "  [1] Other Vid" in out  # scored but not selected → no arrow
+    assert "Nothing was ingested" in out
+    assert "Now retrievable" not in out  # the ingested-path footer must not appear
 
 
 def test_register_delegate_handlers_is_idempotent() -> None:

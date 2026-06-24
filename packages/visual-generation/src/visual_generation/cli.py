@@ -16,7 +16,7 @@ Usage:
     visual-generation fact add "<statement>" [--domain ...]
     visual-generation fact ingest-docs <folder> --domain ... [--dry-run] [--yes]
     visual-generation explain "<concept>" [--level full|concise|quiet]
-    visual-generation research "<topic>"
+    visual-generation research "<topic>" [--dry-run]
 """
 
 from __future__ import annotations
@@ -663,6 +663,13 @@ def explain(concept: str, level: str | None) -> None:
 
 @cli.command()
 @click.argument("topic")
-def research(topic: str) -> None:
-    """Delegate TOPIC to tutorial-research (Claude — no GPU). Two-step: retrieved cheaply after."""
-    click.echo(render_research(research_sync(topic)))
+@click.option("--dry-run", "dry_run", is_flag=True, default=False,
+              help="Plan only: score and rank candidate videos without ingesting "
+                   "(low-but-nonzero cost — a scoring Claude call still runs).")
+def research(topic: str, dry_run: bool) -> None:
+    """Delegate TOPIC to tutorial-research (Claude — no GPU). Two-step: retrieved cheaply after.
+
+    With --dry-run, preview the ranked candidates that WOULD be ingested without paying
+    for the full ingest (Whisper + Claude chain). Nothing is written.
+    """
+    click.echo(render_research(research_sync(topic, dry_run=dry_run)))

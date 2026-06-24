@@ -63,6 +63,7 @@ async def _tutorial_research_handler(request: dict[str, Any], budget: BudgetEnve
         budget=budget,
         request_type=request.get("request_type"),
         synthesize=request.get("synthesize", False),
+        dry_run=request.get("dry_run", False),
     )
     return {
         "status": result.status,
@@ -71,6 +72,7 @@ async def _tutorial_research_handler(request: dict[str, Any], budget: BudgetEnve
         "retrieved_count": len(result.retrieved),
         "synthesis": result.synthesis,
         "run_id": result.run_id,
+        "plan": result.plan,  # the scored IngestionPlan (passes through in-process)
     }
 
 
@@ -89,6 +91,8 @@ class ResearchOutcome(BaseModel):
     items_processed: int = 0
     synthesis: str | None = None
     tutorial_hits: list[tuple[float, str]] = Field(default_factory=list)  # the cheap re-retrieval
+    dry_run: bool = False
+    plan: Any = None  # the scored IngestionPlan when dry_run (typed Any to stay decoupled)
     run_id: str = ""
     status: str = "completed"
     cost_usd: float = 0.0  # Claude axis only — GPU never enters this path
@@ -101,11 +105,18 @@ class ResearchOutcome(BaseModel):
 async def research(
     topic: str,
     *,
+    dry_run: bool = False,
     budget: BudgetEnvelope | None = None,
     child_budget: BudgetEnvelope | None = None,
     memory_store: MemoryStore | None = None,
 ) -> ResearchOutcome:
-    """Delegate `topic` to tutorial-research, then re-query the collection cheaply."""
+    """Delegate `topic` to tutorial-research, then re-query the collection cheaply.
+
+    With `dry_run`, the delegate scores and ranks candidate videos but ingests
+    nothing (no Whisper/Claude-chain processing, no Qdrant write); the scored plan
+    is surfaced for preview and the cheap re-retrieval is skipped (it would surface
+    stale chunks as if newly ingested).
+    """
     register_delegate_handlers()
     memory_store = memory_store or get_memory_store()
 
@@ -117,6 +128,7 @@ async def research(
     items_processed = 0
     synthesis: str | None = None
     tutorial_hits: list[tuple[float, str]] = []
+    plan: Any = None
     tracker_ref: BudgetTracker | None = None
 
     try:
@@ -126,7 +138,8 @@ async def research(
             with TracePersister(agent=AGENT_NAME, run_id=run_id):
                 result = await delegate(
                     DELEGATE_TARGET_TUTORIAL_RESEARCH,
-                    {"request": topic, "request_type": "research", "synthesize": False},
+                    {"request": topic, "request_type": "research",
+                     "synthesize": False, "dry_run": dry_run},
                     child_budget or RESEARCH_CHILD_BUDGET,
                     parent_tracker=tracker,
                 )
@@ -134,11 +147,14 @@ async def research(
                 if result.result:
                     items_processed = result.result.get("items_processed", 0)
                     synthesis = result.result.get("synthesis")
+                    plan = result.result.get("plan")
 
                 # Two-step cheap fallback: the result now lives in tutorial_research,
                 # already a retrieval leg. Re-query it (cheap — embedding only) to
-                # confirm/preview; no second delegation.
-                tutorial_hits = await _fetch_tutorial(topic, memory_store, limit=5)
+                # confirm/preview; no second delegation. Skipped on dry runs — nothing
+                # was ingested, so a re-query would surface stale prior chunks.
+                if not dry_run:
+                    tutorial_hits = await _fetch_tutorial(topic, memory_store, limit=5)
 
     except BudgetExhaustedError:
         status = "partial"
@@ -161,6 +177,8 @@ async def research(
         items_processed=items_processed,
         synthesis=synthesis,
         tutorial_hits=tutorial_hits,
+        dry_run=dry_run,
+        plan=plan,
         run_id=run_id,
         status=status,
         cost_usd=cost_usd,
@@ -174,6 +192,9 @@ def research_sync(topic: str, **kwargs: Any) -> ResearchOutcome:
 
 
 def render_research(outcome: ResearchOutcome) -> str:
+    if outcome.dry_run:
+        return _render_dry_run(outcome)
+
     lines = [
         f"Topic:      {outcome.topic}",
         f"Delegation: {outcome.delegation_status}  ({outcome.items_processed} item(s) ingested)",
@@ -189,4 +210,35 @@ def render_research(outcome: ResearchOutcome) -> str:
         lines.append("\nFuture draft/explain/recall retrieve this cheaply — no re-research.")
     elif outcome.delegation_status == "completed":
         lines.append("\n(No retrievable chunks surfaced yet — try `recall` or `explain` shortly.)")
+    return "\n".join(lines)
+
+
+def _render_dry_run(outcome: ResearchOutcome) -> str:
+    """Render a plan-only run: the ranked candidates, with nothing ingested."""
+    lines = [
+        f"Topic:      {outcome.topic}",
+        "Mode:       dry-run — plan only, NOTHING ingested",
+        f"Delegation: {outcome.delegation_status}",
+        f"Cost:       ${outcome.cost_usd:.4f}  (Claude — scoring call only; no GPU, no ingest)",
+    ]
+
+    plan = outcome.plan
+    candidates = list(getattr(plan, "candidates", []) or [])
+    selected = list(getattr(plan, "selected", []) or [])
+    if not candidates:
+        lines.append("\n(No candidate plan produced — nothing to preview.)")
+        return "\n".join(lines)
+
+    selected_urls = {c.url for c in selected}
+    lines.append(
+        f"\n── Ranked candidates (would ingest top {len(selected)} of {len(candidates)}) ──"
+    )
+    for c in candidates:
+        marker = "→" if c.url in selected_urls else " "
+        lines.append(f"  {marker} [{c.score}] {c.title}")
+        lines.append(f"        {c.url}")
+        lines.append(f"        {c.rationale}")
+
+    lines.append("\nNothing was ingested and nothing was written to tutorial_research.")
+    lines.append("Re-run without --dry-run to ingest the selected candidates.")
     return "\n".join(lines)
