@@ -39,9 +39,9 @@ Runtime data lives **outside the repo**: `~/agent-data/` (sources, audio, stills
 | `concept-script` | Scriptwriting collaborator (seeds or transcript → `script.md`); stateless | `concept-script` | anthropic | [README](packages/concept-script/README.md) |
 | `visual-generation` | ComfyUI-backed diffusion collaborator + tutor (free prompt-craft, paid GPU) | `visual-generation` | httpx | [README](packages/visual-generation/README.md) |
 | `technique-research` | Goal → prioritized technique domains → delegate gaps to tutorial-research → `TechniqueReport` | `technique-research` | tutorial-research, anthropic, tavily | [README](packages/technique-research/README.md) |
-| `edit-brief` ⚠️ | Generates a project `edit-brief.md` (discovery/probe/time-engine); **not in README — status: confirm (§7)** | `edit-brief` | anthropic | [README](packages/edit-brief/README.md) |
-| `feedback-iteration` ⚠️ | Applies feedback to iterate prior outputs (lessons/patcher/versioning); **not in README — status: confirm (§7)** | `feedback-iteration` | anthropic | [README](packages/feedback-iteration/README.md) |
-| `orchestrator` | **Hub.** Conversational LangGraph ReAct meta-agent; invokes all 8 sibling agents as tools; resumable SQLite-checkpointed chat | `orchestrator` | langgraph, langgraph-checkpoint-sqlite, langchain-anthropic, + all 8 agents | [README](packages/orchestrator/README.md) |
+| `edit-brief` | Approved `script.md` + artifacts discovered by `project_id` (VO takes, music, assets) + retrieved technique findings → director-owned, time-ordered `edit-brief.md` checklist for a DaVinci Resolve *free* session; all timing computed in code, never by the LLM. Tier-1 (no DaVinci API/automation/delegation), stateless | `edit-brief` | anthropic | [README](packages/edit-brief/README.md) |
+| `feedback-iteration` | NL feedback on an `edit-brief.md` → state-preserving, anchor-addressed, in-place revision + version trail; timing recomputed in code (LLM never emits a number); proposes durable `editing_preference` lessons to `user_knowledge`. Stateless | `feedback-iteration` | anthropic | [README](packages/feedback-iteration/README.md) |
+| `orchestrator` | **Hub.** Conversational LangGraph ReAct meta-agent; wraps 8 of the 9 sibling CLI agents as tools (2 free/non-side-effecting ops each; all except `yt-intelligence-pipeline`, reached indirectly via `tutorial-research`); resumable SQLite-checkpointed chat | `orchestrator` | langgraph, langgraph-checkpoint-sqlite, langchain-anthropic, + those 8 agents | [README](packages/orchestrator/README.md) |
 
 **`agent-runtime`** (shared lib, no CLI): config, OTel tracing, budget tracking, delegation, Qdrant memory + Voyage embeddings, knowledge/`docs_ingest`, reporting, diagnostics, registry. → [README](packages/agent-runtime/README.md). All Python is **≥3.12**.
 
@@ -65,14 +65,8 @@ Runtime data lives **outside the repo**: `~/agent-data/` (sources, audio, stills
 
 ## 6. Current state / gotchas
 
-- **README lags the code.** It lists 8 agents; the repo has **11 packages**. `edit-brief` and `feedback-iteration` exist (and are orchestrator deps) but aren't in the README — see §7.
 - **`op run` is required** for any command that hits an API; plain `uv run` passes the literal `op://…` string as the key and fails. Tests are the exception (fake keys).
 - **`agent run …` fails** — the `agent` wrapper already includes `uv run`, so `run` becomes `uv run run`. Use `agent <name> <subcommand>`.
 - **visual-generation model naming drift:** design docs say Flux (stills) / WAN 2.2 (video), but the built path used **Z-Image-Turbo** (different recipe: cfg≈1, steps≈8, `res_multistep`/`simple`). WAN 2.2 workflow JSON lives in `packages/visual-generation/workflows/`. See `docs/visual-generation-known-issues.md`.
 - **No in-repo GPU.** `visual-generation` holds no RunPod credential — you spin up a pod (`scripts/pod up`) and pass `--endpoint <comfyui-url>`. `infrastructure/` is only Qdrant + Jaeger.
 - **Qdrant collections (6):** `user_knowledge`, `tutorial_research`, `music_curation_memory`, `voiceover_direction_memory`, `visual_generation_memory`, `technique_research_outputs`. → README "Qdrant Collections".
-
-## 7. Open questions (TODO — fill in)
-
-1. **Status of `edit-brief` and `feedback-iteration`** — phase / test counts / "complete"? They're flagged ⚠️ in §3; resolve and consider adding them to the root README. Their §3 purpose lines are inferred from source modules — correct as needed.
-2. Anything else worth pinning here that isn't derivable from the code or linked docs?

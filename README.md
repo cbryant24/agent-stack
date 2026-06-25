@@ -14,7 +14,9 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 | `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (45 tests) |
 | `visual-generation` | ComfyUI-backed diffusion collaborator + platform tutor — free offline prompt-craft, deliberate warm-session GPU generation, persistent generations/technique-lessons/workflow-templates | Complete (152 tests) |
 | `technique-research` | Technique discovery — goal → prioritized technique domains → check existing knowledge → delegate gaps to `tutorial-research` → curated `TechniqueReport` + accumulating `technique_research_outputs` findings; toolset grounding from `user_knowledge`, never hardcoded | Phase 2 MVP (40 tests) |
-| `orchestrator` | Conversational meta-agent over the system — a LangGraph ReAct loop that retrieves from the knowledge bases, reads the live code/docs, invokes all six built agents as tools (free/non-side-effecting ops only, plus technique-research's budgeted identify), and runs read-only vector-DB diagnostics (diagnose + report, never writes); thread-keyed SQLite checkpointer for resumable chat | Phase 2 first slice + Phase 3 sub-agent surface + diagnostics (42 tests) |
+| `edit-brief` | Assembles a director-owned, time-ordered `edit-brief.md` execution checklist from the approved script + artifacts discovered by `project_id` (VO takes, music, assets) and retrieved technique findings — all timing computed in code; Tier-1, stateless | Phase 1 / Tier 1 (51 tests) |
+| `feedback-iteration` | Revises an `edit-brief.md` in place from natural-language feedback — anchor-addressed, state-preserving, versioned; recomputes timing in code (the LLM never emits a number); proposes durable `editing_preference` lessons | Functional — 42 tests (no phase label declared) |
+| `orchestrator` | Conversational meta-agent over the system — a LangGraph ReAct loop that retrieves from the knowledge bases, reads the live code/docs, invokes 8 of the 9 sibling agents (all except `yt-intelligence-pipeline`) as tools (free/non-side-effecting ops only, plus technique-research's budgeted identify), and runs read-only vector-DB diagnostics (diagnose + report, never writes); thread-keyed SQLite checkpointer for resumable chat | Phase 2 first slice + Phase 3 sub-agent surface + diagnostics (59 tests) |
 
 ## Setup
 
@@ -72,6 +74,8 @@ agent-stack/
 │   ├── concept-script/             # scriptwriting collaborator (→ script.md)
 │   ├── visual-generation/          # ComfyUI diffusion collaborator
 │   ├── technique-research/         # technique discovery → curated TechniqueReport
+│   ├── edit-brief/                 # script + artifacts → edit-brief.md execution checklist
+│   ├── feedback-iteration/         # NL feedback → in-place edit-brief.md revision
 │   └── orchestrator/               # conversational meta-agent (LangGraph) over the whole system
 ├── infrastructure/                 # docker-compose.yml (Qdrant + Jaeger)
 └── docs/
@@ -386,6 +390,39 @@ from visual_generation import draft_sync, generate_sync
 result = draft_sync("a cinematic neon wolf in the rain")          # DraftResult (.spec, .batch_path)
 result = generate_sync("batch.md", all_sections=True, endpoint="http://pod:8188")  # GenerationResult
 ```
+
+## Edit Brief Agent
+
+Turns the approved `script.md` plus artifacts discovered by `project_id` (VO takes, music,
+generated stills, director footage) and retrieved technique findings into a director-owned,
+time-ordered `edit-brief.md` — an execution checklist for a DaVinci Resolve *free* session.
+All timing is computed in code (timeline from ffprobed VO durations, beat grid from BPM),
+never LLM-estimated. Tier-1: no DaVinci API, no automation, no delegation. Stateless.
+
+```bash
+edit-brief draft script.md [--footage DIR] [--music FILE] [--bpm N] [--gap SECONDS] \
+    [-o edit-brief.md] [--project-id ID] [--max-cost N] [--dry-run]
+```
+
+`--dry-run` is the one free op: discovery + the computed grids only (what was found/missing
+per input), no LLM call, no file written. See `packages/edit-brief/README.md`.
+
+## Feedback & Iteration Agent
+
+Takes natural-language feedback on a director-owned `edit-brief.md` and produces a
+state-preserving, anchor-addressed, in-place revision plus a version trail. The LLM maps
+feedback to anchors and diagnoses changes; a pure time-shift engine recomputes timing — the
+LLM never emits a number (a numberless timing request is surfaced as unresolved, never
+guessed). Checked boxes and hand-edits survive; the prior version is snapshot to
+`versions/<stem>.v{N}.md` and the `version:` is bumped. Durable craft preferences are proposed
+to `user_knowledge` (propose→confirm). Stateless.
+
+```bash
+feedback-iteration revise edit-brief.md "feedback text" [--feedback FILE] [--max-cost N] [--dry-run]
+```
+
+`--dry-run` is the free op: parse + validate the brief and echo the parsed feedback — no LLM,
+no writes. See `packages/feedback-iteration/README.md`.
 
 ## Orchestrator
 

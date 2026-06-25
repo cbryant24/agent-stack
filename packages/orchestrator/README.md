@@ -13,8 +13,10 @@ section of `docs/ai-director-agent-system.md` for the system-level spec and
 ## Status
 
 **Phase 2 first build slice + Phase 3 sub-agent surface + diagnose-only diagnostics.** Chat +
-knowledge retrieval + live code/doc access + all five built agents wrapped as tools
-(tutorial-research, music-curation, voiceover-direction, concept-script, visual-generation) —
+knowledge retrieval + live code/doc access + 8 of the 9 sibling agents (all except
+`yt-intelligence-pipeline`) wrapped as tools (tutorial-research, music-curation,
+voiceover-direction, concept-script, visual-generation, technique-research, edit-brief,
+feedback-iteration) —
 free / non-side-effecting ops only, so the autonomous loop never triggers paid generation —
 plus read-only vector-DB diagnostics that diagnose and write a report but never write to
 Qdrant, with the **first remediation handler** wired (music-curation re-tag, behind the explicit
@@ -67,14 +69,15 @@ async with AsyncSqliteSaver.from_conn_string("agent-stack.db") as saver:
   space per call, with the 1.25× `user_knowledge` boost; domains: `tutorial_research`,
   `music_curation_memory`, `voiceover_direction_memory`, `visual_generation_memory`,
   `langgraph_mechanics`); `read_file` + `grep` over the repo (also how the orchestrator
-  answers system-introspection questions); and in-process sub-agent tools wrapping all five
-  built agents — each with a derived child budget, recorded delegation, and output
-  truncation. Only **FREE / non-side-effecting** ops are wrapped; the costly paid ops
-  (visual-generation `generate` = GPU/RunPod spend, voiceover-direction TTS = ElevenLabs
-  money) are deliberately kept out of the autonomous tool set:
-  `tutorial_retrieve` / `research_tutorials`, `music_recall` / `music_generate`,
+  answers system-introspection questions); and in-process sub-agent tools wrapping 8 of the 9
+  sibling agents (all except `yt-intelligence-pipeline`) — each with a derived child budget,
+  recorded delegation, and output truncation. Only **FREE / non-side-effecting** ops are
+  wrapped; the costly paid ops (visual-generation `generate` = GPU/RunPod spend,
+  voiceover-direction TTS = ElevenLabs money) are deliberately kept out of the autonomous tool
+  set: `tutorial_retrieve` / `research_tutorials`, `music_recall` / `music_generate`,
   `voiceover_direct` / `voiceover_recall`, `concept_draft` / `concept_shape` (stateless),
-  and `visual_draft` / `visual_recall`.
+  `visual_draft` / `visual_recall`, `technique_recall` / `technique_identify`,
+  `edit_brief_discover` / `edit_brief_draft`, and `feedback_inspect` / `feedback_revise`.
 - **Vector-DB diagnostics (`diagnostics.py`, diagnose-only)** — `inspect_collection`
   (read-only structural metadata via `MemoryStore.get_collection_info` / `count_points` /
   `sample_points`), `probe_collection` (behavioral probe that catches cross-model
