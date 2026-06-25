@@ -13,6 +13,7 @@ from agent_runtime.tracing.decorators import record_llm_call
 
 # Pricing table: USD per 1M tokens, sourced 2026-05-26 from Anthropic docs
 _PRICING: dict[str, dict[str, float]] = {
+    "claude-opus-4-8":   {"input":  5.00, "output": 25.00},
     "claude-opus-4-7":   {"input": 15.00, "output": 75.00},
     "claude-opus-4-6":   {"input": 15.00, "output": 75.00},
     "claude-sonnet-4-6": {"input":  3.00, "output": 15.00},

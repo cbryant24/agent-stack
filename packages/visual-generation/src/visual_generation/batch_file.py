@@ -54,6 +54,7 @@ _SPEC_META_FIELDS = (
     "project",
     "identity_bearing",
     "rationale",
+    "revised_from",
     "created_at",
 )
 
@@ -145,3 +146,28 @@ def append_spec(path: Path, spec: VisualSpec, *, project: str | None = None) -> 
     batch.specs.append(spec)
     write_batch(batch, path)
     return batch
+
+
+def remove_spec(batch: GenerationBatch, spec_id: str) -> GenerationBatch:
+    """Drop the spec with `spec_id` from the batch (in-memory; mutates and returns it).
+
+    Raises ValueError on an unknown id so the caller can report it. Pure — the caller
+    pairs this with read_batch → write_batch for the lossless round-trip."""
+    matches = [s for s in batch.specs if s.spec_id == spec_id]
+    if not matches:
+        known = ", ".join(s.spec_id for s in batch.specs) or "(none)"
+        raise ValueError(f"Unknown spec id {spec_id!r}. Known specs: {known}")
+    batch.specs = [s for s in batch.specs if s.spec_id != spec_id]
+    return batch
+
+
+def replace_spec(batch: GenerationBatch, spec_id: str, new_spec: VisualSpec) -> GenerationBatch:
+    """Swap the spec with `spec_id` for `new_spec`, preserving order (in-memory).
+
+    Raises ValueError on an unknown id. Pure — caller pairs with read_batch → write_batch."""
+    for i, s in enumerate(batch.specs):
+        if s.spec_id == spec_id:
+            batch.specs[i] = new_spec
+            return batch
+    known = ", ".join(s.spec_id for s in batch.specs) or "(none)"
+    raise ValueError(f"Unknown spec id {spec_id!r}. Known specs: {known}")

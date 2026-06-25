@@ -79,6 +79,17 @@ the template and the denoise by the caller: do NOT author settings and do NOT ci
 recipe or denoise numbers in your rationale.
 """
 
+_REVISE_MODE_SYSTEM = """\
+
+REVISE MODE — you are revising an existing TEXT-TO-IMAGE prompt, not creating one from
+scratch and not editing pixels. Apply ONLY the targeted change the user asks for. Preserve
+every locked descriptor block and all unchanged composition/style/lighting language VERBATIM
+— copy it through word-for-word; do not paraphrase, reorder, or "improve" it. The recipe
+(seed, sampler, steps, model, LoRAs, dimensions) is inherited from the parent and locked by
+the caller: do NOT author settings and do NOT cite seed/recipe numbers in your rationale.
+Output the same JSON spec shape.
+"""
+
 _RETRY_SUFFIX = (
     "\n\nIMPORTANT: your previous response was not valid JSON of the required shape. "
     "Reproduce your full JSON response exactly as specified (prompt, negative_prompt, "
@@ -118,6 +129,7 @@ def _build_user_message(
     template: WorkflowTemplate | None,
     models: list[ModelAsset],
     parent: VisualGeneration | None = None,
+    revise: bool = False,
 ) -> str:
     context_block = build_context_prompt(ctx) if not ctx.is_empty() else "(no prior context)"
     if template is not None:
@@ -128,6 +140,35 @@ def _build_user_message(
         )
     else:
         template_block = "Template: (none chosen — propose generic settings; no slot constraints)"
+
+    if revise and parent is not None:
+        # Prose-only text2img revise: anchor on the parent's full prose and fold in the
+        # director's own action note (`notes`) and reasoning (`context`) from `report` as
+        # the directed-change context. The recipe is inherited + locked by the caller.
+        directed = ""
+        if parent.notes:
+            directed += f"\nDirector's note on the parent (what to change next time): {parent.notes}"
+        if parent.context:
+            directed += f"\nWhy the director reacted to the parent as they did: {parent.context}"
+        return f"""Current text2img prompt (revise this):
+{parent.prompt}
+
+Apply ONLY this change: {intent}
+{directed}
+
+Preserve every locked descriptor block and all unchanged composition/style/lighting
+language VERBATIM — this is a targeted revise, not a rewrite. Do not author settings or
+cite seed/recipe numbers; the recipe is inherited from the parent.
+
+{template_block}
+
+Available models (pick model/LoRA names from these):
+{_format_models(models)}
+
+Relevant context:
+{context_block}
+
+Craft one settled generation spec that applies this change to the prompt."""
 
     if parent is not None:
         # Refinement: anchor on the source prompt and frame this as an edit, so Sonnet
@@ -174,34 +215,46 @@ async def craft_spec(
     *,
     parent: VisualGeneration | None = None,
     refinement: bool = False,
+    revise: bool = False,
+    model: str = MODEL_DIRECTOR,
 ) -> dict:
     """Run the craft chain once (retry once on a parse failure), returning the spec dict.
 
-    On a `refinement` the chain is framed as an EDIT (gated edit-mode system prompt +,
-    when `parent` is given, a source-anchored user message), and the parsed spec is
-    deterministically reconciled to the source: the invented recipe is stripped (the
-    template's recipe stands; the caller owns denoise) and model/LoRAs/dimensions are
-    inherited from the parent rather than re-guessed."""
+    `model` is the Claude model the craft runs on (Sonnet by default; Opus when the
+    caller resolves `--model opus`) — used for both the call and its cost attribution.
+
+    On a `refinement` the chain is framed as an img2img/inpaint EDIT and the parsed spec
+    is reconciled to the source (recipe stripped; model/LoRAs/dimensions inherited).
+
+    On a `revise` (mutually exclusive with refinement) the chain is framed as a prose-only
+    TEXT2IMG revise and the parsed spec inherits the parent's full recipe — seed (as a
+    fixed seed), settings, model, LoRAs, and dimensions — so only the prompt changes and
+    continuity cannot drift."""
     # Build the effective system + user message ONCE so the parse-retry reuses the
-    # identical edit-mode framing instead of falling back to the txt2img prompts.
-    system = _SYSTEM_PROMPT + _EDIT_MODE_SYSTEM if refinement else _SYSTEM_PROMPT
-    user_message = _build_user_message(intent, ctx, template, models, parent)
+    # identical framing instead of falling back to the txt2img prompts.
+    if refinement:
+        system = _SYSTEM_PROMPT + _EDIT_MODE_SYSTEM
+    elif revise:
+        system = _SYSTEM_PROMPT + _REVISE_MODE_SYSTEM
+    else:
+        system = _SYSTEM_PROMPT
+    user_message = _build_user_message(intent, ctx, template, models, parent, revise=revise)
     valid_model_names = {m.name for m in models}
 
     response = await client.messages.create(
-        model=MODEL_DIRECTOR,
+        model=model,
         max_tokens=MAX_DRAFT_TOKENS,
         system=system,
         messages=[{"role": "user", "content": user_message}],
     )
-    _record_llm(MODEL_DIRECTOR, response.usage.input_tokens, response.usage.output_tokens)
+    _record_llm(model, response.usage.input_tokens, response.usage.output_tokens)
 
     try:
         spec = _parse_spec_response(response, valid_model_names, template)
     except DraftParseError:
         logger.warning("Craft response unparseable; retrying once with explicit reminder")
         retry = await client.messages.create(
-            model=MODEL_DIRECTOR,
+            model=model,
             max_tokens=MAX_DRAFT_TOKENS,
             system=system,
             messages=[
@@ -210,11 +263,13 @@ async def craft_spec(
                 {"role": "user", "content": _RETRY_SUFFIX},
             ],
         )
-        _record_llm(MODEL_DIRECTOR, retry.usage.input_tokens, retry.usage.output_tokens)
+        _record_llm(model, retry.usage.input_tokens, retry.usage.output_tokens)
         spec = _parse_spec_response(retry, valid_model_names, template)
 
     if refinement:
         _enforce_refinement(spec, parent)
+    elif revise:
+        _enforce_revise(spec, parent)
     return spec
 
 
@@ -231,6 +286,25 @@ def _enforce_refinement(spec: dict, parent: VisualGeneration | None) -> None:
         spec["lora_stack"] = [lr.model_dump() for lr in parent.lora_stack]
         spec["width"] = parent.width
         spec["height"] = parent.height
+
+
+def _enforce_revise(spec: dict, parent: VisualGeneration | None) -> None:
+    """Reconcile a revised spec to its parent (mutates in place).
+
+    A prose-only text2img revise: the model authors ONLY the prompt (and negative, subject
+    to the template's slot drop-logic). Everything that fixes continuity is inherited from
+    the parent — the parent's concrete seed is re-pinned as a FIXED seed (the generation
+    record stores the resolved int, not a strategy), and the exact recipe, model, LoRAs,
+    and dimensions are carried through so nothing but the prompt can drift."""
+    if parent is None:
+        return
+    spec["seed"] = parent.seed
+    spec["seed_strategy"] = "fixed"
+    spec["settings"] = dict(parent.settings)
+    spec["model"] = parent.model
+    spec["lora_stack"] = [lr.model_dump() for lr in parent.lora_stack]
+    spec["width"] = parent.width
+    spec["height"] = parent.height
 
 
 def _parse_spec_response(

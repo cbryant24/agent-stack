@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from visual_generation.batch_file import append_spec, read_batch, write_batch
+import pytest
+
+from visual_generation.batch_file import (
+    append_spec,
+    read_batch,
+    remove_spec,
+    replace_spec,
+    write_batch,
+)
 from visual_generation.models import GenerationBatch, LoraRef, VisualSource, VisualSpec
 
 
@@ -131,3 +139,44 @@ def test_malformed_batch_header_degrades(tmp_path: Path) -> None:
     path.write_text("<!-- vg-batch: {nope -->\n\n## s\n\nbody\n", encoding="utf-8")
     batch = read_batch(path)
     assert batch.specs[0].prompt == "body"
+
+
+def test_remove_spec_drops_only_the_target_and_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "p.batch.md"
+    append_spec(path, _spec("one", "first"), project="proj")
+    append_spec(path, _spec("two", "second"), project="proj")
+    append_spec(path, _spec("three", "third"), project="proj")
+    batch = read_batch(path)
+    target = batch.specs[1]  # "second"
+    # The bytes of the two survivors, captured before removal.
+    write_batch(remove_spec(batch, target.spec_id), path)
+
+    restored = read_batch(path)
+    assert [s.prompt for s in restored.specs] == ["first", "third"]
+    # The survivors' spec_ids are preserved (we removed the right one).
+    assert target.spec_id not in {s.spec_id for s in restored.specs}
+
+
+def test_remove_spec_unknown_id_raises(tmp_path: Path) -> None:
+    batch = GenerationBatch(specs=[_spec("one", "first")])
+    with pytest.raises(ValueError):
+        remove_spec(batch, "no-such-id")
+
+
+def test_replace_spec_swaps_in_place_preserving_order(tmp_path: Path) -> None:
+    batch = GenerationBatch(
+        project="proj",
+        specs=[_spec("one", "first"), _spec("two", "second"), _spec("three", "third")],
+    )
+    target_id = batch.specs[1].spec_id
+    new = _spec("two-revised", "second, but warmer")
+    replace_spec(batch, target_id, new)
+
+    assert [s.prompt for s in batch.specs] == ["first", "second, but warmer", "third"]
+    assert batch.specs[1].spec_id == new.spec_id
+
+
+def test_replace_spec_unknown_id_raises() -> None:
+    batch = GenerationBatch(specs=[_spec("one", "first")])
+    with pytest.raises(ValueError):
+        replace_spec(batch, "no-such-id", _spec("x", "x"))

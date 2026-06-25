@@ -175,3 +175,121 @@ def test_workflow_list_renders(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     assert "flux-txt2img" in result.output
     assert "flux1-dev.safetensors" in result.output
+
+
+# ── model alias resolution + --model threading ───────────────────────────────
+
+
+def test_resolve_model_aliases_and_default() -> None:
+    from visual_generation.constants import MODEL_DIRECTOR, resolve_model
+
+    assert resolve_model(None) == MODEL_DIRECTOR          # omitted → sonnet
+    assert resolve_model("sonnet") == MODEL_DIRECTOR
+    assert resolve_model("opus") == "claude-opus-4-8"
+
+
+def test_draft_threads_model_alias_to_draft_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def _fake_draft_sync(intent, **kwargs):
+        captured.update(kwargs)
+        captured["intent"] = intent
+        from visual_generation.models import DraftResult, VisualSpec
+        return DraftResult(spec=VisualSpec(prompt="p", heading="h"), status="completed")
+
+    monkeypatch.setattr("visual_generation.cli.draft_sync", _fake_draft_sync)
+    result = CliRunner().invoke(cli, ["draft", "a wolf", "--model", "opus"])
+    assert result.exit_code == 0
+    assert captured["model"] == "opus"
+
+
+def test_redraft_threads_model_alias_to_redraft_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def _fake_redraft_sync(gen_id, change, **kwargs):
+        captured["gen_id"] = gen_id
+        captured["change"] = change
+        captured.update(kwargs)
+        from visual_generation.models import DraftResult, VisualSpec
+        return DraftResult(
+            spec=VisualSpec(prompt="p", heading="h", revised_from=gen_id, workflow_ref="w"),
+            status="completed", template_name="w",
+        )
+
+    monkeypatch.setattr("visual_generation.cli.redraft_sync", _fake_redraft_sync)
+    result = CliRunner().invoke(cli, ["redraft", "gen-1", "warmer smile", "--model", "sonnet"])
+    assert result.exit_code == 0
+    assert captured["gen_id"] == "gen-1"
+    assert captured["change"] == "warmer smile"
+    assert captured["model"] == "sonnet"
+
+
+def test_redraft_reports_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_redraft_sync(gen_id, change, **kwargs):
+        from visual_generation.models import DraftResult, VisualSpec
+        return DraftResult(
+            spec=VisualSpec(prompt="", heading=""), status="failed",
+            revise_warnings=["generation gen-x not found in memory."],
+        )
+
+    monkeypatch.setattr("visual_generation.cli.redraft_sync", _fake_redraft_sync)
+    result = CliRunner().invoke(cli, ["redraft", "gen-x", "warmer smile"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+# ── batch list / rm ──────────────────────────────────────────────────────────
+
+
+def _batch_file(tmp_path: Path) -> Path:
+    from visual_generation.batch_file import write_batch
+    from visual_generation.models import GenerationBatch, VisualSpec
+
+    batch = GenerationBatch(
+        project="proj",
+        specs=[
+            VisualSpec(heading="one", prompt="first", workflow_ref="flux-txt2img"),
+            VisualSpec(heading="two", prompt="second", workflow_ref="flux-txt2img"),
+            VisualSpec(heading="three", prompt="third", workflow_ref="flux-txt2img"),
+        ],
+    )
+    path = tmp_path / "p.batch.md"
+    write_batch(batch, path)
+    return path
+
+
+def test_batch_list_shows_spec_ids_and_titles(tmp_path: Path) -> None:
+    from visual_generation.batch_file import read_batch
+
+    path = _batch_file(tmp_path)
+    ids = [s.spec_id for s in read_batch(path).specs]
+    result = CliRunner().invoke(cli, ["batch", "list", str(path)])
+    assert result.exit_code == 0
+    assert "3 spec(s)" in result.output
+    for sid in ids:
+        assert sid in result.output
+    assert "one" in result.output and "flux-txt2img" in result.output
+
+
+def test_batch_rm_removes_only_the_target(tmp_path: Path) -> None:
+    from visual_generation.batch_file import read_batch
+
+    path = _batch_file(tmp_path)
+    before = read_batch(path).specs
+    target = before[1]
+    survivors = [before[0], before[2]]
+
+    result = CliRunner().invoke(cli, ["batch", "rm", str(path), target.spec_id, "--yes"])
+    assert result.exit_code == 0
+
+    after = read_batch(path).specs
+    assert [s.spec_id for s in after] == [s.spec_id for s in survivors]
+    # The survivors are unchanged (same specs, byte-for-byte through the round-trip).
+    assert after == survivors
+
+
+def test_batch_rm_unknown_id_errors(tmp_path: Path) -> None:
+    path = _batch_file(tmp_path)
+    result = CliRunner().invoke(cli, ["batch", "rm", str(path), "no-such-id", "--yes"])
+    assert result.exit_code != 0
+    assert "No spec with id" in result.output

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from visual_generation.assets import OpsecError, guard_asset_path, write_asset
 from visual_generation.batch_file import read_batch, write_batch
-from visual_generation.draft import draft, draft_sync
+from visual_generation.draft import draft, draft_sync, redraft, redraft_sync
 from visual_generation.explain import (
     ExplainResult,
     explain,
@@ -102,6 +102,8 @@ __all__ = [
     "read_batch",
     "recall",
     "recall_sync",
+    "redraft",
+    "redraft_sync",
     "register_delegate_handlers",
     "render_chain",
     "render_explain",

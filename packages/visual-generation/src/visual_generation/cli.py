@@ -5,12 +5,15 @@ Usage:
     visual-generation model list
     visual-generation workflow register <exported-api.json> [--name N] [--descriptor D] [--yes]
     visual-generation workflow list
-    visual-generation draft "<intent>" [-o batch.md] [--template <name>]
+    visual-generation draft "<intent>" [-o batch.md] [--template <name>] [--model sonnet|opus]
+    visual-generation redraft <gen_id> "<change>" [-o batch.md] [--project <p>] [--model sonnet|opus]
     visual-generation generate <batch.md> (--section <id> | --all) --endpoint <url>
         [--gpu-rate N] [--max-session-cost N] [--yes]
     visual-generation report <gen_id> --reaction <X> [--rating N] [--notes ...] [--context ...]
     visual-generation review-pending
     visual-generation chain show <root_id>
+    visual-generation batch list <batch.md>
+    visual-generation batch rm <batch.md> <spec_id> [--yes]
     visual-generation recall "<query>" [--limit N]
     visual-generation lesson add "<statement>" [--scope ...] [--valence ...]
     visual-generation fact add "<statement>" [--domain ...]
@@ -28,6 +31,7 @@ from pathlib import Path
 import click
 
 from visual_generation.agent import _get_stores
+from visual_generation.batch_file import read_batch, remove_spec, write_batch
 from visual_generation.comfyui_client import ComfyUIClient, ComfyUIError
 from visual_generation.constants import (
     DEFAULT_GPU_RATE_USD_PER_HR,
@@ -37,10 +41,11 @@ from visual_generation.constants import (
     LESSON_SCOPE_SETTINGS,
     LESSON_SCOPE_WORKFLOW,
     MECHANICS_DOMAINS,
+    MODEL_ALIASES,
     POSITIVE_REACTIONS,
     REACTIONS,
 )
-from visual_generation.draft import draft_sync
+from visual_generation.draft import draft_sync, redraft_sync
 from visual_generation.explain import explain_sync, render_explain
 from visual_generation.generate import plan_generation_sync, spend_generation_sync
 from visual_generation.gpu_tracker import GpuLedger
@@ -280,9 +285,11 @@ def workflow_list(query: str, limit: int) -> None:
               help="Inpaint mask PNG (white = area to change). Requires --from or --image.")
 @click.option("--denoise", type=float, default=None,
               help="Refinement denoise (default 0.5; coherent range ~0.4–0.7).")
+@click.option("--model", "model", type=click.Choice(list(MODEL_ALIASES)), default=None,
+              help="Claude model for the craft (default: sonnet).")
 def draft(intent: str, output: str | None, template_name: str | None, project: str | None,
           from_generation: str | None, image_path: str | None, mask_path: str | None,
-          denoise: float | None) -> None:
+          denoise: float | None, model: str | None) -> None:
     """Craft a settled generation spec from INTENT and append it to a batch file. Free.
 
     With --from/--image the spec becomes a refinement (img2img/inpaint): INTENT is the
@@ -307,6 +314,7 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
         project=project,
         source=source,
         denoise=denoise,
+        model=model,
     )
 
     if result.status == "failed":
@@ -359,6 +367,68 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
             f"\nKnowledge gap — little local context for this. Consider (Step 5):\n"
             f'  visual-generation research "{result.research_offer}"'
         )
+
+    if result.batch_path:
+        click.echo(f"\nAppended to: {result.batch_path}")
+        click.echo(f"Next: visual-generation generate {result.batch_path} --section "
+                   f"{spec.spec_id} --endpoint <url>")
+
+
+# ── redraft (Phase A — prose-only text2img revise) ───────────────────────────
+
+
+@cli.command()
+@click.argument("gen_id")
+@click.argument("change")
+@click.option("--output", "-o", "output", type=click.Path(dir_okay=False), default=None,
+              help="Batch file to append to (default: <project>.batch.md under agent-data).")
+@click.option("--project", default=None, help="Project tag for the spec (default: the parent's).")
+@click.option("--model", "model", type=click.Choice(list(MODEL_ALIASES)), default=None,
+              help="Claude model for the craft (default: sonnet).")
+def redraft(gen_id: str, change: str, output: str | None, project: str | None,
+            model: str | None) -> None:
+    """Revise a prior generation's PROMPT (text2img) by applying CHANGE. Free.
+
+    Inherits the parent's seed, recipe, model, LoRAs, dimensions, and workflow template so
+    only the prose changes — continuity can't drift. The new spec is text2img (not an
+    img2img edit of the parent's pixels) and records descent via `revised_from`.
+    """
+    result = redraft_sync(gen_id, change, batch_path=output, project=project, model=model)
+
+    if result.status == "failed":
+        click.echo("Redraft failed:", err=True)
+        for w in result.revise_warnings or ["no spec produced."]:
+            click.echo(f"  • {w}", err=True)
+        raise SystemExit(1)
+
+    spec = result.spec
+    click.echo(f"Status:    {result.status}")
+    click.echo(f"Cost:      ${result.cost_usd:.4f}  (Claude — GPU is spent at `generate`)")
+    click.echo(f"Spec:      {spec.spec_id}")
+    click.echo(f"Revised from: {spec.revised_from}")
+    click.echo(f"Template:  {result.template_name}  (recipe inherited from parent)")
+    click.echo(f"Model:     {spec.model or '(none)'}"
+               + ("  [identity-bearing]" if spec.identity_bearing else ""))
+    click.echo(f"Seed:      {spec.seed}  ({spec.seed_strategy})")
+    if spec.settings:
+        click.echo(f"Settings:  {spec.settings}")
+    if spec.lora_stack:
+        click.echo("LoRAs:     " + ", ".join(f"{lr.name}@{lr.strength}" for lr in spec.lora_stack))
+    click.echo(f"\nPrompt:    {spec.prompt}")
+    if spec.negative_prompt:
+        click.echo(f"Negative:  {spec.negative_prompt}")
+    if result.overall_reasoning:
+        click.echo(f"\nRationale: {result.overall_reasoning}")
+
+    if result.revise_warnings:
+        click.echo("\n⚠ Advisories:")
+        for w in result.revise_warnings:
+            click.echo(f"  • {w}")
+
+    if result.tutor_notes:
+        click.echo("\n── Your own technique lessons (relevant) ────────────")
+        for note in result.tutor_notes:
+            click.echo(f"  • {note}")
 
     if result.batch_path:
         click.echo(f"\nAppended to: {result.batch_path}")
@@ -521,6 +591,48 @@ def recall(query: str, limit: int) -> None:
     """Search YOUR OWN memory — generations, technique lessons, templates. Hits, not answers."""
     gens, lessons, templates = recall_sync(query, limit=limit)
     click.echo(render_recall(gens, lessons, templates))
+
+
+# ── batch (prune specs in a batch.md) ─────────────────────────────────────────
+
+
+@cli.group()
+def batch() -> None:
+    """Inspect and prune specs in a batch file."""
+
+
+@batch.command("list")
+@click.argument("batch_file", type=click.Path(exists=True, dir_okay=False))
+def batch_list(batch_file: str) -> None:
+    """List the specs in BATCH_FILE (spec_id, section title, workflow_ref)."""
+    parsed = read_batch(Path(batch_file))
+    if not parsed.specs:
+        click.echo("No specs in this batch file.")
+        return
+    click.echo(f"{len(parsed.specs)} spec(s):\n")
+    for s in parsed.specs:
+        title = s.heading or (s.prompt[:60] if s.prompt else "(untitled)")
+        click.echo(f"  {s.spec_id}  [{s.workflow_ref or 'no template'}]  {title}")
+
+
+@batch.command("rm")
+@click.argument("batch_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("spec_id")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Delete without the confirmation prompt.")
+def batch_rm(batch_file: str, spec_id: str, yes: bool) -> None:
+    """Remove the spec with SPEC_ID from BATCH_FILE (other specs are untouched)."""
+    path = Path(batch_file)
+    parsed = read_batch(path)
+    target = next((s for s in parsed.specs if s.spec_id == spec_id), None)
+    if target is None:
+        known = ", ".join(s.spec_id for s in parsed.specs) or "(none)"
+        raise click.ClickException(f"No spec with id {spec_id} in this batch. Known: {known}")
+    if not yes:
+        title = target.heading or (target.prompt[:60] if target.prompt else spec_id)
+        click.confirm(f"Remove spec {spec_id} ({title})?", abort=True)
+    remove_spec(parsed, spec_id)
+    write_batch(parsed, path)
+    click.echo(f"Removed spec {spec_id}. {len(parsed.specs)} spec(s) remain.")
 
 
 # ── Direct writes (lesson add / fact add) ─────────────────────────────────────

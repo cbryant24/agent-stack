@@ -115,6 +115,27 @@ def test_spend_submits_built_graph_and_writes_pending_generation(tmp_path: Path,
     assert result.drained is True
 
 
+def test_redraft_spec_is_generated_as_text2img(tmp_path: Path, flux_template) -> None:
+    # A redraft spec carries revised_from (lineage) but source=None. generate must treat
+    # it as plain text2img: no source upload, no parent_id/chain lineage from revised_from.
+    fake = _FakeComfy()  # NB: _FakeComfy has NO upload_image — any source path would AttributeError.
+    store = _store()
+    spec = _spec(revised_from="gen-parent", source=None)
+
+    spend_generation_sync(
+        _plan(flux_template, spec), endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    gen = store.upsert_generation.call_args[0][0]
+    # revised_from does NOT drive source provisioning — this is a fresh text2img render.
+    assert gen.parent_id is None
+    assert gen.source_image_path is None
+    assert gen.source_mask_path is None
+    # A txt2img generation roots its own chain.
+    assert gen.chain_root_id == gen.entry_id
+
+
 def test_identity_derivation_overrides_the_file_for_the_write_path(tmp_path: Path, flux_template) -> None:
     # The spec DECLARES non-identity, but a LoRA in the stack is registry-flagged.
     spec = _spec(identity_bearing=False, lora_stack=[LoraRef(name="char-lora.safetensors", strength=0.8)])

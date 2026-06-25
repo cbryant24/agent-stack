@@ -89,7 +89,20 @@ AGENT_NAME = "visual-generation"
 
 # Prompt-craft chain (Sonnet). draft is the free, infinitely-iterable loop.
 MODEL_DIRECTOR = "claude-sonnet-4-6"
+MODEL_OPUS = "claude-opus-4-8"
 MAX_DRAFT_TOKENS = 4096
+
+# `--model {sonnet|opus}` aliases → API strings. Constrained (CLI uses click.Choice);
+# an omitted alias resolves to MODEL_DIRECTOR (Sonnet). Each target must have a row in
+# agent_runtime.budget._PRICING or its cost falls back to $0.
+MODEL_ALIASES = {"sonnet": MODEL_DIRECTOR, "opus": MODEL_OPUS}
+
+
+def resolve_model(alias: str | None) -> str:
+    """Resolve a `--model` alias to its API string; None → MODEL_DIRECTOR."""
+    if alias is None:
+        return MODEL_DIRECTOR
+    return MODEL_ALIASES[alias]
 
 # Per-run Claude budget for a `draft` (BudgetEnvelope = the Claude axis only; the
 # GPU axis NEVER enters it). draft never delegates inline (research is offered,

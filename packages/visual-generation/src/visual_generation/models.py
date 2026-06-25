@@ -258,6 +258,11 @@ class VisualSpec(BaseModel):
     project: str | None = None
     identity_bearing: bool = False  # pre-fill only — re-derived at generate
     rationale: str | None = None  # concise tutor rationale for the spec
+    # Lineage for a `redraft` (prose-only text2img revise): the parent gen_id this
+    # spec was revised from. Metadata ONLY — never read at generate time (a redraft
+    # carries source=None, so it stays text2img). parent_id/chain_root_id are still
+    # minted on the generation; this records the spec→generation descent.
+    revised_from: str | None = None
     created_at: str = Field(default_factory=_now_iso)
 
 
@@ -296,6 +301,7 @@ class DraftResult(BaseModel):
     tutor_notes: list[str] = Field(default_factory=list)  # the user's own surfaced lessons
     missing_models: list[str] = Field(default_factory=list)  # required models absent from registry
     inert_inheritance: list[str] = Field(default_factory=list)  # inherited attrs the template can't apply
+    revise_warnings: list[str] = Field(default_factory=list)  # redraft advisories (e.g. parent was img2img)
     research_offer: str | None = None  # a gap topic to OFFER (never auto-run)
     overall_reasoning: str = ""
     run_id: str = ""

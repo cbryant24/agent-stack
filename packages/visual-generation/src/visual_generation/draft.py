@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from agent_runtime import (
     BudgetEnvelope,
@@ -28,7 +28,12 @@ from anthropic import AsyncAnthropic
 
 from visual_generation.batch_file import append_spec
 from visual_generation.chains import craft_spec
-from visual_generation.constants import AGENT_NAME, DRAFT_BUDGET, RESEARCH_GAP_THRESHOLD
+from visual_generation.constants import (
+    AGENT_NAME,
+    DRAFT_BUDGET,
+    RESEARCH_GAP_THRESHOLD,
+    resolve_model,
+)
 from visual_generation.identity import derive_identity_bearing
 from visual_generation.models import (
     DraftResult,
@@ -70,6 +75,7 @@ async def draft(
     project: str | None = None,
     source: VisualSource | None = None,
     denoise: float | None = None,
+    model: str | None = None,
     budget: BudgetEnvelope | None = None,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
@@ -119,6 +125,7 @@ async def draft(
                 crafted = await craft_spec(
                     intent, ctx, template, models, client,
                     parent=parent, refinement=(source is not None),
+                    model=resolve_model(model),
                 )
 
                 spec = VisualSpec(
@@ -217,3 +224,147 @@ async def draft(
 def draft_sync(intent: str, **kwargs: Any) -> DraftResult:
     """Synchronous wrapper for draft()."""
     return asyncio.run(draft(intent, **kwargs))
+
+
+def _failed_redraft(warnings: list[str]) -> DraftResult:
+    """A redraft that resolved nothing to revise (no parent / no recipe to preserve)."""
+    return DraftResult(
+        spec=VisualSpec(prompt="", heading=""),
+        status="failed",
+        revise_warnings=warnings,
+    )
+
+
+async def redraft(
+    gen_id: str,
+    change: str,
+    *,
+    batch_path: str | Path | None = None,
+    project: str | None = None,
+    model: str | None = None,
+    budget: BudgetEnvelope | None = None,
+    store: VisualGenerationStore | None = None,
+    memory_store: MemoryStore | None = None,
+    llm_client: AsyncAnthropic | None = None,
+) -> DraftResult:
+    """Prose-only TEXT2IMG revise of a prior generation.
+
+    Loads the parent generation, re-runs the three-collection retrieval (queried on the
+    parent's prose + the change, so scene-level priors/lessons surface), and crafts a spec
+    that applies ONLY `change` to the parent's prompt. The recipe — seed (re-pinned fixed),
+    settings, model, LoRAs, dimensions, and the workflow template — is inherited from the
+    parent so continuity can't drift. The spec carries `source=None` (so `generate` renders
+    it as text2img, NOT an img2img edit) and records descent via `revised_from=gen_id`."""
+    memory_store = memory_store or get_memory_store()
+    store = store or VisualGenerationStore(memory_store)
+    await store.ensure_collection()
+
+    parent = await store.get_generation(gen_id)
+    if parent is None:
+        return _failed_redraft([f"generation {gen_id} not found in memory."])
+
+    out_path = Path(batch_path) if batch_path else _default_batch_path(project or parent.project)
+
+    revise_warnings: list[str] = []
+    if parent.source_image_path or parent.source_mask_path:
+        revise_warnings.append(
+            "Parent was an img2img/inpaint result; redraft targets text2img parents — the "
+            "revised spec renders fresh from text, it does not edit the parent's pixels."
+        )
+
+    # The template must resolve by the parent's name so the recipe/slots are preserved
+    # exactly (no semantic re-resolution that could pick a different template).
+    if not parent.workflow_ref:
+        return _failed_redraft(
+            revise_warnings + ["Parent has no workflow_ref; can't preserve the recipe."]
+        )
+    template = await store.get_template_by_name(parent.workflow_ref)
+    if template is None:
+        return _failed_redraft(
+            revise_warnings
+            + [f"Parent's workflow template {parent.workflow_ref!r} is not registered; "
+               "can't preserve the recipe."]
+        )
+
+    status: Literal["completed", "partial", "failed"] = "completed"
+    run_id = ""
+    cost_usd = 0.0
+    wall_time_sec = 0.0
+    spec: VisualSpec | None = None
+    tutor_notes: list[str] = []
+    overall_reasoning = ""
+    tracker_ref: BudgetTracker | None = None
+
+    try:
+        async with BudgetTracker(budget or DRAFT_BUDGET, AGENT_NAME) as tracker:
+            tracker_ref = tracker
+            run_id = tracker.run_id
+            with TracePersister(agent=AGENT_NAME, run_id=run_id):
+                ctx = await retrieve_context(f"{parent.prompt}\n\n{change}", store, memory_store)
+                models = store.list_models()
+
+                client = llm_client or AsyncAnthropic(api_key=get_config().anthropic_api_key)
+                crafted = await craft_spec(
+                    change, ctx, template, models, client,
+                    parent=parent, revise=True, model=resolve_model(model),
+                )
+
+                spec = VisualSpec(
+                    heading=(crafted["prompt"] or change)[:60],
+                    prompt=crafted["prompt"],
+                    negative_prompt=crafted["negative_prompt"],
+                    settings=crafted["settings"],
+                    model=crafted["model"],
+                    seed=crafted["seed"],
+                    seed_strategy=crafted["seed_strategy"],
+                    width=crafted["width"],
+                    height=crafted["height"],
+                    lora_stack=[LoraRef(**lr) for lr in crafted["lora_stack"]],
+                    workflow_ref=template.name,
+                    source=None,
+                    project=project or parent.project,
+                    revised_from=gen_id,
+                    rationale=crafted["rationale"],
+                )
+                # Honest pre-fill from the registry (re-derived authoritatively at generate).
+                spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
+
+                overall_reasoning = crafted["rationale"]
+                tutor_notes = [le.statement for _, le in ctx.technique_lessons]
+
+    except BudgetExhaustedError:
+        status = "partial"
+
+    if tracker_ref is not None:
+        snap = tracker_ref._consumption
+        cost_usd = snap.cost_usd
+        wall_time_sec = snap.wall_time_sec
+
+    if spec is not None:
+        append_spec(out_path, spec, project=project or parent.project)
+
+    report_path: Path | None = None
+    if run_id:
+        try:
+            report_path = render_run_report(run_id, AGENT_NAME)
+        except FileNotFoundError:
+            pass
+
+    return DraftResult(
+        spec=spec if spec is not None else VisualSpec(prompt="", heading=""),
+        batch_path=out_path if spec is not None else None,
+        template_name=template.name,
+        tutor_notes=tutor_notes,
+        revise_warnings=revise_warnings,
+        overall_reasoning=overall_reasoning,
+        run_id=run_id,
+        status=status if spec is not None else "failed",
+        cost_usd=cost_usd,
+        wall_time_sec=wall_time_sec,
+        report_path=report_path,
+    )
+
+
+def redraft_sync(gen_id: str, change: str, **kwargs: Any) -> DraftResult:
+    """Synchronous wrapper for redraft()."""
+    return asyncio.run(redraft(gen_id, change, **kwargs))

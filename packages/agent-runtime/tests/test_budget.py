@@ -86,10 +86,25 @@ class TestBudgetTrackerCostTracking:
         asyncio.run(run())
 
     def test_pricing_table_has_all_models(self) -> None:
+        assert "claude-opus-4-8" in _PRICING
         assert "claude-opus-4-7" in _PRICING
         assert "claude-opus-4-6" in _PRICING
         assert "claude-sonnet-4-6" in _PRICING
         assert "claude-haiku-4-5" in _PRICING
+
+    def test_llm_cost_math_opus_4_8(self) -> None:
+        async def run() -> None:
+            envelope = BudgetEnvelope(max_depth=0)
+            async with BudgetTracker(envelope, "test-agent") as t:
+                # 1000 input + 500 output @ opus-4-8 pricing ($5 in / $25 out per 1M)
+                # input: 1000/1M * 5.00 = 0.005
+                # output: 500/1M * 25.00 = 0.0125
+                # total: 0.0175 — and NOT the $0 unknown-model fallback.
+                t.add_llm_cost("claude-opus-4-8", 1000, 500)
+                assert t.consumption.cost_usd == pytest.approx(0.0175, rel=1e-6)
+                assert t.consumption.cost_usd > 0.0
+
+        asyncio.run(run())
 
 
 class TestBudgetTrackerEnforcement:
