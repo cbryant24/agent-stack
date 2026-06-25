@@ -336,8 +336,9 @@ is a fast-follow on the same path.
 **Craft offline** (free — Claude only, no GPU; appends to an editable batch file):
 
 ```bash
-visual-generation draft "<intent>" [-o batch.md] [--template <name>]
+visual-generation draft "<intent>" [-o batch.md] [--template <name>] [--model {sonnet|opus}]
 visual-generation draft "<edit>" [--from <gen_id> | --image <path>] [--mask <path>] [--denoise N]   # refine / iterate
+visual-generation redraft <gen_id> "<change>" [-o batch.md] [--project P] [--model {sonnet|opus}]    # recipe+seed-locked text2img revise
 ```
 
 `draft --from <gen_id>` (or `--image <path>`, plus `--mask` for inpaint) refines an existing
@@ -376,6 +377,8 @@ visual-generation workflow list
 visual-generation review-pending                          # generations awaiting a reaction
 visual-generation recall "<query>"                        # search your own generations + lessons + templates
 visual-generation chain show <root_id>                    # a lineage tree
+visual-generation batch list <batch.md>                   # list each spec's spec_id / title / workflow_ref
+visual-generation batch rm <batch.md> <spec_id> [--yes]   # remove a spec by spec_id (lossless round-trip)
 visual-generation lesson add "<statement>" --scope settings --valence negative
 visual-generation fact add "<statement>" --domain comfyui_mechanics
 visual-generation explain "<concept>" [--level full|concise|quiet]   # grounded deep-dive (Claude)

@@ -279,8 +279,20 @@ oversaturates and distorts the image (this is exactly what happened in the
   explicit "button eyes clearly visible" instruction. Treat button eyes (and
   similarly small details like alternating nail colors) as unreliable in
   multi-character face-forward shots; mitigations are a targeted eye inpaint after
-  the base render, or keeping such details to solo/close compositions. →
-  Troubleshooting: [missing button-eyes](#when-something-goes-wrong).
+  the base render, or keeping such details to solo/close compositions.
+  **Prompt techniques that improve the odds** (they do *not* fix it — see below):
+  give **each character its own full physical button-eye description** (never merge
+  into "matching eyes" / "same style"); describe the **physical object** — glossy
+  black sewing buttons stitched to felt with visible thread, no sclera/pupils/irises —
+  rather than "Coraline-style"; lead with the eye requirement; and soften the
+  **background body, not the face** ("body defocused, face readable" rather than
+  "soft bokeh"). **The honest limit:** these improve odds but **do not reliably beat**
+  the dropout. The root cause is depth/size — two faces on different planes, the
+  far/small one starved of detail — confirmed across multiple renders this session
+  (both face-forward and small-background configurations dropped). **Model choice
+  (Sonnet vs. Opus) does not change it** — the same diffusion model renders. **The
+  reliable fix remains a masked eye-inpaint** on the affected face after the base
+  render. → Troubleshooting: [missing button-eyes](#when-something-goes-wrong).
 - **text2img has no region isolation.** Changing any part of a text2img prompt
   regenerates the whole frame; a fixed seed keeps the result *similar* but does
   not lock any region. To change one region while protecting another (e.g. fix a
@@ -467,6 +479,48 @@ each individual generation in the run:
 - It does **not** stop the pod, and does **not** stop GPU billing — the pod
   keeps running and accruing cost until you stop it yourself in the RunPod UI.
 
+### `redraft <gen_id> "<change>" [-o batch.md] [--project P] [--model {sonnet|opus}]`
+
+A directed, **recipe-locked text2img revise** of an existing generation — when you
+want the *same* render with a changed prose prompt, not an img2img edit of the pixels.
+
+- **Inherits the parent's full recipe in code.** `redraft` loads the parent
+  `generation` record by `gen_id` and reuses its seed (re-pinned `fixed`), `settings`,
+  model, `lora_stack`, dimensions, and `workflow_ref` (resolved from the parent's
+  template by name). **Only the prose prompt is model-authored** — everything else is
+  copied deterministically, so the result stays on the parent's recipe rather than
+  re-inventing settings.
+- **Retrieval + `--notes`.** It runs the normal three-collection retrieval (banks
+  reasoning, honors loved/disliked priors and technique lessons) and additionally folds
+  in the parent generation's `report --notes`. `redraft` is the **first consumer of
+  `--notes`** anywhere — until now `--notes` was stored but never read (see the
+  [`--context` vs `--notes`](#glossary--plain-language) glossary entry). Put
+  change-next-time steering in `--notes` and `redraft` will act on it.
+- **Lineage via `revised_from`.** The new spec records descent through a `revised_from`
+  field carrying the parent `gen_id`. This is **lineage metadata only — not a
+  `VisualSource`** — so `generate` still treats the spec as plain text2img (no image is
+  uploaded to the pod). Append-only.
+- **Contrast with `draft --from`.** `draft --from` is **img2img/inpaint** refinement: it
+  attaches a `VisualSource`, uploads the parent image, and keeps a *fresh* seed.
+  `redraft` keeps `source=None`, **re-renders fresh text2img**, and **inherits the
+  parent's seed**. Reach for `--from` to edit the existing pixels; reach for `redraft` to
+  re-roll the same recipe with a reworded prompt.
+- **`--model {sonnet|opus}`** (on both `redraft` and `draft`, default Sonnet): `opus`
+  resolves to `claude-opus-4-8`; the default is the Sonnet director model. Opus improves
+  the **prompt authoring**, not the diffusion render — the same diffusion model produces
+  the image either way.
+
+### `batch list <batch.md>` / `batch rm <batch.md> <spec_id> [--yes]`
+
+Manage the specs inside a batch file. `batch list` prints each spec's `spec_id`, section
+title, and `workflow_ref`, one per line. `batch rm` removes a single spec by `spec_id`,
+prompting for confirmation unless `--yes` is passed.
+
+This is the **first remove/replace path** for batch files — `batch_file` was previously
+**append-only** (`draft`/`redraft` only ever appended). `batch rm` round-trips the file
+**losslessly**: every other spec's metadata and prose is preserved byte-for-byte, only
+the targeted spec is dropped.
+
 ### `lesson list [--include-unconfirmed] [--scope S] [--valence V]`
 
 Lists technique lessons one per line as `entry_id  [valence/scope] statement`. The
@@ -629,9 +683,26 @@ attempt text in-diffusion, expect only short common words to *sometimes* land.
 **Button eyes (or other small face details) missing in multi-character renders** — button eyes
 render as ordinary eyes on one or both characters in a face-forward two-shot. Small
 per-character attributes drop in multi-character prompts (see the Z-Image
-[Known limitations](#z-image-turbo-what-it-is-and-why-its-settings-are-different)). **Fix /
-future:** validate on solo/close shots, and consider a targeted eye inpaint after the base
-render — parallel phrasing and an explicit "clearly visible" instruction alone are insufficient.
+[Known limitations](#z-image-turbo-what-it-is-and-why-its-settings-are-different)). **Improve the
+odds** (without fixing it): give each character its *own* full physical button-eye description
+(don't collapse to "matching eyes" / "same style"); describe the **physical object** — glossy
+black sewing buttons stitched to felt with visible thread, no sclera/pupils/irises — not
+"Coraline-style"; lead with the eye requirement; and soften the **background body, not the face**
+("body defocused, face readable" rather than "soft bokeh"). **The honest limit:** these raise the
+hit rate but **do not reliably beat** the dropout — the root cause is depth/size (two faces on
+different planes, the far/small one starved of detail), confirmed this session across both
+face-forward and small-background shots, and **model choice (Sonnet vs. Opus) doesn't change it**
+(same diffusion model). **Fix:** the reliable remedy is a targeted **masked eye-inpaint** on the
+affected face after the base render — parallel phrasing and an explicit "clearly visible"
+instruction alone are insufficient.
+
+**`redraft` (or any `gen_id` command) fails with Qdrant `400 Bad Request: "value <x> is not a
+valid point ID, valid values are either an unsigned integer or a UUID"`.** `gen_id`s are full
+UUIDs, but `recall` / `chain show` / session summaries display them by **8-char prefix** — and
+passing that prefix straight through reaches Qdrant's `retrieve`, which rejects any id that isn't
+an unsigned integer or a full UUID. There is **no prefix resolution today**. **Fix:** get the full
+UUID via `recall "<query>"` and copy it whole (not the truncated prefix). (Prefix resolution is a
+candidate refinement, not yet built.)
 
 **`draft` dies with `FileNotFoundError: …/batches/batch.batch.md`.** The batch directory
 doesn't exist and `write_batch` doesn't create it (KI-6). One-time fix:

@@ -264,12 +264,14 @@ The agent's persistent memory and deep Suno-feature knowledge directly target al
 **Realized command surface (the built turn):**
 
 ```bash
-visual-generation draft "<intent>" [-o batch.md] [--template <name>]                      # free Claude prompt-craft → batch file
+visual-generation draft "<intent>" [-o batch.md] [--template <name>] [--model {sonnet|opus}]   # free Claude prompt-craft → batch file
+visual-generation redraft <gen_id> "<change>" [-o batch.md] [--project P] [--model {sonnet|opus}]  # recipe+seed-locked text2img revise
 visual-generation generate <batch.md> (--section <id> | --all) --endpoint <url> [--max-session-cost N] [-y]  # warm-session GPU spend, soft-inform gate
 visual-generation report <gen_id> --reaction <loved|liked|liked_with_changes|disliked|render_failed> [--rating 1-5]
 visual-generation model sync --endpoint <url>;  visual-generation model list             # registry from /object_info
 visual-generation workflow register <exported-api.json>;  visual-generation workflow list # slot-map propose→confirm
 visual-generation review-pending;  visual-generation recall "<query>";  visual-generation chain show <root_id>
+visual-generation batch list <batch.md>;  visual-generation batch rm <batch.md> <spec_id> [--yes]  # list / remove specs in a batch
 visual-generation lesson add "<statement>" --scope ... --valence ...;  visual-generation fact add "<statement>" --domain ...
 visual-generation explain "<concept>" [--level full|concise|quiet];  visual-generation research "<topic>"
 ```
