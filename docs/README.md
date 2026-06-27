@@ -9,6 +9,7 @@ These stay current and describe the system as it is today:
 - [architecture.md](architecture.md) — system architecture
 - [ai-director-agent-system.md](ai-director-agent-system.md) — AI director agent design
 - [decisions-mode-spec.md](decisions-mode-spec.md) — decisions-mode specification
+- [naming-conventions.md](naming-conventions.md) — canonical file & folder naming/placement conventions
 
 ## [templates/](templates/)
 

@@ -502,6 +502,8 @@ Three buckets:
 
 ### How should I name files inside a project folder?
 
+> Canonical reference: [`docs/naming-conventions.md`](docs/naming-conventions.md) — the full naming/folder convention across all three trees (`~/agent-data`, `~/agent-projects`, agent-reports). The summary below is the quick version.
+
 **Folder = project slug; filename = artifact type only.** The folder (`~/agent-projects/<slug>/`) already namespaces the project, so do **not** repeat the slug in filenames (`celeste-you-dangerous-visual-batch.md` is wrong). Name each `-o` output by its role:
 
 | Artifact | Filename |

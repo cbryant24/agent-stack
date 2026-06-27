@@ -52,13 +52,14 @@ Runtime data lives **outside the repo**: `~/agent-data/` (sources, audio, stills
 - **Running agents:** anything that calls an API must run under `op run --env-file=.env -- uv run …` (1Password resolves the `op://` refs in `.env`); use the `agent()` shell wrapper. Tests & linting use fake keys → plain `uv run`. → README "Running agents".
 - **Tests/lint (no CI — run locally):** `uv sync --all-packages && uv run pytest -v` (testpaths=`packages`, importlib mode, pytest-asyncio). `uv run ruff` + `uv run mypy` (config in root/package `pyproject.toml`). Qdrant-dependent tests auto-skip when `localhost:6333` is down; no test needs real API keys.
 - **Env vars:** `op://` 1Password references (secrets in the `Personal` vault `credential` field; non-secret paths/URLs as literals). Full list → README "Required Environment Variables" + `.env.example`. Do not duplicate keys here.
-- **Output/file conventions:** director artifacts in `~/agent-projects/<slug>/` with **type-only filenames** (`brief.md`, `script.md`, `directed.md`, `visual-batch.md`, `edit-brief.md`). → README "Where should project files live?".
+- **Output/file conventions:** director artifacts in `~/agent-projects/<slug>/` with **type-only filenames** (`brief.md`, `script.md`, `directed.md`, `visual-batch.md`, `edit-brief.md`); kebab-case everywhere; ephemeral work → session scratchpad, never repo `tmp/`. → canonical: [`docs/naming-conventions.md`](docs/naming-conventions.md).
 
 ## 5. Pointers (don't copy — link)
 
 - [`README.md`](README.md) — setup + per-agent CLI usage + FAQ
 - [`docs/README.md`](docs/README.md) — doc index, organized by longevity
 - Living design docs: [`architecture.md`](docs/architecture.md), [`ai-director-agent-system.md`](docs/ai-director-agent-system.md), [`decisions-mode-spec.md`](docs/decisions-mode-spec.md)
+- [`docs/naming-conventions.md`](docs/naming-conventions.md) — canonical file & folder naming/placement conventions
 - [`docs/visual-generation-known-issues.md`](docs/visual-generation-known-issues.md) — visual-generation limitations
 - [`docs/v2-refinements/`](docs/v2-refinements/) — per-agent deferred backlogs · [`docs/handoffs/`](docs/handoffs/) — point-in-time build/research notes (may be stale) · [`docs/templates/`](docs/templates/) — project-plan scaffolds & worked examples
 - Per-package `README.md`s (table in §3)
