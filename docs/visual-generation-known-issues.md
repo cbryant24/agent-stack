@@ -77,3 +77,25 @@ generic `<batch.md>` placeholder rather than the real path, which is the one on 
 Fixed: `_default_batch_path` (`draft.py`) now falls back to the stem `"default"`
 (`default.batch.md`, matching the `assets/default/` convention) instead of `"batch"`, and the
 `Next:` hint (`cli.py`) interpolates the real `result.batch_path`.
+
+## KI-8 — `draft` template auto-retrieval can select the inpaint graph for text2img prose
+**Status: open — workaround available; guard is a candidate fix**
+
+`draft` resolves its workflow template by embedding-similarity retrieval over registered
+templates. When the intent prose leans heavily on a television/screen — and the top-matching
+technique lessons are screen-inpaint lessons — retrieval can select `visual-workflow-inpaint`
+instead of the text2img `visual-workflow`. The inpaint template requires an `init_image` +
+`mask`; a plain `draft` (no `--from`/`--image`/`--mask`) supplies neither, so the spec carries
+inpaint slots that can't be filled. `draft` still succeeds (it's offline), but `generate` fails
+at submit with ComfyUI `400 prompt_outputs_failed_validation` →
+`node_errors … "Invalid image file: mask"` — before any render, so no GPU is spent and the local
+cost tracker does not move; safe to re-run.
+
+Tell: the draft output shows a `denoise` value in `Settings:` and `Template: visual-workflow-inpaint`
+— a plain text2img draft has no `denoise` and should read `Template: visual-workflow`.
+
+Workaround: pin the text2img template explicitly to bypass retrieval —
+`visual-generation draft "<intent>" --template visual-workflow --project <P> -o <batch.md>`.
+
+Candidate fix (not committed): have `draft` default to a text2img template when no
+`--from`/`--image`/`--mask` is supplied.

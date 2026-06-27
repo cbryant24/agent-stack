@@ -4,9 +4,9 @@ document_type: "living-generation-craft-guide"
 model: "Tongyi-MAI Z-Image-Turbo"
 modality: "image"
 status: "active"
-version: "1.0.0"
+version: "1.1.0"
 created: "2026-06-26"
-last_updated: "2026-06-26"
+last_updated: "2026-06-27"
 maintainer: "Chris Bryant"
 evidence_scope: "Celeste-you-dangerous project empirical results + official/external Z-Image references"
 ---
@@ -131,6 +131,7 @@ A risk must be described as a probability, not a certainty. A failed attempt doe
 - **Project workflow:** `visual-workflow`
 - **Primary task:** text-to-image
 - **Refinement workflows:** `visual-workflow-img2img`, `visual-workflow-inpaint`
+  - **Workflow-routing note:** a draft/inpaint run can mis-select its template and fail with `400 … Invalid image file: mask`; the fix is to pass `--template visual-workflow` explicitly. Full entry lives in the package README/TROUBLESHOOTING — do not duplicate it here.
 - **Project precision:** BF16 checkpoint naming indicates bfloat16 use
 - **Identity LoRA state in the documented beats:** empty `lora_stack`
 - **Planned durable consistency path:** a character LoRA, retained as future work rather than current evidence
@@ -184,6 +185,8 @@ lora_stack: inherited
 
 The fixed seed preserves a latent starting point and can support continuity when the recipe and prompt structure remain related. It does **not** guarantee character identity, exact pose, or composition by itself. The parent generation also supplies prior prose, context, notes, and recipe lineage to redraft.
 
+Because the recipe (seed, settings, model, LoRA stack, dimensions, template) is inherited in code but the **prose is re-authored by the LLM**, the prompt is the only un-pinned drift surface in a redraft. True identity lock would require a character LoRA (none exists yet — see *Planned durable consistency path*). This is also why over-verbose redrafts that re-describe locked attributes can drift them (see Technique 17 and the redraft-failure notes).
+
 ---
 
 # Locked and Reusable Prompt Blocks
@@ -206,6 +209,8 @@ visible fabric texture and slight puppet-like quality to surfaces, storybook ill
 
 The aesthetic block worked for the project’s handmade puppet look. `Coraline-inspired` is useful as a broad style reference, but it was **not sufficient as the only description for exact button-eye construction**.
 
+**RISKY — the felt/clay phrasing is a narrow band; do not amplify in either direction.** Pushing toward heavy texture (`heavy felt texture`, `handmade felt puppets`) drifted to a soft plush-doll look (`6959dda3`); over-correcting toward production craft (`movie-production sculpted clay`, `Coraline-craft`, `expressive`) produced an oversized Muppet caricature with enlarged heads/noses and lost button eyes (`c2557f59`). The restrained description recovered the correct design (`966fc7e2`). See Technique 13 for the exact recovered wording.
+
 ## Celeste character block
 
 **Status: LOCKED within the documented sequence**
@@ -213,6 +218,8 @@ The aesthetic block worked for the project’s handmade puppet look. `Coraline-i
 ```text
 a young woman named Celeste with long black yarn hair just past her shoulders, a bare felt face with no makeup
 ```
+
+Hair is **shoulder-length black yarn, NOT dreadlocks** — over-verbose redrafts have drifted it to dreadlocks (the narrator's style). Keep the hair descriptor in Celeste's own block and do not let it migrate from his.
 
 Successful scene additions included:
 
@@ -311,6 +318,7 @@ both characters turned to face the camera/viewer directly
 
 - **Reason:** Degree-based rotation does not provide a stable semantic target. Plain visible relationships do.
 - **Evidence:** The chat explicitly translated degrees into direct viewer-facing staging.
+- **Subject-orientation beats camera-position language.** To redirect attention, describe the *subjects* (`rear view`, `from behind`, `facing the stage`) rather than the camera; prefer `image perspective` over `camera`. A full backs-to-viewer staging also sidesteps the button-eye dropout entirely — no faces to resolve.
 
 ## Technique 2 — Preserve known-good elements with explicit enumeration
 
@@ -411,6 +419,7 @@ soften only his body and surroundings — his face stays readable and his black 
 - **Risky case:** two characters facing forward, especially at different depths.
 - **Observed behavior:** Button eyes rendered on the near character but simplified into generic/cartoon eyes on the smaller background character; a prior face-forward two-shot dropped them on both.
 - **Implication:** Prompt wording is not the only cause. Pixel allocation and composition priority matter.
+- **Confirming counter-case (SUPPORTED):** when both faces sit on the **same plane** (same-depth close two-shot), both sets of button eyes held even pulled back (`5489cbf7`, `c7ae42b8`). Contrast the different-depth keeper `2c2c912e`, where the small/back face dropped. So same-plane placement — not just prompting — is the lever that protects the second face. See the Composition Ledger.
 
 ## Technique 7 — Use masked eye inpaint as the reliable correction
 
@@ -460,6 +469,7 @@ Make the room darker so the cool blue glow from the TV reads more strongly on bo
 
 - **Outcome:** User reported the lighting as perfect and exactly desired.
 - **Keep:** Dominant cool blue TV light, dark room, restrained warm fill.
+- **Lever — subtract the inherited descriptor, don't just add its opposite.** The room would not darken while `glowing wall sconces / amber accents` stayed in the inherited prose; *removing the light sources* read dim where adding `dark` had not. To change an attribute, take out the inherited phrase that fights it rather than stacking a contradicting one.
 
 ## Technique 12 — Clothing and prop specificity
 
@@ -479,6 +489,50 @@ each fingernail is one solid color, either solid black or solid white
 ```
 
 - **Why:** Explicit per-object color assignment reduced blending and attribute ambiguity.
+- **Ownership clarifier:** the red/white high-tops are **Air Jordan 1-style** and **belong to the narrator only**. Assign footwear per character explicitly — see Technique 14 for how negation (`no shoes`) misfires when ownership isn't positively stated.
+
+## Technique 13 — Stay inside the felt/clay aesthetic band; don't amplify
+
+- **Status:** RISKY
+- **What it controls:** Whether the puppet design reads as the intended handmade-felt Coraline look versus drifting to plush or to caricature.
+- **Failure on the "too soft" side:** `handmade felt puppets`, `heavy felt texture` → soft plush-doll look (`6959dda3`).
+- **Failure on the "too crafted" side:** `movie-production sculpted clay`, `Coraline-craft`, `expressive` → oversized Muppet caricature, enlarged heads/noses, lost button eyes (`c2557f59`).
+- **Recovered wording:** restrained felt — small nose/ears, felt face, button eyes — with **no** `plush` and **no** `sculpted-clay-craft` amplifiers (`966fc7e2`).
+- **Also:** drop irrelevant detail (e.g. the fingernail-color descriptor) in poses where the hands aren't featured — an unused micro-detail is a needless fixation point.
+
+## Technique 14 — Positive wardrobe descriptors beat negative subtraction
+
+- **Status:** SUPPORTED
+- **Failure wording:** `no shoes / no sneakers` made the model remove Celeste's pants and spawn a duplicate pair of sneakers on the floor (`bfed13d5`).
+- **Working wording:** restating positively fixed it in one pass (`a77c6bb1`):
+
+```text
+blue jeans and white socks, no shoes; the Air Jordan 1s belong to the narrator only, no duplicate shoes on the floor
+```
+
+- **Why:** This graph has no conventional negative conditioning (`ConditioningZeroOut`), so a bare negation has no clean control surface and the model reinterprets the scene to satisfy it. State what each object *is* and who it belongs to.
+
+## Technique 15 — Re-pose the whole body coherently; don't bolt an impossible detail onto an inherited stance
+
+- **Status:** SUPPORTED (the lever) with three FAILED sub-cases (the anti-patterns)
+- **Working lever:** a big coherent pose change beats an impossible small one. Reclining Celeste along a larger sofa (`eafde073`) finally landed the legs-across-lap that `legs across lap + sitting upright facing forward` never could.
+- **FAILED — pose contradiction:** `both legs across the narrator's lap` + `both facing the camera / leaning back against the couch` is physically incompatible; the model keeps the stable forward-facing seated pose and drops the impossible part → one leg only (`bfed13d5`, `a77c6bb1`; `57bd1c94` still upright). Resolve by making the pose coherent (recline), not by repeating the instruction.
+- **FAILED — redundant clause stacking:** front-loading redundant reinforcing clauses (`both feet up / neither touches the floor / both legs across the lap`) on top of an inherited single-leg geometry made the model grow a **third leg** on Celeste (`2d9b11c8`). Rule: state a limb pose **once**, as one coherent body, with no geometric micro-detail.
+- **FAILED / RISKY — leg-detail instability:** legs-across-lap flip-flopped across both seeds — `pose right / legs reverted to floor` (`ce0be66f`) vs. `legs up / other regressions`. It sits at the model's reliability edge → treat as an **edit-stage inpaint**, not a redraft target.
+
+## Technique 16 — Heavy front-loaded wording is a deliberate lever, not default verbosity
+
+- **Status:** SUPPORTED
+- **Use it for:** a single change that repeatedly won't take (orientation, crowd density). Front-load it and repeat it heavily — front-loaded words carry the most weight.
+- **Distinct from:** default terseness, which still applies to everything *not* being changed.
+- **Reconciliation with Technique 15:** the lever is **one coherent front-loaded statement**, not stacked redundant geometric micro-clauses. Repeating an *impossible* or over-specified geometry (Technique 15's third-leg case) is the failure mode; repeating a single coherent intent is the lever. Repeat the *goal*, not the *geometry*.
+
+## Technique 17 — Don't re-describe locked attributes in a redraft
+
+- **Status:** FAILED pattern → LOCKED practice
+- **Observed failure:** over-verbose redraft instructions that re-state already-locked attributes drift or drop them — the narrator's skin rendered pale, Celeste's hair drifted to dreadlocks — because the model re-authors the whole prose (the prose is the only un-pinned drift surface; see *Important seed interpretation*).
+- **Practice:** state the single change first, instruct the model to preserve the parent's wording, and **re-describe nothing else**. Treat the change instruction as a director's note, not a full scene description.
+- **Evidence discipline (related):** bank a lesson only on confirmed, repeated evidence, worded as an observation, not a mechanism. The `Z-Image frame-filling bias` hypothesis was **not** confirmed (the wide shot landed) and was correctly never banked. A claim banked without evidence is a confabulation risk. (See also *Do not overclaim* under Button-Eye Failure Analysis.)
 
 ---
 
@@ -487,6 +541,8 @@ each fingernail is one solid color, either solid black or solid white
 | Composition | Internal outcome | Status |
 |---|---|---|
 | Solo/close face | Button eyes reliable in loved anchor | **SUPPORTED** |
+| Two-person **same-depth** close two-shot | Both characters' button eyes held even pulled back — both faces on the same plane (`5489cbf7`, `c7ae42b8`) | **SUPPORTED** |
+| Two-person **different-depth** shot | Small/back face's button eyes dropped (`2c2c912e`) | **RISKY** |
 | Two-person face-forward shot | Small face details dropped on one or both characters | **RISKY** |
 | Foreground subject sharp, background subject blurred | Foreground eyes held; background eyes simplified | **RISKY** |
 | Foreground Celeste cross-legged, narrator behind cheering | Staging eventually reached a loved keeper | **LOCKED keeper composition** |
@@ -516,6 +572,10 @@ Across the documented iterations:
 - adding `button eyes clearly visible` was not sufficient;
 - `matching eyes` or a shared descriptor block was too easy for the authored prompt or image model to compress;
 - blur language conflicted directly with the demand for tiny eye detail.
+
+## Reaffirmed 2026-06-27 (RISKY, both seeds)
+
+The dropout was reaffirmed this session across **both** seeds — the seed-4471 lineage and a fresh-seed draft chain. Front-loaded per-character button-eye descriptions did **not** reliably land them at couch / mid-frame face size (`86cbd66f` plus the fresh-seed renders). Prompt-only improves the odds but does not beat it; the masked eye-inpaint at the edit stage remains the fix. The same-depth counter-case (`5489cbf7`, `c7ae42b8`) confirms the limit is **depth/size, not wording** — when both faces share a plane, the eyes hold.
 
 ## Current best interpretation
 
@@ -710,6 +770,35 @@ Do not place successful attributes only in notes. They belong in context so futu
   - background blur can be completed in DaVinci;
   - one prompt-only eye retry, then masked inpaint if needed.
 
+## Loved anchor: couch ending
+
+- **Generation:** `57bd1c94`
+- **Reaction:** loved
+- **Rating:** 5
+- **What landed:**
+  - correct Coraline felt-puppet design on **both** characters;
+  - both button eyes present and clean;
+  - natural expressions, both characters turned toward each other;
+  - larger sofa;
+  - Celeste in white socks / no shoes;
+  - AJ1s on the narrator only;
+  - blue jeans on both;
+  - TV-POV framing;
+  - cool blue TV glow.
+- **Sole gap:** the recline / legs-across-lap pose — **deferred to edit stage** (model-reliability edge; see Technique 15 and Experiment 4).
+
+## The five-beat set (all ★5)
+
+This couch ending completes the five loved keepers of the sequence:
+
+| Beat | Generation |
+|---|---|
+| Bar meeting | `ed49b68c` |
+| Pizza debate | `73369544` |
+| Shared taste | `2c2c912e` |
+| Jazz Club | `bd245d93` |
+| Couch ending | `57bd1c94` |
+
 ---
 
 # What Worked
@@ -771,6 +860,11 @@ Do not place successful attributes only in notes. They belong in context so futu
 - expecting distance alone to protect the second character’s button eyes
 - assuming stronger prompt wording guarantees recovery
 - expecting a more capable prompt-authoring LLM to change the image model’s fundamental detail allocation
+- `both legs across the lap` + `both facing the camera / leaning back` — physically incompatible; the model drops the impossible part → one leg (`bfed13d5`, `a77c6bb1`; see Technique 15)
+- stacking redundant pose clauses (`both feet up / neither touches the floor / both legs across the lap`) onto an inherited single-leg geometry → a third leg on Celeste (`2d9b11c8`)
+- bare negation for wardrobe (`no shoes / no sneakers`) — removed pants and spawned duplicate sneakers (`bfed13d5`); state wardrobe positively instead (Technique 14)
+- amplifying the felt/clay style in either direction — `heavy felt texture` → plush; `sculpted clay / Coraline-craft` → Muppet caricature (Technique 13)
+- over-verbose redrafts that re-describe locked attributes — drifted the narrator's skin pale and Celeste's hair to dreadlocks (Technique 17)
 
 ## Production failures
 
@@ -969,6 +1063,14 @@ Do not copy image-only conclusions into Wan 2.2 without testing. In particular:
 - **Rule:** Use a separate batch and seed comparison; do not replace the locked recipe from one result.
 - **Metrics:** identity, button-eye detail, style retention, composition, runtime.
 
+## Experiment 4 — Break the fixed seed to free the legs-across-lap pose (RESOLVED)
+
+- **Question:** Can breaking the fixed seed (fresh `draft` vs `redraft`) free the legs-across-lap pose without losing the character design?
+- **Setup:** couch-ending lineage on seed 4471 (`eafde073` / `57bd1c94`) vs. a fresh-seed draft chain (`6959dda3` → `c396dd48` → `c2557f59` → `966fc7e2` → `86cbd66f`).
+- **Changed variable:** the seed. `redraft` re-pins the parent seed; only `draft` reseeds — the seed anchors both composition and design.
+- **Observed:** the fresh seed freed the pose but re-rolled the design (plush → plastic → Muppet) and never landed button eyes; the liked design is anchored to seed 4471.
+- **Decision:** keep the seed-4471 render `57bd1c94` as the keeper; defer the legs-up pose to the edit stage.
+
 ---
 
 # Post-Production Ledger
@@ -979,10 +1081,27 @@ Do not copy image-only conclusions into Wan 2.2 without testing. In particular:
 | Stronger background blur | Generation did not sufficiently defocus | DaVinci Resolve | Preserve readable face if eye detail matters |
 | Tiny narrator eye correction | Repeated prompt-level failure risk | Inpaint | Tight mask over eyes/face only |
 | Exact screen content | Screen/prop reinterpretation risk | Inpaint/composite | Mask glass only, preserve bezel |
+| Button-eye inpaint on keepers | Dropout reaffirmed across both seeds | Inpaint | Tight eye/face mask on `57bd1c94`, `bd245d93`, `2c2c912e` |
+| Legs-up restage on couch ending | Pose at model-reliability edge (Experiment 4) | Inpaint/restage | Optional legs-across-lap restage on `57bd1c94` to match the resolution beat |
+| Jazz fifth musician | Missing in render | Inpaint/composite | Restore the fifth musician |
+| AJ1 logos | Exact branded graphics garbled in diffusion | DaVinci Resolve | Composite Air Jordan 1 logos |
 
 ---
 
 # Changelog
+
+## 2026-06-27 — v1.1.0
+
+- **Added — new ★5 keeper anchor:** the couch ending (`57bd1c94`), with correct felt-puppet design and clean button eyes on both characters; recorded the five-beat set (bar meeting `ed49b68c`, pizza debate `73369544`, shared taste `2c2c912e`, Jazz Club `bd245d93`, couch ending `57bd1c94`).
+- **Promoted to SUPPORTED:** same-depth close two-shot holds both characters' button eyes (`5489cbf7`, `c7ae42b8`) — added to the Composition Ledger and Technique 6; positive wardrobe descriptors beat negative subtraction (Technique 14, `bfed13d5` → `a77c6bb1`); a coherent whole-body re-pose beats an impossible incremental one (Technique 15, `eafde073`); subject-orientation over camera-position language and the subtract-the-descriptor lighting lever (Techniques 1 and 11).
+- **Added — RISKY:** the felt/clay aesthetic descriptor band (Technique 13, `6959dda3` / `c2557f59` / `966fc7e2`); reaffirmed the button-eye dropout across **both** seeds (Button-Eye Failure Analysis), confirming it is a depth/size limit, not a wording one.
+- **Added — FAILED:** pose contradiction, redundant clause stacking (the third-leg case `2d9b11c8`), and leg-detail instability (`ce0be66f`) — all under Technique 15 and the "What Did Not Work" list; over-verbose redrafts drifting locked attributes (Technique 17).
+- **Demoted:** the legs-across-lap pose → edit-stage inpaint only (off the redraft path), per resolved Experiment 4 (seed-vs-design); kept `57bd1c94` as keeper.
+- **Added — Open Experiment 4 (RESOLVED):** breaking the fixed seed freed the pose but re-rolled the design; design is anchored to seed 4471.
+- **Added — Post-Production Ledger rows:** button-eye inpaint on `57bd1c94` / `bd245d93` / `2c2c912e`, optional legs-up restage on `57bd1c94`, restore the Jazz fifth musician, AJ1 logo composites.
+- **Added — Technique 16:** front-loaded heavy wording as a deliberate lever (reconciled against Technique 15's redundant-stacking failure); plus an evidence-discipline note (the unconfirmed "frame-filling bias" hypothesis was correctly never banked).
+- **Migrated then deleted** `redraft-feeback-learnings.md` — folded its still-relevant Task-4 craft learnings (redraft conditioning, the levers above, per-character clarifiers: Celeste's hair is NOT dreadlocks) into this doc; the file's README tasks were already applied to the package README.
+- Added a one-line workflow-routing pointer for the `--template visual-workflow` inpaint mis-selection bug (full entry in the package README/TROUBLESHOOTING).
 
 ## 2026-06-26 — v1.0.0
 

@@ -56,7 +56,10 @@ different system. It's easy to lose track of which step you're on:
    named, reusable template with an inferred slot map.
 4. **`draft` / hand-written `vg-spec`** — produce an entry in a batch file
    (`visual-batch.md`) describing what to generate: prompt, settings,
-   `workflow_ref`, seed, dimensions.
+   `workflow_ref`, seed, dimensions. (For screen/TV-heavy **text2img** prose,
+   template auto-retrieval can mis-select the `visual-workflow-inpaint` graph;
+   pin `--template visual-workflow` to force text2img — see
+   [Troubleshooting](#when-something-goes-wrong).)
 5. **`generate <batch.md> --section <id> --endpoint <url>`** — resolves the
    spec's `workflow_ref` to the registered template, applies the slot map to
    fill in the template's graph with the spec's values, sends the resulting
@@ -719,6 +722,18 @@ apply.** Watch the `Template:` line in the draft output: if it reads
 `(none — settings are unconstrained)`, re-run (usually transient) or pass
 `--template visual-workflow-inpaint` explicitly to bypass retrieval.
 
+**`generate` fails at submit with `400 … "Invalid image file: mask"`.** Your `draft` was a plain
+text2img (no `--from`/`--image`/`--mask`), but template auto-retrieval picked the **inpaint** graph
+(`visual-workflow-inpaint`) — the intent prose leaned on a TV/screen and the top-ranked technique
+lessons were screen-inpaint lessons. The inpaint graph needs an `init_image`+`mask` the draft never
+supplied, so ComfyUI rejects the job: `prompt_outputs_failed_validation … node_errors … "Invalid
+image file: mask"`. **Confirm it:** the draft output shows a `denoise` in `Settings:` and
+`Template: visual-workflow-inpaint` — a text2img draft has no `denoise` and should read
+`Template: visual-workflow`. **Fix:** re-draft with the text2img template pinned —
+`draft "<intent>" --template visual-workflow …` — to bypass retrieval. **No GPU was spent** (the
+failure is at submit, before any render; the local cost tracker doesn't move), so it's safe to
+re-run. (KI-8.)
+
 **A semantic command reports an *invalid* Voyage key (distinct from the transient failure
 above).** If `workflow list` — or any embed/semantic command — errors as if the key is
 invalid, the likely cause is that it was run *without* `op run`, so the `op://` reference in
@@ -1005,3 +1020,7 @@ Common questions and knowledge gaps about this agent. Add entries as they come u
 **Where do this agent's files go?**
 
 `-o` outputs are director-owned working files — put them in your per-project folder (`~/agent-projects/<project-slug>/`). Machine-managed outputs (sources, audio, stills, qdrant) go under `~/agent-data/`, and run reports auto-write to `~/obsidian/agent-reports/`. Canonical, single-source-of-truth detail: [File organization](../../README.md#where-should-project-files-live) in the repo root README.
+
+**Why did a screen-mentioning `draft`/`redraft` print inpaint/masking lessons under "Your own technique lessons"?**
+
+Those lessons are **retrieval context ranked by text similarity** to your prose — **not** by whether the lesson succeeded. A TV/screen prompt surfaces screen-inpaint lessons because they're textually similar. They do **not** change the generation mode (`redraft`, and `draft` without a source image, is always text2img) and do **not** leak into the authored prose prompt. (If they coincide with `generate` failing on `Invalid image file: mask`, that's the separate template-mis-selection issue — see [Troubleshooting](#when-something-goes-wrong) / KI-8.)
