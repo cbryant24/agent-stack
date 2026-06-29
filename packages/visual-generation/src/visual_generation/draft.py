@@ -18,32 +18,35 @@ from agent_runtime import (
     BudgetEnvelope,
     BudgetExhaustedError,
     BudgetTracker,
+    LLMProvider,
     MemoryStore,
     TracePersister,
     get_config,
     get_memory_store,
+    get_provider,
     render_run_report,
 )
-from anthropic import AsyncAnthropic
 
 from visual_generation.batch_file import append_spec
+from visual_generation.canon import enforce_canon
 from visual_generation.chains import craft_spec
+from visual_generation.discovery import compile_creative_input, discover_scenes
 from visual_generation.constants import (
     AGENT_NAME,
     DRAFT_BUDGET,
     RESEARCH_GAP_THRESHOLD,
-    resolve_model,
 )
 from visual_generation.identity import derive_identity_bearing
 from visual_generation.models import (
     DraftResult,
     LoraRef,
+    ProvenanceLeg,
     VisualGeneration,
     VisualSource,
     VisualSpec,
     WorkflowTemplate,
 )
-from visual_generation.retrieval import RetrievedContext, retrieve_context
+from visual_generation.retrieval import RetrievedContext, retrieve_context, summarize_provenance
 from visual_generation.store import VisualGenerationStore
 
 logger = logging.getLogger(__name__)
@@ -68,40 +71,70 @@ def _default_batch_path(project: str | None) -> Path:
 
 
 async def draft(
-    intent: str,
+    intent: str | None = None,
     *,
+    points: list[str] | None = None,
+    scene: str | None = None,
+    projects_dir: str | Path | None = None,
     batch_path: str | Path | None = None,
     template_name: str | None = None,
     project: str | None = None,
     source: VisualSource | None = None,
     denoise: float | None = None,
     model: str | None = None,
+    provider: str | None = None,
     budget: BudgetEnvelope | None = None,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
-    llm_client: AsyncAnthropic | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> DraftResult:
-    """Craft a spec from `intent` and append it to the batch file.
+    """Craft a spec and append it to the batch file.
+
+    The creative input is COMPILED from a small list of key points (`intent` and/or
+    `points`) plus the project's own upstream documents (`directed.md`/`brief.md`/…
+    discovered by `project`, optionally narrowed to one `--scene`). The director need
+    not hand-write a prompt — the LLM composes it from the compiled context + the
+    retrieved knowledge.
 
     When `source` is set, the crafted spec becomes a refinement (img2img / inpaint):
-    the prompt still comes from `intent` (the change to make), and the source —
-    a prior generation or an external image, plus an optional mask — is attached so
-    `generate` resolves + uploads it and records the parent lineage."""
+    the compiled input describes the change, and the source — a prior generation or an
+    external image, plus an optional mask — is attached so `generate` resolves + uploads
+    it and records the parent lineage."""
     memory_store = memory_store or get_memory_store()
     store = store or VisualGenerationStore(memory_store)
     await store.ensure_collection()
 
     out_path = Path(batch_path) if batch_path else _default_batch_path(project)
 
-    status = "completed"
+    # Compile the creative input from key points + the project's own documents. The
+    # director supplies a small list of points (and/or a scene); the agent assembles
+    # the context the LLM composes the prompt from.
+    compiled = compile_creative_input(
+        intent, points, project, scene,
+        projects_dir=Path(projects_dir) if projects_dir else None,
+    )
+    if not compiled.text:
+        return DraftResult(
+            spec=VisualSpec(prompt="", heading=""),
+            status="failed",
+            revise_warnings=[
+                "Nothing to draft: provide key points (INTENT or --points), or a --scene "
+                "of a project with a directed.md/script.md."
+            ],
+        )
+
+    status: Literal["completed", "partial", "failed"] = "completed"
     run_id = ""
     cost_usd = 0.0
     wall_time_sec = 0.0
     spec: VisualSpec | None = None
     template: WorkflowTemplate | None = None
+    compiled_from: list[str] = compiled.sources
+    provenance: list[ProvenanceLeg] = []
     tutor_notes: list[str] = []
     missing_models: list[str] = []
     inert_inheritance: list[str] = []
+    canon_applied: list[str] = []
     research_offer: str | None = None
     overall_reasoning = ""
     tracker_ref: BudgetTracker | None = None
@@ -111,7 +144,10 @@ async def draft(
             tracker_ref = tracker
             run_id = tracker.run_id
             with TracePersister(agent=AGENT_NAME, run_id=run_id):
-                ctx = await retrieve_context(intent, store, memory_store)
+                # Retrieval is queried on the short key points (the full compiled docs
+                # would dilute the embedding); the craft sees the full compiled brief.
+                ctx = await retrieve_context(compiled.query or compiled.text, store, memory_store)
+                provenance = summarize_provenance(ctx)
                 template = await _resolve_template(store, template_name, ctx)
                 models = store.list_models()
 
@@ -121,15 +157,15 @@ async def draft(
                 if source is not None and source.from_generation:
                     parent = await store.get_generation(source.from_generation)
 
-                client = llm_client or AsyncAnthropic(api_key=get_config().anthropic_api_key)
+                prov = llm_provider or get_provider(provider)
                 crafted = await craft_spec(
-                    intent, ctx, template, models, client,
+                    compiled.text, ctx, template, models, prov,
                     parent=parent, refinement=(source is not None),
-                    model=resolve_model(model),
+                    model=model,
                 )
 
                 spec = VisualSpec(
-                    heading=(crafted["prompt"] or intent)[:60],
+                    heading=(crafted["prompt"] or compiled.query or "untitled")[:60],
                     prompt=crafted["prompt"],
                     negative_prompt=crafted["negative_prompt"],
                     settings=crafted["settings"],
@@ -152,6 +188,10 @@ async def draft(
                 # Pre-fill identity_bearing honestly from the registry (the same
                 # derivation generate re-runs authoritatively at spend time).
                 spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
+
+                # Deterministically enforce locked project canon (e.g. the narrator's
+                # hair) — the one channel that doesn't depend on LLM discretion.
+                spec.prompt, canon_applied = enforce_canon(spec.prompt, project)
 
                 overall_reasoning = crafted["rationale"]
                 tutor_notes = [le.statement for _, le in ctx.technique_lessons]
@@ -182,7 +222,7 @@ async def draft(
 
                 # Research is OFFERED on a gap, never run here (Step 5 owns `research`).
                 if ctx.is_empty() or ctx.max_local_score() < RESEARCH_GAP_THRESHOLD:
-                    research_offer = intent
+                    research_offer = compiled.query or compiled.text[:80]
 
     except BudgetExhaustedError:
         status = "partial"
@@ -208,9 +248,12 @@ async def draft(
         spec=spec if spec is not None else VisualSpec(prompt="", heading=""),
         batch_path=out_path if spec is not None else None,
         template_name=template.name if template else None,
+        compiled_from=compiled_from,
+        provenance=provenance,
         tutor_notes=tutor_notes,
         missing_models=missing_models,
         inert_inheritance=inert_inheritance,
+        canon_applied=canon_applied,
         research_offer=research_offer,
         overall_reasoning=overall_reasoning,
         run_id=run_id,
@@ -221,9 +264,69 @@ async def draft(
     )
 
 
-def draft_sync(intent: str, **kwargs: Any) -> DraftResult:
+def draft_sync(intent: str | None = None, **kwargs: Any) -> DraftResult:
     """Synchronous wrapper for draft()."""
     return asyncio.run(draft(intent, **kwargs))
+
+
+async def batch_project(
+    project: str,
+    *,
+    scenes: list[str] | None = None,
+    projects_dir: str | Path | None = None,
+    batch_path: str | Path | None = None,
+    template_name: str | None = None,
+    source: VisualSource | None = None,
+    denoise: float | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    store: VisualGenerationStore | None = None,
+    memory_store: MemoryStore | None = None,
+    llm_provider: LLMProvider | None = None,
+    overwrite: bool = True,
+) -> list[DraftResult]:
+    """Compile one spec per scene of a project's narrative doc into a single batch file.
+
+    Discovers the scene headings from `directed.md` (else `script.md`), then runs the
+    full compile→retrieve→craft→canon `draft` for each scene, appending to one batch
+    file. `overwrite` clears an existing file first (so `rebatch` re-creates cleanly).
+
+    When `source` is set (an anchor frame), EVERY scene is compiled as an img2img
+    refinement from that one anchor — the lever for cross-scene character continuity.
+    The caller is responsible for targeting an img2img `template_name` so the source
+    actually applies (see IMG2IMG_TEMPLATE_NAME)."""
+    out = Path(batch_path) if batch_path else _default_batch_path(project)
+    headings = scenes if scenes is not None else discover_scenes(
+        project, projects_dir=Path(projects_dir) if projects_dir else None
+    )
+    if overwrite and out.exists():
+        out.unlink()
+
+    results: list[DraftResult] = []
+    for heading in headings:
+        results.append(
+            await draft(
+                None,
+                scene=heading,
+                project=project,
+                projects_dir=projects_dir,
+                batch_path=out,
+                template_name=template_name,
+                source=source,
+                denoise=denoise,
+                model=model,
+                provider=provider,
+                store=store,
+                memory_store=memory_store,
+                llm_provider=llm_provider,
+            )
+        )
+    return results
+
+
+def batch_project_sync(project: str, **kwargs: Any) -> list[DraftResult]:
+    """Synchronous wrapper for batch_project()."""
+    return asyncio.run(batch_project(project, **kwargs))
 
 
 def _failed_redraft(warnings: list[str]) -> DraftResult:
@@ -242,10 +345,11 @@ async def redraft(
     batch_path: str | Path | None = None,
     project: str | None = None,
     model: str | None = None,
+    provider: str | None = None,
     budget: BudgetEnvelope | None = None,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
-    llm_client: AsyncAnthropic | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> DraftResult:
     """Prose-only TEXT2IMG revise of a prior generation.
 
@@ -292,6 +396,8 @@ async def redraft(
     wall_time_sec = 0.0
     spec: VisualSpec | None = None
     tutor_notes: list[str] = []
+    canon_applied: list[str] = []
+    provenance: list[ProvenanceLeg] = []
     overall_reasoning = ""
     tracker_ref: BudgetTracker | None = None
 
@@ -301,12 +407,13 @@ async def redraft(
             run_id = tracker.run_id
             with TracePersister(agent=AGENT_NAME, run_id=run_id):
                 ctx = await retrieve_context(f"{parent.prompt}\n\n{change}", store, memory_store)
+                provenance = summarize_provenance(ctx)
                 models = store.list_models()
 
-                client = llm_client or AsyncAnthropic(api_key=get_config().anthropic_api_key)
+                prov = llm_provider or get_provider(provider)
                 crafted = await craft_spec(
-                    change, ctx, template, models, client,
-                    parent=parent, revise=True, model=resolve_model(model),
+                    change, ctx, template, models, prov,
+                    parent=parent, revise=True, model=model,
                 )
 
                 spec = VisualSpec(
@@ -328,6 +435,10 @@ async def redraft(
                 )
                 # Honest pre-fill from the registry (re-derived authoritatively at generate).
                 spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
+
+                # Enforce locked canon on the revised prompt too (continuity can't drift
+                # away from canon across a redraft).
+                spec.prompt, canon_applied = enforce_canon(spec.prompt, project or parent.project)
 
                 overall_reasoning = crafted["rationale"]
                 tutor_notes = [le.statement for _, le in ctx.technique_lessons]
@@ -356,6 +467,8 @@ async def redraft(
         template_name=template.name,
         tutor_notes=tutor_notes,
         revise_warnings=revise_warnings,
+        canon_applied=canon_applied,
+        provenance=provenance,
         overall_reasoning=overall_reasoning,
         run_id=run_id,
         status=status if spec is not None else "failed",

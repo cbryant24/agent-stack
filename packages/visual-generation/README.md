@@ -538,6 +538,65 @@ Deletes the technique lesson with `entry_id`. Refuses an id that resolves to a `
 or `workflow_template` (errors clearly), and errors if no point has that id. Prompts for
 confirmation unless `--yes` is passed. Use `lesson list` to find the id.
 
+## Knowledge curation & retention (use Claude Code, not Claude chat)
+
+The agent already holds the persistent, queryable memory you'd otherwise keep in a Claude
+chat Project — and it *feeds back into generation*, which a chat Project can't. Adopt the
+loop instead of hand-crafting prompts elsewhere.
+
+### The loop
+
+```
+draft / batch build → generate → report → (memory grows) → draft/redraft auto-retrieve + recall/digest
+```
+
+The one discipline that makes retention real: **run `report` after every render.** That is
+what turns an outcome into reusable memory (a `generation` point with your reaction/notes),
+which later drafts retrieve as `[PRIOR GENERATION]`. Memory is surfaced by **top-k retrieval**,
+so context cost stays bounded no matter how much accumulates — you never paste a growing doc.
+
+### Compile your own documents into the prompt — `draft`/`batch build`
+
+You should not write prompts by hand. By the visual step your `~/agent-projects/<slug>/`
+folder holds `directed.md`/`script.md`/`brief.md`/`story.md`/`techniques.md`. Give key points
+and the agent compiles those docs + retrieved knowledge into the prompt:
+
+- `draft [INTENT] [--points "a; b"] [--scene "<heading>"] --project <slug> [--provider anthropic] [--model opus]`
+  — `INTENT`/`--points` are the key points; `--scene` narrows the narrative doc to one `##`
+  section. The LLM composes the prompt from the compiled context. The output shows
+  `── Compiled from ──` (which docs fed it) and `── Knowledge surfaced ──` (what retrieval
+  returned, with tier + score) so you can see it worked.
+- `batch build <slug>` / `batch rebuild <slug>` — compile **one spec per scene** of the
+  project's `directed.md` (else `script.md`) into a whole `visual-batch.md` in one run.
+  `build` refuses to overwrite an existing batch; `rebuild` re-creates it.
+
+`--provider` selects the LLM (Claude today; OpenAI is a documented stub). `--model` is a free
+string the provider resolves (`sonnet`/`opus` or a concrete id).
+
+### Lock identity descriptors — `canon set/show/rm <project>`
+
+Canon is **deterministically enforced** (not advisory) — the one channel that doesn't depend
+on the model's discretion. Set it once and every draft/redraft that names the subject gets it:
+
+```
+visual-generation canon set celeste-you-dangerous \
+  --alias "the narrator" --alias "@narrator" \
+  --locked "…long black yarn dreadlocks falling to the middle of his back" \
+  --forbid "short hair"
+```
+
+`@narrator` expands in place; a plain "the narrator" mention injects the locked descriptor if
+absent; `--forbid` phrasings are stripped. The output shows `── Canon enforced ──`.
+
+### Prove knowledge isn't being ignored — `knowledge-verify` / `digest`
+
+- `knowledge-verify "<query>" [--project P]` — read-only, no GPU. Prints collection sizes, the
+  per-leg provenance, and **gap flags** (nothing surfaced; a collection that holds content but
+  surfaced none of it; an unreachable collection). Run it before/after ingesting canon to prove
+  the change.
+- `digest <project>` — bounded, read-only "where did I leave off?" primer: recent generations +
+  reactions, pending reactions to record, and confirmed lessons.
+
 ## UI generations vs. CLI generations
 
 These are two completely independent paths that happen to produce images

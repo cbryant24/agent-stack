@@ -100,6 +100,36 @@ add it to `config.py` or the owning agent — don't hand-create ad-hoc dirs.
 
 ---
 
+## Ingestion tagging — so visual-generation surfaces what you ingest
+
+visual-generation's retrieval legs key on specific payload values. Ingest with these and new
+knowledge is **auto-surfaced** (and provable via `visual-generation knowledge-verify`); ingest
+without them and it stays invisible to the agent even though it's in Qdrant.
+
+| You're ingesting… | Into collection | Tag it with | Surfaces as |
+|---|---|---|---|
+| Locked project canon (narrator look, recipe, known failures) | `user_knowledge` | `--domain visual_generation_canon` (via `ingest_user_knowledge.py`) | `[PROJECT CANON]` (locked tier) |
+| Diffusion/image research (z-image, ComfyUI, WAN…) | `tutorial_research` | `domain_tags`/`topic_tags` ⊇ one of: `z-image-turbo`, `image-generation`, `comfyui`, `diffusion`, `inpaint`, `lora`, `flux`, `wan`, `stable-diffusion`, `img2img` | `[TUTORIAL KNOWLEDGE]` (reference) |
+| A visual technique report | `technique_research_outputs` | `--scope generation` (or `both`) at `technique-research` time | `[TECHNIQUE REPORT]` (strong) |
+| Platform mechanics | `user_knowledge` | `--domain comfyui_mechanics` or `runpod_mechanics` | `[USER FACT]` (strong) |
+
+**Two different vocabularies — don't conflate them.** `tutorial_research` is filtered on
+`VISUAL_TUTORIAL_TAGS` matched against `domain_tags`/`topic_tags`. But
+`technique_research_outputs` is tagged by the **technique-research agent's own scope**:
+`TechniqueReport.scope` ∈ {`editing`, `generation`, `both`} is written verbatim to `topic_tags`
+(and `domain_tags` holds the freeform technique title, not a controlled tag). So a technique
+report surfaces in visual-generation only when its scope is `generation` or `both` — tagging it
+with `z-image-turbo`/`comfyui`/etc. does **nothing** there. The visual-generation
+technique-reports leg filters on `TECHNIQUE_VISUAL_SCOPES = ["generation", "both"]`, not on
+`VISUAL_TUTORIAL_TAGS`.
+
+The canonical lists live in
+`packages/visual-generation/src/visual_generation/constants.py`: `VISUAL_TUTORIAL_TAGS` (tutorial
+leg), `TECHNIQUE_VISUAL_SCOPES` (technique-reports leg), `CANON_DOMAINS` (canon leg). Tutorial
+chunks fall back to an unfiltered search if nothing visually tagged matches; the technique-reports
+leg has **no** fallback (editing-scoped noise must stay out), so an `editing`-scoped report stays
+invisible to visual-generation by design — scope it `both` if it should surface.
+
 ## Ephemeral / scratch policy (the `tmp/` fix)
 
 - **Throwaway, single-session work → the session scratchpad dir** (per-session, auto-isolated).

@@ -292,16 +292,33 @@ class VisualResult(BaseModel):
     session_cost_running_usd: float = 0.0
 
 
+class ProvenanceLeg(BaseModel):
+    """One retrieval leg's contribution, for deterministic 'what was surfaced' proof.
+
+    `tier` is the authority label (locked > strong > reference); `count`/`top_score`
+    summarize the hits; `snippets` are short previews of the top items."""
+
+    label: str
+    collection: str
+    tier: Literal["locked", "strong", "reference"]
+    count: int
+    top_score: float = 0.0
+    snippets: list[str] = Field(default_factory=list)
+
+
 class DraftResult(BaseModel):
     """Returned by draft() — the crafted spec plus the free-loop advisories."""
 
     spec: VisualSpec
     batch_path: Path | None = None
     template_name: str | None = None
+    compiled_from: list[str] = Field(default_factory=list)  # project docs compiled into the input
+    provenance: list[ProvenanceLeg] = Field(default_factory=list)  # what retrieval surfaced (deterministic)
     tutor_notes: list[str] = Field(default_factory=list)  # the user's own surfaced lessons
     missing_models: list[str] = Field(default_factory=list)  # required models absent from registry
     inert_inheritance: list[str] = Field(default_factory=list)  # inherited attrs the template can't apply
     revise_warnings: list[str] = Field(default_factory=list)  # redraft advisories (e.g. parent was img2img)
+    canon_applied: list[str] = Field(default_factory=list)  # deterministic canon edits made to the prompt
     research_offer: str | None = None  # a gap topic to OFFER (never auto-run)
     overall_reasoning: str = ""
     run_id: str = ""

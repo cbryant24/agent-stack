@@ -34,14 +34,18 @@ _INVENTED_JSON = """\
 }"""
 
 
-def _fake_client(json_text: str) -> MagicMock:
-    msg = MagicMock()
-    msg.usage.input_tokens = 200
-    msg.usage.output_tokens = 80
-    msg.content = [MagicMock(text=json_text)]
-    client = MagicMock()
-    client.messages.create = AsyncMock(return_value=msg)
-    return client
+def _fake_provider(json_text: str) -> MagicMock:
+    """An LLMProvider stand-in whose single completion carries `json_text`."""
+    from agent_runtime.llm import LLMCompletion
+
+    prov = MagicMock()
+    prov.resolve_model = MagicMock(side_effect=lambda m: m or "claude-sonnet-4-6")
+    prov.complete = AsyncMock(
+        return_value=LLMCompletion(
+            text=json_text, input_tokens=200, output_tokens=80, model="claude-sonnet-4-6"
+        )
+    )
+    return prov
 
 
 def _parent_gen(**overrides) -> VisualGeneration:
@@ -97,7 +101,7 @@ def test_redraft_inherits_recipe_and_revises_prompt_only(
     result = redraft_sync(
         "gen-parent", "give the wolf a warm smile",
         batch_path=out, store=store, memory_store=MagicMock(),
-        llm_client=_fake_client(_INVENTED_JSON),
+        llm_provider=_fake_provider(_INVENTED_JSON),
     )
 
     spec = result.spec
@@ -137,15 +141,15 @@ def test_redraft_folds_parent_notes_into_message(
     )
     template = _template("visual-workflow", {"positive", "steps", "cfg"})
     store = _store(parent, template, [ModelAsset(name="z.safetensors", kind="checkpoint")])
-    client = _fake_client(_INVENTED_JSON)
+    provider = _fake_provider(_INVENTED_JSON)
 
     redraft_sync(
         "gen-parent", "warmer smile", batch_path=tmp_path / "p.batch.md",
-        store=store, memory_store=MagicMock(), llm_client=client,
+        store=store, memory_store=MagicMock(), llm_provider=provider,
     )
 
-    _, kwargs = client.messages.create.call_args
-    user_msg = kwargs["messages"][0]["content"]
+    _, kwargs = provider.complete.call_args
+    user_msg = kwargs["user_text"]
     # notes is the first consumer anywhere; context rides along too.
     assert "next time make her smile warmer" in user_msg
     assert "the neutral expression read as cold" in user_msg
@@ -161,7 +165,7 @@ def test_redraft_parent_not_found_fails(
     store = _store(parent=None, template=None, models=[])
     result = redraft_sync(
         "missing", "warmer smile", batch_path=tmp_path / "p.batch.md",
-        store=store, memory_store=MagicMock(), llm_client=_fake_client(_INVENTED_JSON),
+        store=store, memory_store=MagicMock(), llm_provider=_fake_provider(_INVENTED_JSON),
     )
     assert result.status == "failed"
     assert any("not found" in w for w in result.revise_warnings)
@@ -179,7 +183,7 @@ def test_redraft_warns_when_parent_was_img2img(
 
     result = redraft_sync(
         "gen-parent", "warmer smile", batch_path=tmp_path / "p.batch.md",
-        store=store, memory_store=MagicMock(), llm_client=_fake_client(_INVENTED_JSON),
+        store=store, memory_store=MagicMock(), llm_provider=_fake_provider(_INVENTED_JSON),
     )
     # Still succeeds (text2img revise), but advises the parent was an edit.
     assert result.status == "completed"
@@ -197,7 +201,7 @@ def test_redraft_unresolvable_template_fails(
 
     result = redraft_sync(
         "gen-parent", "warmer smile", batch_path=tmp_path / "p.batch.md",
-        store=store, memory_store=MagicMock(), llm_client=_fake_client(_INVENTED_JSON),
+        store=store, memory_store=MagicMock(), llm_provider=_fake_provider(_INVENTED_JSON),
     )
     assert result.status == "failed"
     assert any("can't preserve the recipe" in w for w in result.revise_warnings)

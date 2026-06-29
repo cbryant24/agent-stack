@@ -182,6 +182,19 @@ class VisualGenerationStore:
         gens = await self._scroll_generations(filters)
         return sorted(gens, key=lambda g: g.created_at)
 
+    async def list_generations(
+        self, *, project: str | None = None
+    ) -> list[VisualGeneration]:
+        """All generations (optionally for one project), oldest first. Filter-scroll, no
+        embedding — feeds the bounded `digest` session-primer."""
+        conditions = [
+            FieldCondition(key="memory_type", match=MatchValue(value=MEMORY_TYPE_GENERATION))
+        ]
+        if project:
+            conditions.append(FieldCondition(key="project", match=MatchValue(value=project)))
+        gens = await self._scroll_generations(Filter(must=conditions))
+        return sorted(gens, key=lambda g: g.created_at)
+
     async def get_chain(self, chain_root_id: str) -> list[VisualGeneration]:
         """Return all generations in a chain, ordered by created_at."""
         filters = Filter(

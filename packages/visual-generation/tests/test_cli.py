@@ -238,6 +238,49 @@ def test_redraft_reports_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "not found" in result.output
 
 
+# ── batch build anchor (cross-scene continuity) ──────────────────────────────
+
+
+def test_batch_build_anchor_threads_img2img_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`batch build --from <gen>` anchors every scene: source + default img2img template."""
+    captured: dict = {}
+
+    def _fake_batch(project, **kwargs):
+        captured["project"] = project
+        captured.update(kwargs)
+        return []  # empty → command exits non-zero, but kwargs are already captured
+
+    monkeypatch.setattr("visual_generation.cli.batch_project_sync", _fake_batch)
+    CliRunner().invoke(
+        cli, ["batch", "build", "celeste", "--from", "gen-anchor", "--denoise", "0.6"]
+    )
+
+    assert captured["project"] == "celeste"
+    assert captured["source"].from_generation == "gen-anchor"
+    assert captured["denoise"] == 0.6
+    assert captured["template_name"] == "visual-workflow-img2img"  # defaulted when anchored
+
+
+def test_batch_build_rejects_from_and_image_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("visual_generation.cli.batch_project_sync", lambda *a, **k: [])
+    result = CliRunner().invoke(
+        cli, ["batch", "build", "celeste", "--from", "g1", "--image", "/tmp/x.png"]
+    )
+    assert result.exit_code != 0
+    assert "only one of --from / --image" in result.output
+
+
+def test_batch_build_no_anchor_leaves_source_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(
+        "visual_generation.cli.batch_project_sync",
+        lambda project, **k: captured.update(k) or [],
+    )
+    CliRunner().invoke(cli, ["batch", "build", "celeste"])
+    assert captured["source"] is None
+    assert captured["template_name"] is None  # no img2img default without an anchor
+
+
 # ── batch list / rm ──────────────────────────────────────────────────────────
 
 

@@ -69,17 +69,55 @@ ASSET_KIND_EMBEDDING = "embedding"
 # filters by memory_type and never compares vectors across types.
 EMBEDDING_DIM = 1024
 
-# Sibling collections composed during retrieval (runtime-owned / external).
+# Sibling collections composed during retrieval (runtime-owned / external). Read
+# generically by name — visual-generation owns none of them, so it imports no
+# sibling package (the same reader discipline edit-brief follows).
 USER_KNOWLEDGE_COLLECTION = "user_knowledge"
 TUTORIAL_RESEARCH_COLLECTION = "tutorial_research"
+TECHNIQUE_RESEARCH_OUTPUTS_COLLECTION = "technique_research_outputs"
 
 # user_knowledge hits are user-verified, so they outrank tutorial hits on a tie.
 USER_KNOWLEDGE_SCORE_MULTIPLIER = 1.25
+# Project canon is locked authority — it outranks even user-verified mechanics.
+CANON_SCORE_MULTIPLIER = 1.5
 # The domains under which this agent's platform-mechanics facts live in
 # user_knowledge (backend vs. platform — distinct concerns).
 COMFYUI_MECHANICS_DOMAIN = "comfyui_mechanics"
 RUNPOD_MECHANICS_DOMAIN = "runpod_mechanics"
 MECHANICS_DOMAINS = [COMFYUI_MECHANICS_DOMAIN, RUNPOD_MECHANICS_DOMAIN]
+
+# Locked visual-generation canon lives in user_knowledge under its own domain so
+# the mechanics-domain filter never hides it. Ingest with
+# `ingest_user_knowledge.py … --domain visual_generation_canon`.
+VISUAL_GENERATION_CANON_DOMAIN = "visual_generation_canon"
+CANON_DOMAINS = [VISUAL_GENERATION_CANON_DOMAIN]
+
+# Tags that mark a chunk as visually relevant. Used to bias the tutorial_research
+# leg (a shared, cross-domain pool) toward image work — so z-image/diffusion
+# knowledge isn't crowded out by music/langgraph chunks. Matched against BOTH
+# `domain_tags` and `topic_tags`. New ingests that carry any of these tags are
+# auto-surfaced. NOTE: these are tutorial_research's `_tagify`'d heading tags;
+# technique_research_outputs uses a different vocabulary (see below).
+VISUAL_TUTORIAL_TAGS = [
+    "z-image-turbo",
+    "image-generation",
+    "comfyui",
+    "diffusion",
+    "inpaint",
+    "lora",
+    "flux",
+    "wan",
+    "stable-diffusion",
+    "img2img",
+]
+
+# technique_research_outputs is tagged by the technique-research agent's own
+# scope vocabulary: TechniqueReport.scope ∈ {editing, generation, both} is written
+# verbatim to `topic_tags` (and `domain_tags` holds the freeform technique title,
+# not a controlled tag). So the technique-reports leg must filter on SCOPE, not on
+# VISUAL_TUTORIAL_TAGS — the latter matches zero rows here and strands every
+# visual report. Visual-relevant = image creation ("generation") or both.
+TECHNIQUE_VISUAL_SCOPES = ["generation", "both"]
 
 # ── The turn: draft (Phase A, free) → generate (Phase B, GPU spend) → report ──
 
@@ -174,6 +212,13 @@ DEFAULT_POLL_TIMEOUT_SEC = 600.0
 # ~0.4–0.7; past DENOISE_COHERENCE_WARN the model loses coherence — warn, never block.
 DEFAULT_DENOISE = 0.5
 DENOISE_COHERENCE_WARN = 0.85
+
+# Canonical img2img workflow template name. A refinement (source) spec needs an
+# `init_image` slot, which only the img2img graph exposes — a txt2img template
+# silently cannot apply the source (graph_build.apply_source_filenames warns and
+# drops it). So an anchored `batch` defaults its template to this when a source is
+# set and no --template is given, ensuring every scene actually img2img's the anchor.
+IMG2IMG_TEMPLATE_NAME = "visual-workflow-img2img"
 
 # ── Asset write paths + Q8 opsec (under agent_data_dir / AGENT_SUBDIR) ────────
 AGENT_SUBDIR = "visual-generation"

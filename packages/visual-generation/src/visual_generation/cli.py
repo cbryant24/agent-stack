@@ -36,16 +36,17 @@ from visual_generation.comfyui_client import ComfyUIClient, ComfyUIError
 from visual_generation.constants import (
     DEFAULT_GPU_RATE_USD_PER_HR,
     EXPLAIN_LEVELS,
+    IMG2IMG_TEMPLATE_NAME,
     LESSON_SCOPE_MODEL,
     LESSON_SCOPE_PROMPT,
     LESSON_SCOPE_SETTINGS,
     LESSON_SCOPE_WORKFLOW,
     MECHANICS_DOMAINS,
-    MODEL_ALIASES,
     POSITIVE_REACTIONS,
     REACTIONS,
 )
-from visual_generation.draft import draft_sync, redraft_sync
+from visual_generation.canon import ProjectCanon
+from visual_generation.draft import batch_project_sync, draft_sync, redraft_sync
 from visual_generation.explain import explain_sync, render_explain
 from visual_generation.generate import plan_generation_sync, spend_generation_sync
 from visual_generation.gpu_tracker import GpuLedger
@@ -269,13 +270,32 @@ def workflow_list(query: str, limit: int) -> None:
 # ── draft (Phase A — free prompt-craft) ──────────────────────────────────────
 
 
+def _echo_provenance(legs: list) -> None:
+    """Render the deterministic 'what was surfaced' block (shared by draft/redraft)."""
+    if not legs:
+        return
+    click.echo("\n── Knowledge surfaced (deterministic) ───────────────")
+    for leg in legs:
+        click.echo(
+            f"  [{leg.tier}] {leg.label} ({leg.collection}): "
+            f"{leg.count} hit(s), top {leg.top_score:.2f}"
+        )
+        for snip in leg.snippets:
+            click.echo(f"      ↳ {snip}")
+
+
 @cli.command()
-@click.argument("intent")
+@click.argument("intent", required=False)
+@click.option("--points", "points", multiple=True,
+              help="A key point for the image (repeatable). The agent compiles these + the "
+                   "project's docs into the prompt — no need to hand-write one.")
+@click.option("--scene", "scene", default=None,
+              help="Narrow the compiled context to one scene (a heading in directed.md/script.md).")
 @click.option("--output", "-o", "output", type=click.Path(dir_okay=False), default=None,
               help="Batch file to append to (default: <project>.batch.md under agent-data).")
 @click.option("--template", "template_name", default=None,
               help="Workflow template name to target (default: the top retrieved template).")
-@click.option("--project", default=None, help="Project tag for the spec.")
+@click.option("--project", default=None, help="Project tag for the spec (also the doc-discovery slug).")
 @click.option("--from", "from_generation", default=None,
               help="Refine a prior generation by id (img2img/inpaint) — its saved frame "
                    "becomes the source. Mutually exclusive with --image.")
@@ -285,16 +305,23 @@ def workflow_list(query: str, limit: int) -> None:
               help="Inpaint mask PNG (white = area to change). Requires --from or --image.")
 @click.option("--denoise", type=float, default=None,
               help="Refinement denoise (default 0.5; coherent range ~0.4–0.7).")
-@click.option("--model", "model", type=click.Choice(list(MODEL_ALIASES)), default=None,
-              help="Claude model for the craft (default: sonnet).")
-def draft(intent: str, output: str | None, template_name: str | None, project: str | None,
+@click.option("--model", "model", default=None,
+              help="Model alias (sonnet|opus) or a concrete id; the provider resolves it.")
+@click.option("--provider", "provider", default=None,
+              help="LLM provider for the craft (anthropic|openai; default: config).")
+def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
+          output: str | None, template_name: str | None, project: str | None,
           from_generation: str | None, image_path: str | None, mask_path: str | None,
-          denoise: float | None, model: str | None) -> None:
-    """Craft a settled generation spec from INTENT and append it to a batch file. Free.
+          denoise: float | None, model: str | None, provider: str | None) -> None:
+    """Craft a settled generation spec and append it to a batch file. Free.
 
-    With --from/--image the spec becomes a refinement (img2img/inpaint): INTENT is the
-    change to make, the source is resolved + uploaded at `generate`, and the new
-    generation records parent lineage. No hand-editing of the batch JSON needed.
+    Give a few key points (INTENT and/or --points) — optionally a --scene — and the
+    agent COMPILES the project's own documents (directed.md/brief.md/…) plus retrieved
+    knowledge into the prompt; the LLM composes it. No hand-writing prompts.
+
+    With --from/--image the spec becomes a refinement (img2img/inpaint): the points are
+    the change to make, the source is resolved + uploaded at `generate`, and the new
+    generation records parent lineage.
     """
     if from_generation and image_path:
         raise click.UsageError("Use only one of --from / --image (a source has one origin).")
@@ -309,16 +336,21 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
 
     result = draft_sync(
         intent,
+        points=list(points) or None,
+        scene=scene,
         batch_path=output,
         template_name=template_name,
         project=project,
         source=source,
         denoise=denoise,
         model=model,
+        provider=provider,
     )
 
     if result.status == "failed":
         click.echo("Draft failed (no spec produced).", err=True)
+        for w in result.revise_warnings:
+            click.echo(f"  • {w}", err=True)
         raise SystemExit(1)
 
     spec = result.spec
@@ -349,8 +381,20 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
         click.echo("\n⚠ Inherited but not applied (this template lacks the slots):")
         for w in result.inert_inheritance:
             click.echo(f"  • {w}")
+    if result.compiled_from:
+        click.echo("\n── Compiled from (your project docs) ────────────────")
+        for src in result.compiled_from:
+            click.echo(f"  • {src}")
+
+    _echo_provenance(result.provenance)
+
     if result.overall_reasoning:
         click.echo(f"\nRationale: {result.overall_reasoning}")
+
+    if result.canon_applied:
+        click.echo("\n── Canon enforced (deterministic) ───────────────────")
+        for note in result.canon_applied:
+            click.echo(f"  • {note}")
 
     if result.tutor_notes:
         click.echo("\n── Your own technique lessons (relevant) ────────────")
@@ -383,17 +427,21 @@ def draft(intent: str, output: str | None, template_name: str | None, project: s
 @click.option("--output", "-o", "output", type=click.Path(dir_okay=False), default=None,
               help="Batch file to append to (default: <project>.batch.md under agent-data).")
 @click.option("--project", default=None, help="Project tag for the spec (default: the parent's).")
-@click.option("--model", "model", type=click.Choice(list(MODEL_ALIASES)), default=None,
-              help="Claude model for the craft (default: sonnet).")
+@click.option("--model", "model", default=None,
+              help="Model alias (sonnet|opus) or a concrete id; the provider resolves it.")
+@click.option("--provider", "provider", default=None,
+              help="LLM provider for the craft (anthropic|openai; default: config).")
 def redraft(gen_id: str, change: str, output: str | None, project: str | None,
-            model: str | None) -> None:
+            model: str | None, provider: str | None) -> None:
     """Revise a prior generation's PROMPT (text2img) by applying CHANGE. Free.
 
     Inherits the parent's seed, recipe, model, LoRAs, dimensions, and workflow template so
     only the prose changes — continuity can't drift. The new spec is text2img (not an
     img2img edit of the parent's pixels) and records descent via `revised_from`.
     """
-    result = redraft_sync(gen_id, change, batch_path=output, project=project, model=model)
+    result = redraft_sync(
+        gen_id, change, batch_path=output, project=project, model=model, provider=provider
+    )
 
     if result.status == "failed":
         click.echo("Redraft failed:", err=True)
@@ -417,8 +465,15 @@ def redraft(gen_id: str, change: str, output: str | None, project: str | None,
     click.echo(f"\nPrompt:    {spec.prompt}")
     if spec.negative_prompt:
         click.echo(f"Negative:  {spec.negative_prompt}")
+    _echo_provenance(result.provenance)
+
     if result.overall_reasoning:
         click.echo(f"\nRationale: {result.overall_reasoning}")
+
+    if result.canon_applied:
+        click.echo("\n── Canon enforced (deterministic) ───────────────────")
+        for note in result.canon_applied:
+            click.echo(f"  • {note}")
 
     if result.revise_warnings:
         click.echo("\n⚠ Advisories:")
@@ -434,6 +489,74 @@ def redraft(gen_id: str, change: str, output: str | None, project: str | None,
         click.echo(f"\nAppended to: {result.batch_path}")
         click.echo(f"Next: visual-generation generate {result.batch_path} --section "
                    f"{spec.spec_id} --endpoint <url>")
+
+
+def _resolve_anchor(
+    from_generation: str | None, image_path: str | None, template_name: str | None
+) -> "tuple[VisualSource | None, str | None]":
+    """Turn the batch anchor options into (source, template_name).
+
+    Mirrors the single-`draft` source convention: --from / --image are mutually
+    exclusive. When an anchor is given but no --template, default to the img2img
+    template so the source actually applies (a txt2img graph silently drops it)."""
+    if from_generation and image_path:
+        raise click.UsageError("Use only one of --from / --image (an anchor has one origin).")
+    if not (from_generation or image_path):
+        return None, template_name
+    source = VisualSource(from_generation=from_generation, image_path=image_path)
+    return source, template_name or IMG2IMG_TEMPLATE_NAME
+
+
+def _run_batch(project: str, output: str | None, model: str | None, provider: str | None,
+               *, overwrite: bool, source: "VisualSource | None" = None,
+               denoise: float | None = None, template_name: str | None = None) -> None:
+    """Shared body for `batch build`/`batch rebuild`: compile one spec per scene of the
+    project's directed.md (else script.md) into a single batch file.
+
+    When `source` is set, every scene is compiled as an img2img refinement from that one
+    anchor frame (cross-scene continuity); `template_name` defaults to the img2img graph
+    so the source actually applies."""
+    from visual_generation.draft import _default_batch_path
+
+    out = Path(output) if output else _default_batch_path(project)
+    if out.exists() and not overwrite:
+        click.echo(
+            f"Batch file already exists: {out}\nUse `batch rebuild` to re-create it, or -o "
+            "for a new path.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    if source is not None:
+        anchor = source.from_generation or source.image_path
+        click.echo(
+            f"Anchoring every scene to {anchor!r} via img2img "
+            f"(template {template_name!r}, denoise {denoise if denoise is not None else 'default 0.5'})."
+        )
+
+    results = batch_project_sync(
+        project, batch_path=output, model=model, provider=provider, overwrite=overwrite,
+        source=source, denoise=denoise, template_name=template_name,
+    )
+    if not results:
+        click.echo(
+            f"No scenes found for {project!r} — needs a directed.md or script.md with `##` "
+            "scene headings in ~/agent-projects/<project>/.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    drafted = [r for r in results if r.status != "failed"]
+    click.echo(f"Compiled {len(drafted)}/{len(results)} scene(s) for {project!r}:")
+    for r in results:
+        if r.status == "failed":
+            click.echo(f"  ✗ {r.spec.heading or '(scene)'} — {'; '.join(r.revise_warnings) or 'failed'}")
+        else:
+            srcs = f"  [from {', '.join(r.compiled_from)}]" if r.compiled_from else ""
+            click.echo(f"  • {r.spec.spec_id}  {r.spec.heading}{srcs}")
+    if drafted:
+        click.echo(f"\nWrote: {drafted[0].batch_path}")
+        click.echo("Review/edit, then: visual-generation generate <batch> --all --endpoint <url>")
 
 
 # ── generate (Phase B — GPU spend, soft-inform gate) ─────────────────────────
@@ -566,6 +689,87 @@ def report(gen_id: str, reaction: str, rating: int | None,
 # ── Inspect (review-pending / chain show / recall) — pure reads ───────────────
 
 
+@cli.command("knowledge-verify")
+@click.argument("query")
+@click.option("--project", default=None, help="Optional project label (for context).")
+@click.option("--limit", default=8, show_default=True, help="Max hits per leg.")
+def knowledge_verify(query: str, project: str | None, limit: int) -> None:
+    """Prove what the knowledge legs surface for QUERY, and flag gaps. Read-only, no GPU.
+
+    Run this to verify ingested research is actually reachable (e.g. before vs. after
+    ingesting z-image canon), and to catch silent gaps — a leg returning nothing, or a
+    collection that holds content but surfaced none of it.
+    """
+    from visual_generation.verify import verify_knowledge
+
+    async def _run() -> None:
+        store, ms = _get_stores()
+        report = await verify_knowledge(query, store, ms, project=project, limit=limit)
+
+        click.echo(f"Query: {report.query}")
+        if report.project:
+            click.echo(f"Project: {report.project}")
+
+        click.echo("\n── Collection sizes ─────────────────────────────────")
+        for name, n in report.collection_counts.items():
+            click.echo(f"  {name}: {'unreachable/absent' if n < 0 else n}")
+
+        if report.legs:
+            _echo_provenance(report.legs)
+        else:
+            click.echo("\n⚠ Nothing surfaced for this query.")
+
+        if report.gaps:
+            click.echo("\n⚠ Gaps (knowledge that may be getting ignored):")
+            for g in report.gaps:
+                click.echo(f"  • {g}")
+        else:
+            click.echo("\n✓ No gaps flagged — relevant knowledge is reachable for this query.")
+
+    asyncio.run(_run())
+
+
+@cli.command()
+@click.argument("project")
+@click.option("--limit", default=8, show_default=True, help="Max recent generations to show.")
+def digest(project: str, limit: int) -> None:
+    """Session-primer for PROJECT: recent generations + reactions, lessons, pending. Read-only.
+
+    Bounded and on-demand (no context bloat) — the 'where did I leave off?' view so a new
+    Claude Code session doesn't start cold. This is the retention loop: draft → generate →
+    `report` → memory → digest/recall. Run `report` after each render so this stays useful.
+    """
+
+    async def _run() -> None:
+        store, _ = _get_stores()
+        await store.ensure_collection()
+        gens = await store.list_generations(project=project)
+        lessons = await store.list_lessons(confirmed_only=True)
+        pending = [g for g in await store.list_pending() if g.project == project]
+
+        click.echo(f"Digest for {project!r}")
+        click.echo(f"\n── Recent generations ({min(len(gens), limit)} of {len(gens)}) ──────────")
+        if not gens:
+            click.echo("  (none yet — draft → generate → report to build memory)")
+        for g in gens[-limit:][::-1]:
+            reaction = g.reaction.upper().replace("_", " ")
+            rating = f" ★{g.rating}" if g.rating is not None else ""
+            click.echo(f"  {g.entry_id[:12]}  [{reaction}{rating}]  {(g.caption or g.prompt or '')[:70]}")
+
+        if pending:
+            click.echo(f"\n── Awaiting your reaction ({len(pending)}) ───────────────")
+            for g in pending:
+                click.echo(f"  {g.entry_id[:12]}  {(g.caption or g.prompt or '')[:70]}")
+            click.echo("  → record with: visual-generation report <id> <reaction>")
+
+        if lessons:
+            click.echo(f"\n── Confirmed technique lessons ({len(lessons)}) ──────────")
+            for le in lessons:
+                click.echo(f"  [{le.valence}/{le.scope}] {le.statement[:80]}")
+
+    asyncio.run(_run())
+
+
 @cli.command("review-pending")
 def review_pending() -> None:
     """List generations awaiting a reaction (rendered, not yet reacted to)."""
@@ -598,7 +802,76 @@ def recall(query: str, limit: int) -> None:
 
 @cli.group()
 def batch() -> None:
-    """Inspect and prune specs in a batch file."""
+    """Compile a whole project into a batch, and inspect/prune its specs."""
+
+
+_ANCHOR_OPTIONS = [
+    click.option("--from", "from_generation", default=None,
+                 help="Anchor every scene to a prior generation (img2img) for character "
+                      "continuity. Mutually exclusive with --image."),
+    click.option("--image", "image_path", type=click.Path(dir_okay=False), default=None,
+                 help="Anchor every scene to an external image on disk. Mutually exclusive with --from."),
+    click.option("--denoise", type=float, default=None,
+                 help="Refinement denoise for the anchor (default 0.5; coherent ~0.4–0.7; "
+                      "higher = re-stage more / carry the anchor less)."),
+    click.option("--template", "template_name", default=None,
+                 help=f"Workflow template (default {IMG2IMG_TEMPLATE_NAME!r} when anchored)."),
+]
+
+
+def _with_anchor_options(fn):  # type: ignore[no-untyped-def]
+    for opt in reversed(_ANCHOR_OPTIONS):
+        fn = opt(fn)
+    return fn
+
+
+@batch.command("build")
+@click.argument("project")
+@click.option("--output", "-o", "output", type=click.Path(dir_okay=False), default=None,
+              help="Batch file to write (default: <project>.batch.md under agent-data).")
+@click.option("--model", "model", default=None,
+              help="Model alias (sonnet|opus) or a concrete id; the provider resolves it.")
+@click.option("--provider", "provider", default=None,
+              help="LLM provider for the craft (anthropic|openai; default: config).")
+@_with_anchor_options
+def batch_build(project: str, output: str | None, model: str | None, provider: str | None,
+                from_generation: str | None, image_path: str | None,
+                denoise: float | None, template_name: str | None) -> None:
+    """Compile one spec per scene of PROJECT's directed.md into a batch file. Free.
+
+    Reads the project's narrative doc (directed.md, else script.md) and, for each `##`
+    scene, compiles the project's docs + retrieved knowledge into a prompt (canon
+    enforced). Refuses to overwrite an existing batch — use `batch rebuild` for that.
+    You feed nothing but the project slug.
+
+    For cross-scene CHARACTER CONTINUITY, anchor with --from <gen_id> (or --image <path>):
+    every scene is then composed as an img2img refinement from that one frame, so the
+    narrator carries across scenes instead of being re-rolled per scene.
+    """
+    source, template_name = _resolve_anchor(from_generation, image_path, template_name)
+    _run_batch(project, output, model, provider, overwrite=False,
+               source=source, denoise=denoise, template_name=template_name)
+
+
+@batch.command("rebuild")
+@click.argument("project")
+@click.option("--output", "-o", "output", type=click.Path(dir_okay=False), default=None,
+              help="Batch file to re-create (default: <project>.batch.md under agent-data).")
+@click.option("--model", "model", default=None,
+              help="Model alias (sonnet|opus) or a concrete id; the provider resolves it.")
+@click.option("--provider", "provider", default=None,
+              help="LLM provider for the craft (anthropic|openai; default: config).")
+@_with_anchor_options
+def batch_rebuild(project: str, output: str | None, model: str | None, provider: str | None,
+                  from_generation: str | None, image_path: str | None,
+                  denoise: float | None, template_name: str | None) -> None:
+    """Re-create PROJECT's batch from scratch (overwrites the existing batch file). Free.
+
+    Accepts the same --from/--image/--denoise anchor options as `batch build` for
+    cross-scene character continuity."""
+    source, template_name = _resolve_anchor(from_generation, image_path, template_name)
+    _run_batch(project, output, model, provider, overwrite=True,
+               source=source, denoise=denoise, template_name=template_name)
 
 
 @batch.command("list")
@@ -633,6 +906,65 @@ def batch_rm(batch_file: str, spec_id: str, yes: bool) -> None:
     remove_spec(parsed, spec_id)
     write_batch(parsed, path)
     click.echo(f"Removed spec {spec_id}. {len(parsed.specs)} spec(s) remain.")
+
+
+# ── Project canon (deterministic, file-backed) ───────────────────────────────
+
+
+@cli.group()
+def canon() -> None:
+    """Manage a project's LOCKED canon (deterministically enforced at draft/redraft)."""
+
+
+@canon.command("set")
+@click.argument("project")
+@click.option("--alias", "aliases", multiple=True, required=True,
+              help="A name the subject is called by (repeatable). Prefix with @ for a "
+                   "token that expands in place (e.g. @narrator). aliases[0] is the key.")
+@click.option("--locked", required=True,
+              help="The canonical descriptor that must appear whenever the subject is named.")
+@click.option("--forbid", "forbid", multiple=True,
+              help="A phrasing that contradicts canon and is stripped (repeatable).")
+def canon_set(project: str, aliases: tuple[str, ...], locked: str, forbid: tuple[str, ...]) -> None:
+    """Upsert a locked subject for PROJECT (keyed by its first alias)."""
+    store = ProjectCanon(project)
+    subject = store.set_subject(list(aliases), locked, list(forbid))
+    click.echo(f"Canon set for {project!r} (subject '{subject.aliases[0]}'):")
+    click.echo(f"  aliases: {', '.join(subject.aliases)}")
+    click.echo(f"  locked:  {subject.locked}")
+    if subject.forbid:
+        click.echo(f"  forbid:  {', '.join(subject.forbid)}")
+    click.echo(f"\nStored at: {store.path}")
+
+
+@canon.command("show")
+@click.argument("project")
+def canon_show(project: str) -> None:
+    """Show PROJECT's locked canon subjects."""
+    store = ProjectCanon(project)
+    subjects = store.load()
+    if not subjects:
+        click.echo(f"No canon for {project!r} (looked at {store.path}).")
+        return
+    click.echo(f"Canon for {project!r} ({len(subjects)} subject(s)):")
+    for s in subjects:
+        click.echo(f"\n  • aliases: {', '.join(s.aliases)}")
+        click.echo(f"    locked:  {s.locked}")
+        if s.forbid:
+            click.echo(f"    forbid:  {', '.join(s.forbid)}")
+
+
+@canon.command("rm")
+@click.argument("project")
+@click.argument("alias")
+def canon_rm(project: str, alias: str) -> None:
+    """Remove the canon subject that any of whose aliases match ALIAS."""
+    store = ProjectCanon(project)
+    if store.remove(alias):
+        click.echo(f"Removed canon subject matching {alias!r} from {project!r}.")
+    else:
+        click.echo(f"No canon subject matching {alias!r} in {project!r}.", err=True)
+        raise SystemExit(1)
 
 
 # ── Direct writes (lesson add / fact add) ─────────────────────────────────────

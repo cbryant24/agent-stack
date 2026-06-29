@@ -15,12 +15,10 @@ import json
 import logging
 import re
 
-from anthropic import AsyncAnthropic
-from anthropic.types import Message
-
+from agent_runtime.llm import LLMProvider
 from agent_runtime.tracing import record_llm_call
 
-from visual_generation.constants import MAX_DRAFT_TOKENS, MODEL_DIRECTOR
+from visual_generation.constants import MAX_DRAFT_TOKENS
 from visual_generation.models import ModelAsset, VisualGeneration, WorkflowTemplate
 from visual_generation.retrieval import RetrievedContext, build_context_prompt
 
@@ -49,6 +47,10 @@ filename). If the list is empty, set model to null and describe the desired mode
 in the rationale.
 
 When context is provided:
+- [PROJECT CANON: domain] entries are LOCKED identity. Place and pose the subject in the
+  scene (where it is, what it is doing), but do NOT restate its physical appearance —
+  hair, build, skin, face. The locked descriptor is injected deterministically; restating
+  it in your own words creates conflicting descriptions of the same subject.
 - [PRIOR GENERATION: reaction=LOVED] entries are the user's own best results — lean on them.
 - [TECHNIQUE LESSON: positive/...] entries are confirmed preferences — honor them.
 - [USER FACT: comfyui_mechanics / runpod_mechanics] entries are user-verified — authoritative.
@@ -211,17 +213,19 @@ async def craft_spec(
     ctx: RetrievedContext,
     template: WorkflowTemplate | None,
     models: list[ModelAsset],
-    client: AsyncAnthropic,
+    provider: LLMProvider,
     *,
     parent: VisualGeneration | None = None,
     refinement: bool = False,
     revise: bool = False,
-    model: str = MODEL_DIRECTOR,
+    model: str | None = None,
 ) -> dict:
     """Run the craft chain once (retry once on a parse failure), returning the spec dict.
 
-    `model` is the Claude model the craft runs on (Sonnet by default; Opus when the
-    caller resolves `--model opus`) — used for both the call and its cost attribution.
+    `provider` is the pluggable LLM seam (Claude by default; any provider via
+    `--provider`). `model` is a `--model` alias (or concrete id, or None for the
+    provider's default); the provider resolves it, and the concrete id it reports is
+    used for cost attribution.
 
     On a `refinement` the chain is framed as an img2img/inpaint EDIT and the parsed spec
     is reconciled to the source (recipe stripped; model/LoRAs/dimensions inherited).
@@ -240,31 +244,27 @@ async def craft_spec(
         system = _SYSTEM_PROMPT
     user_message = _build_user_message(intent, ctx, template, models, parent, revise=revise)
     valid_model_names = {m.name for m in models}
+    resolved = provider.resolve_model(model)
 
-    response = await client.messages.create(
-        model=model,
-        max_tokens=MAX_DRAFT_TOKENS,
-        system=system,
-        messages=[{"role": "user", "content": user_message}],
+    comp = await provider.complete(
+        system=system, user_text=user_message, model=resolved, max_tokens=MAX_DRAFT_TOKENS
     )
-    _record_llm(model, response.usage.input_tokens, response.usage.output_tokens)
+    _record_llm(comp.model, comp.input_tokens, comp.output_tokens)
 
     try:
-        spec = _parse_spec_response(response, valid_model_names, template)
+        spec = _parse_spec_response(comp.text, valid_model_names, template)
     except DraftParseError:
         logger.warning("Craft response unparseable; retrying once with explicit reminder")
-        retry = await client.messages.create(
-            model=model,
-            max_tokens=MAX_DRAFT_TOKENS,
+        # The seam is a single-turn completion: re-call with the reminder appended to the
+        # user text (rather than a multi-turn assistant prefill) so it stays provider-neutral.
+        retry = await provider.complete(
             system=system,
-            messages=[
-                {"role": "user", "content": user_message},
-                {"role": "assistant", "content": response.content[0].text},
-                {"role": "user", "content": _RETRY_SUFFIX},
-            ],
+            user_text=user_message + _RETRY_SUFFIX,
+            model=resolved,
+            max_tokens=MAX_DRAFT_TOKENS,
         )
-        _record_llm(model, retry.usage.input_tokens, retry.usage.output_tokens)
-        spec = _parse_spec_response(retry, valid_model_names, template)
+        _record_llm(retry.model, retry.input_tokens, retry.output_tokens)
+        spec = _parse_spec_response(retry.text, valid_model_names, template)
 
     if refinement:
         _enforce_refinement(spec, parent)
@@ -308,11 +308,11 @@ def _enforce_revise(spec: dict, parent: VisualGeneration | None) -> None:
 
 
 def _parse_spec_response(
-    response: Message,
+    text: str,
     valid_model_names: set[str],
     template: WorkflowTemplate | None,
 ) -> dict:
-    text = response.content[0].text.strip()
+    text = text.strip()
     json_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if json_match:
         text = json_match.group(1).strip()
