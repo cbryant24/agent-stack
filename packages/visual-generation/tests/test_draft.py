@@ -164,6 +164,74 @@ def test_draft_applies_and_surfaces_canon(
     assert "LOCKED-HAIR" in batch.specs[0].prompt
 
 
+def test_draft_pins_canon_character_lora(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
+) -> None:
+    """A present canon subject's character LoRA is pinned into the stack and flips
+    identity_bearing, even though the LLM didn't pick it."""
+    from visual_generation.draft import draft_sync
+
+    _patch_chain(monkeypatch, RetrievedContext(), _crafted(prompt="the narrator on a roof"))
+    import importlib
+
+    draft_mod = importlib.import_module("visual_generation.draft")
+    monkeypatch.setattr(
+        draft_mod, "canon_loras_for",
+        lambda prompt, project, **kw: [LoraRef(name="celeste-narrator.safetensors", strength=0.8)],
+    )
+    # The checkpoint isn't identity-bearing; the pinned LoRA is → re-derivation flips it.
+    store = _store(flux_template, [
+        ModelAsset(name="flux1-dev.safetensors", kind="checkpoint"),
+        ModelAsset(name="celeste-narrator.safetensors", kind="lora", identity_bearing=True),
+    ])
+
+    result = draft_sync(
+        "the narrator on a roof", batch_path=tmp_path / "celeste.batch.md",
+        template_name="flux-txt2img", project="celeste",
+        store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
+    )
+
+    assert [lr.name for lr in result.spec.lora_stack] == ["celeste-narrator.safetensors"]
+    assert result.spec.lora_stack[0].strength == 0.8
+    assert result.spec.identity_bearing is True
+    assert any("pinned canon LoRA" in note for note in result.canon_applied)
+
+
+def test_draft_canon_lora_not_duplicated_when_already_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
+) -> None:
+    """If the LLM already picked the canon LoRA, pinning dedupes by name (no second copy)."""
+    from visual_generation.draft import draft_sync
+
+    crafted = _crafted(
+        prompt="the narrator on a roof",
+        lora_stack=[{"name": "celeste-narrator.safetensors", "strength": 0.6}],
+    )
+    _patch_chain(monkeypatch, RetrievedContext(), crafted)
+    import importlib
+
+    draft_mod = importlib.import_module("visual_generation.draft")
+    monkeypatch.setattr(
+        draft_mod, "canon_loras_for",
+        lambda prompt, project, **kw: [LoraRef(name="celeste-narrator.safetensors", strength=0.8)],
+    )
+    store = _store(flux_template, [
+        ModelAsset(name="flux1-dev.safetensors", kind="checkpoint"),
+        ModelAsset(name="celeste-narrator.safetensors", kind="lora", identity_bearing=True),
+    ])
+
+    result = draft_sync(
+        "the narrator on a roof", batch_path=tmp_path / "celeste.batch.md",
+        template_name="flux-txt2img", project="celeste",
+        store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
+    )
+
+    names = [lr.name for lr in result.spec.lora_stack]
+    assert names == ["celeste-narrator.safetensors"]  # not doubled
+    assert result.spec.lora_stack[0].strength == 0.6  # the LLM's pick is kept, not overwritten
+    assert not any("pinned canon LoRA" in note for note in result.canon_applied)
+
+
 # ── Part 1.5: compile project docs into the draft input ──────────────────────
 
 
@@ -339,12 +407,14 @@ def test_draft_no_warning_when_template_exposes_slots(
     assert result.inert_inheritance == []
 
 
-def test_draft_txt2img_has_no_inert_inheritance_warning(
+def test_draft_txt2img_warns_lora_without_loader_slot_but_not_dims(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from visual_generation.draft import draft_sync
 
-    # A txt2img draft (no source/parent) carries LoRAs + dims but the gate is off.
+    # A txt2img draft (no source/parent) carries a LoRA + dims. A LoRA that can't reach
+    # a loader slot is silently dropped regardless of who picked it, so it's surfaced;
+    # the dims advisory stays img2img/parent-specific and does NOT fire here.
     crafted = _crafted(
         lora_stack=[{"name": "felt.safetensors", "strength": 0.7}], width=832, height=1216,
     )
@@ -357,7 +427,9 @@ def test_draft_txt2img_has_no_inert_inheritance_warning(
         store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
     )
 
-    assert result.inert_inheritance == []
+    assert len(result.inert_inheritance) == 1
+    assert "LoRA" in result.inert_inheritance[0]
+    assert not any("dimensions" in w for w in result.inert_inheritance)
 
 
 # ── Edit-mode seed-from-parent inheritance (real craft_spec) ──────────────────

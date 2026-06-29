@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from visual_generation.canon import ProjectCanon, enforce_canon
+from visual_generation.canon import ProjectCanon, canon_loras_for, enforce_canon
+from visual_generation.models import LoraRef
 
 _NARRATOR = "a young African American man with deep caramel-brown skin, long black yarn dreadlocks falling to the middle of his back"
 
@@ -92,3 +93,48 @@ def test_idempotent_when_locked_already_present(tmp_path: Path) -> None:
     # Locked text already present → no second injection.
     assert out.count("middle of his back") == 1
     assert not any("injected canon" in a for a in applied)
+
+
+# ── character LoRA (canon_loras_for) ─────────────────────────────────────────────
+
+
+def _seed_canon_with_lora(base: Path, project: str = "celeste") -> ProjectCanon:
+    store = ProjectCanon(project, base_dir=base)
+    store.set_subject(
+        aliases=["the narrator", "narrator", "@narrator"],
+        locked=_NARRATOR,
+        forbid=["short hair"],
+        lora=LoraRef(name="celeste-narrator.safetensors", strength=0.8),
+    )
+    return store
+
+
+def test_lora_round_trips_through_store(tmp_path: Path) -> None:
+    _seed_canon_with_lora(tmp_path)
+    subj = ProjectCanon("celeste", base_dir=tmp_path).load()[0]
+    assert subj.lora is not None
+    assert subj.lora.name == "celeste-narrator.safetensors"
+    assert subj.lora.strength == 0.8
+
+
+def test_canon_loras_returned_when_subject_present(tmp_path: Path) -> None:
+    _seed_canon_with_lora(tmp_path)
+    # Locked text present (post-enforce_canon state) → the LoRA is pinned.
+    loras = canon_loras_for(f"the narrator, {_NARRATOR}, on a rooftop", "celeste", base_dir=tmp_path)
+    assert [lr.name for lr in loras] == ["celeste-narrator.safetensors"]
+    assert loras[0].strength == 0.8
+
+
+def test_canon_loras_empty_when_subject_absent(tmp_path: Path) -> None:
+    _seed_canon_with_lora(tmp_path)
+    assert canon_loras_for("a neon alley, rain, no people", "celeste", base_dir=tmp_path) == []
+
+
+def test_canon_loras_empty_when_subject_has_no_lora(tmp_path: Path) -> None:
+    _seed_canon(tmp_path)  # narrator, but no lora set
+    assert canon_loras_for(f"the narrator, {_NARRATOR}", "celeste", base_dir=tmp_path) == []
+
+
+def test_canon_loras_noop_without_project_or_file(tmp_path: Path) -> None:
+    assert canon_loras_for("the narrator", None, base_dir=tmp_path) == []
+    assert canon_loras_for("the narrator", "missing", base_dir=tmp_path) == []

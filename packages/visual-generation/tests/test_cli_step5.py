@@ -262,3 +262,32 @@ def test_research(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "completed" in result.output
     assert "pod billing" in result.output
+
+
+# ── canon --lora parsing (character-LoRA continuity) ─────────────────────────────
+
+
+def test_parse_lora_defaults_strength_to_one() -> None:
+    from visual_generation.cli import _parse_lora
+
+    lr = _parse_lora("celeste-narrator.safetensors")
+    assert lr.name == "celeste-narrator.safetensors"
+    assert lr.strength == 1.0
+
+
+def test_parse_lora_reads_explicit_strength() -> None:
+    from visual_generation.cli import _parse_lora
+
+    lr = _parse_lora("celeste-narrator.safetensors:0.8")
+    assert lr.strength == 0.8
+
+
+def test_parse_lora_rejects_empty_name_and_bad_strength() -> None:
+    import click
+
+    from visual_generation.cli import _parse_lora
+
+    with pytest.raises(click.BadParameter):
+        _parse_lora(":0.8")
+    with pytest.raises(click.BadParameter):
+        _parse_lora("char.safetensors:loud")

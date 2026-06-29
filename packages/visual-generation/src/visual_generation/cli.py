@@ -60,7 +60,7 @@ from visual_generation.inspect import (
 )
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
-from visual_generation.models import TechniqueLesson, VisualSource, WorkflowTemplate
+from visual_generation.models import LoraRef, TechniqueLesson, VisualSource, WorkflowTemplate
 from visual_generation.report import report_sync
 from visual_generation.research import register_delegate_handlers, render_research, research_sync
 from visual_generation.slot_inference import infer_slots
@@ -911,6 +911,20 @@ def batch_rm(batch_file: str, spec_id: str, yes: bool) -> None:
 # ── Project canon (deterministic, file-backed) ───────────────────────────────
 
 
+def _parse_lora(spec: str) -> LoraRef:
+    """Parse a NAME[:STRENGTH] CLI token into a LoraRef (strength defaults to 1.0)."""
+    name, _, strength = spec.partition(":")
+    name = name.strip()
+    if not name:
+        raise click.BadParameter("--lora needs a registry name (NAME[:STRENGTH])")
+    if not strength:
+        return LoraRef(name=name)
+    try:
+        return LoraRef(name=name, strength=float(strength))
+    except ValueError as exc:
+        raise click.BadParameter(f"--lora strength {strength!r} is not a number") from exc
+
+
 @cli.group()
 def canon() -> None:
     """Manage a project's LOCKED canon (deterministically enforced at draft/redraft)."""
@@ -925,15 +939,25 @@ def canon() -> None:
               help="The canonical descriptor that must appear whenever the subject is named.")
 @click.option("--forbid", "forbid", multiple=True,
               help="A phrasing that contradicts canon and is stripped (repeatable).")
-def canon_set(project: str, aliases: tuple[str, ...], locked: str, forbid: tuple[str, ...]) -> None:
+@click.option("--lora", "lora", default=None,
+              help="Character LoRA pinned whenever this subject appears, as "
+                   "NAME[:STRENGTH] (strength defaults to 1.0). The NAME must key into "
+                   "the model registry; flag it identity_bearing there.")
+def canon_set(
+    project: str, aliases: tuple[str, ...], locked: str, forbid: tuple[str, ...],
+    lora: str | None,
+) -> None:
     """Upsert a locked subject for PROJECT (keyed by its first alias)."""
+    lora_ref = _parse_lora(lora) if lora else None
     store = ProjectCanon(project)
-    subject = store.set_subject(list(aliases), locked, list(forbid))
+    subject = store.set_subject(list(aliases), locked, list(forbid), lora=lora_ref)
     click.echo(f"Canon set for {project!r} (subject '{subject.aliases[0]}'):")
     click.echo(f"  aliases: {', '.join(subject.aliases)}")
     click.echo(f"  locked:  {subject.locked}")
     if subject.forbid:
         click.echo(f"  forbid:  {', '.join(subject.forbid)}")
+    if subject.lora:
+        click.echo(f"  lora:    {subject.lora.name}@{subject.lora.strength}")
     click.echo(f"\nStored at: {store.path}")
 
 
@@ -952,6 +976,8 @@ def canon_show(project: str) -> None:
         click.echo(f"    locked:  {s.locked}")
         if s.forbid:
             click.echo(f"    forbid:  {', '.join(s.forbid)}")
+        if s.lora:
+            click.echo(f"    lora:    {s.lora.name}@{s.lora.strength}")
 
 
 @canon.command("rm")

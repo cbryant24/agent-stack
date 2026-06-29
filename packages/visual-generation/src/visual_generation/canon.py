@@ -23,6 +23,8 @@ from pydantic import BaseModel, Field
 
 from agent_runtime import get_config
 
+from visual_generation.models import LoraRef
+
 
 class CanonSubject(BaseModel):
     """One locked subject: the aliases that name it, the canonical descriptor that
@@ -30,11 +32,18 @@ class CanonSubject(BaseModel):
 
     An alias beginning with ``@`` is a *token* that expands in place to the locked
     descriptor; a plain alias (e.g. "the narrator") triggers injection of the locked
-    descriptor when it's named but the canonical text isn't already present."""
+    descriptor when it's named but the canonical text isn't already present.
+
+    `lora` is the optional *character LoRA* that carries this subject's identity at
+    the model level (a registered, usually `identity_bearing` asset). When the subject
+    is present in a scene, the locked text reaches the prompt *and* this LoRA is pinned
+    into the stack — so textual and model-level identity travel together, on every
+    scene, regardless of LLM discretion."""
 
     aliases: list[str]
     locked: str
     forbid: list[str] = Field(default_factory=list)
+    lora: LoraRef | None = None
 
 
 def _default_canon_dir() -> Path:
@@ -72,14 +81,18 @@ class ProjectCanon:
         os.replace(tmp, self._path)
 
     def set_subject(
-        self, aliases: list[str], locked: str, forbid: list[str] | None = None
+        self,
+        aliases: list[str],
+        locked: str,
+        forbid: list[str] | None = None,
+        lora: LoraRef | None = None,
     ) -> CanonSubject:
         """Upsert a subject (keyed by its primary alias, case-insensitively)."""
         if not aliases:
             raise ValueError("a canon subject needs at least one alias")
         key = aliases[0].lower()
         subjects = [s for s in self.load() if not (s.aliases and s.aliases[0].lower() == key)]
-        subject = CanonSubject(aliases=aliases, locked=locked, forbid=forbid or [])
+        subject = CanonSubject(aliases=aliases, locked=locked, forbid=forbid or [], lora=lora)
         subjects.append(subject)
         self._write(subjects)
         return subject
@@ -150,3 +163,37 @@ def enforce_canon(
     if applied:
         prompt = _tidy(prompt)
     return prompt, applied
+
+
+def _subject_present(prompt: str, subj: CanonSubject) -> bool:
+    """True if `subj` appears in `prompt` — its locked descriptor is present, or any
+    of its aliases is named (``@`` tokens expand to the locked text, so they reduce to
+    the same check). Run *after* `enforce_canon`, where a present subject's locked text
+    has already been injected."""
+    lower = prompt.lower()
+    if subj.locked and subj.locked.lower() in lower:
+        return True
+    for alias in subj.aliases:
+        plain = alias[1:] if alias.startswith("@") else alias
+        if plain and re.search(rf"\b{re.escape(plain)}\b", prompt, re.IGNORECASE):
+            return True
+    return False
+
+
+def canon_loras_for(
+    prompt: str, project: str | None, *, base_dir: Path | None = None
+) -> list[LoraRef]:
+    """Return the character LoRAs that canon pins for every subject present in `prompt`.
+
+    The model-level counterpart to `enforce_canon`: a subject the scene names (so its
+    locked descriptor is in the prompt) also brings its registered character LoRA, so
+    identity holds across scenes at the model level — not just the text. Call after
+    `enforce_canon` and merge the result into the spec's `lora_stack` (dedupe by name).
+    A project with no canon file, or subjects without a `lora`, yields an empty list."""
+    if not project:
+        return []
+    loras: list[LoraRef] = []
+    for subj in ProjectCanon(project, base_dir=base_dir).load():
+        if subj.lora is not None and _subject_present(prompt, subj):
+            loras.append(subj.lora)
+    return loras

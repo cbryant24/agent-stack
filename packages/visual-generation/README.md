@@ -360,6 +360,12 @@ reusing it across other beats. For two-character beats, validate the **two-shot
 itself** (distinct puppets, no identity bleed — which held) before relying on it,
 rather than assuming a descriptor that works solo will compose cleanly.
 
+Three continuity mechanisms, weakest → strongest: a shared **fixed seed** (drifts as
+the prompt changes); **anchor-frame img2img** (`batch build --from <gen_id>` — imports
+one frame's composition into every scene; a real improvement, not a face lock); and a
+**character LoRA** pinned via `canon set … --lora` (model-level identity on every scene
+— the durable fix). See "Lock identity descriptors" below.
+
 ### Save (workflow) format vs. Export (API) format
 
 ComfyUI has two very different "export" actions and only one of them is
@@ -582,11 +588,22 @@ on the model's discretion. Set it once and every draft/redraft that names the su
 visual-generation canon set celeste-you-dangerous \
   --alias "the narrator" --alias "@narrator" \
   --locked "…long black yarn dreadlocks falling to the middle of his back" \
-  --forbid "short hair"
+  --forbid "short hair" \
+  --lora celeste-narrator.safetensors:0.8
 ```
 
 `@narrator` expands in place; a plain "the narrator" mention injects the locked descriptor if
 absent; `--forbid` phrasings are stripped. The output shows `── Canon enforced ──`.
+
+**Character LoRA (model-level continuity).** `--lora NAME[:STRENGTH]` pins a trained character
+LoRA into the stack on *every* scene the subject appears in — the model-level half of canon.
+Locked text gives the *textual* identity; the LoRA gives the same identity at the model level,
+both guaranteed deterministically (the LLM never has to pick it; pinning dedupes if it did).
+This is the durable fix for cross-scene character drift that anchor-frame img2img only
+approximates. End-to-end: **curate** ~15–30 stills of the subject → **train** a Z-Image LoRA
+on the pod → **register** it (`model sync`, flagged `identity_bearing`) → **`canon set … --lora`**
+so it's pinned project-wide. The NAME must key into the model registry; a pinned LoRA on a
+template with no loader slot is surfaced as a "won't apply" advisory rather than silently dropped.
 
 ### Prove knowledge isn't being ignored — `knowledge-verify` / `digest`
 

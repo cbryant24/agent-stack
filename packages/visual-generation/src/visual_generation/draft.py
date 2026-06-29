@@ -28,7 +28,7 @@ from agent_runtime import (
 )
 
 from visual_generation.batch_file import append_spec
-from visual_generation.canon import enforce_canon
+from visual_generation.canon import canon_loras_for, enforce_canon
 from visual_generation.chains import craft_spec
 from visual_generation.discovery import compile_creative_input, discover_scenes
 from visual_generation.constants import (
@@ -68,6 +68,22 @@ async def _resolve_template(
 def _default_batch_path(project: str | None) -> Path:
     stem = project or "default"
     return get_config().agent_data_dir / "visual-generation" / "batches" / f"{stem}.batch.md"
+
+
+def _pin_canon_loras(spec: VisualSpec, project: str | None, store: Any) -> list[str]:
+    """Pin each present subject's character LoRA into `spec.lora_stack` (dedupe by name),
+    then re-derive identity_bearing now that canon may have added an identity asset.
+
+    The model-level half of canon enforcement: locked text reaching the prompt is the
+    textual identity; this is the same identity at the model level, guaranteed on every
+    scene the subject appears in. Returns human-readable notes for `canon_applied`."""
+    notes: list[str] = []
+    for lr in canon_loras_for(spec.prompt, project):
+        if not any(existing.name == lr.name for existing in spec.lora_stack):
+            spec.lora_stack.append(lr)
+            notes.append(f"pinned canon LoRA '{lr.name}'@{lr.strength}")
+    spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
+    return notes
 
 
 async def draft(
@@ -192,6 +208,9 @@ async def draft(
                 # Deterministically enforce locked project canon (e.g. the narrator's
                 # hair) — the one channel that doesn't depend on LLM discretion.
                 spec.prompt, canon_applied = enforce_canon(spec.prompt, project)
+                # Pin the present subject's character LoRA too (model-level continuity);
+                # re-derives identity_bearing inside, superseding the pre-fill above.
+                canon_applied += _pin_canon_loras(spec, project, store)
 
                 overall_reasoning = crafted["rationale"]
                 tutor_notes = [le.statement for _, le in ctx.technique_lessons]
@@ -200,18 +219,21 @@ async def draft(
                     known = {a.name for a in models}
                     missing_models = [m for m in template.required_models if m not in known]
 
-                # Warn about attributes inherited from the parent that the resolved
-                # template has no slot for (advisory only — the values stay on the spec
-                # to future-proof for a template that can apply them).
-                if parent is not None and template is not None:
+                # Warn when the resolved template has no slot for an attribute on the spec
+                # (advisory only — the values stay on the spec to future-proof for a
+                # template that can apply them). The LoRA check covers any source — parent
+                # inheritance *or* a canon-pinned character LoRA — since a missing loader
+                # slot silently drops the identity LoRA either way.
+                if template is not None:
                     slots = template.slot_map
                     if spec.lora_stack and not any(k.startswith("lora_") for k in slots):
                         inert_inheritance.append(
-                            f"{len(spec.lora_stack)} source LoRA(s) won't apply: "
+                            f"{len(spec.lora_stack)} LoRA(s) won't apply: "
                             "this template has no LoRA loader slots."
                         )
                     if (
-                        (spec.width is not None or spec.height is not None)
+                        parent is not None
+                        and (spec.width is not None or spec.height is not None)
                         and "width" not in slots
                         and "height" not in slots
                     ):
@@ -437,8 +459,9 @@ async def redraft(
                 spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
 
                 # Enforce locked canon on the revised prompt too (continuity can't drift
-                # away from canon across a redraft).
+                # away from canon across a redraft) — text and character LoRA both.
                 spec.prompt, canon_applied = enforce_canon(spec.prompt, project or parent.project)
+                canon_applied += _pin_canon_loras(spec, project or parent.project, store)
 
                 overall_reasoning = crafted["rationale"]
                 tutor_notes = [le.statement for _, le in ctx.technique_lessons]
