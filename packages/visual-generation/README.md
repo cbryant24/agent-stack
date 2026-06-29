@@ -476,6 +476,18 @@ the concrete API graph, sends it to the ComfyUI pod at `--endpoint`, and
 saves the resulting image locally under
 `~/agent-data/visual-generation/assets/<project>/<generation_id>.png`.
 
+**The three ids — don't mix them up** (the #1 papercut):
+
+| Id | Minted by | Looks like | Used by |
+|---|---|---|---|
+| **`spec_id`** | `draft` (`Spec:` line) / `batch list` | a recipe in `<project>.batch.md` | `generate --section <spec_id>`, `batch rm <spec_id>` |
+| **`generation_id`** | `generate` (`Gen id:` / `React:` line) | the rendered image | `report <generation_id>`, `redraft <generation_id>`, `draft --from <generation_id>` |
+
+`generate` prints the **full** generation id (and a ready `React:` command) — it equals the
+**asset PNG filename stem**. `report` does an exact point-id lookup, so a **truncated** id or a
+**spec** id fails ("not a valid point ID" / "no generation with id …"). When in doubt,
+`review-pending` lists every render with its full id and a paste-ready `report` command.
+
 `--max-session-cost <N>` is a **soft/local cost ceiling**, checked before
 each individual generation in the run:
 
@@ -519,11 +531,17 @@ want the *same* render with a changed prose prompt, not an img2img edit of the p
   the **prompt authoring**, not the diffusion render — the same diffusion model produces
   the image either way.
 
-### `batch list <batch.md>` / `batch rm <batch.md> <spec_id> [--yes]`
+### `batch list [<batch.md>] [--project <slug>]` / `batch rm <spec_id> [<batch.md>] [--project <slug>] [--yes]`
 
-Manage the specs inside a batch file. `batch list` prints each spec's `spec_id`, section
-title, and `workflow_ref`, one per line. `batch rm` removes a single spec by `spec_id`,
-prompting for confirmation unless `--yes` is passed.
+Manage the specs inside a batch file. Target the batch the same way as `draft`/`generate`:
+by `--project <slug>` (resolves the default `<slug>.batch.md`) **or** an explicit path.
+`batch list` prints each spec's `spec_id`, section title, and `workflow_ref`, one per line.
+`batch rm` removes a single spec **by `spec_id` first** (the id is the primary argument;
+the path is optional/derivable), prompting for confirmation unless `--yes` is passed:
+
+```bash
+agent visual-generation batch rm <spec_id> --project celeste-you-dangerous --yes
+```
 
 This is the **first remove/replace path** for batch files — `batch_file` was previously
 **append-only** (`draft`/`redraft` only ever appended). `batch rm` round-trips the file
@@ -579,10 +597,16 @@ and the agent compiles those docs + retrieved knowledge into the prompt:
 `--provider` selects the LLM (Claude today; OpenAI is a documented stub). `--model` is a free
 string the provider resolves (`sonnet`/`opus` or a concrete id).
 
-### Lock identity descriptors — `canon set/show/rm <project>`
+### Lock identity descriptors — `canon set/edit/show/rm <project>`
+
+> **Full reference: [`docs/canon-guide.md`](docs/canon-guide.md)** — concept, every command +
+> option, the "where does each change go" cheat-sheet, worked `celeste-you-dangerous` examples
+> (characters **and** places), and the gotchas. The summary below is the orientation.
 
 Canon is **deterministically enforced** (not advisory) — the one channel that doesn't depend
-on the model's discretion. Set it once and every draft/redraft that names the subject gets it:
+on the model's discretion. It locks anything whose look must be **identical across every image**:
+a **character** *or* a **recurring place** (a bar, a room). Set it once and every draft/redraft
+that names the subject gets it:
 
 ```
 visual-generation canon set celeste-you-dangerous \
@@ -593,7 +617,26 @@ visual-generation canon set celeste-you-dangerous \
 ```
 
 `@narrator` expands in place; a plain "the narrator" mention injects the locked descriptor if
-absent; `--forbid` phrasings are stripped. The output shows `── Canon enforced ──`.
+absent; `--forbid` phrasings are stripped. The output shows `── Canon enforced ──`. A scene that
+**names** a canon subject also feeds it into composition (cast-weaving), and a `⚠ … ABSENT`
+advisory fires if the LLM still dropped it — so a missing lead is never silent.
+
+**`canon set` REPLACES the whole subject** (keyed by `aliases[0]`) — omitting `--forbid`/`--lora`
+drops them. To change **one field** without restating the rest, use **`canon edit`** (prints
+Before/After):
+
+```
+# tweak just the descriptor + add a forbid; aliases/LoRA preserved
+visual-generation canon edit celeste-you-dangerous "the narrator" \
+  --locked "…short and stocky… dreadlocks falling to mid-back" --add-forbid "lanky"
+```
+
+`canon edit` options: `--add-alias` / `--rm-alias` / `--add-forbid` / `--rm-forbid` / `--locked`
+(all optional; select the subject by **any** alias). **Two rules that bite:** `--forbid` is a raw
+substring strip (`"tall"` also hits `me`**`tall`**`ic` — forbid phrases, not bare words), and two
+subjects must have **non-overlapping aliases** (a shared `"the bar"` fires the wrong lock). See
+the guide. Note: `canon/*.json` lives in `~/agent-data` (**outside git**) — it does **not** sync
+between machines.
 
 **Character LoRA (model-level continuity).** `--lora NAME[:STRENGTH]` pins a trained character
 LoRA into the stack on *every* scene the subject appears in — the model-level half of canon.

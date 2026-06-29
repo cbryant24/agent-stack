@@ -49,6 +49,30 @@ workflow, capture the marked output, and report back; we adjust from there.
 
 ---
 
+## Cheat-sheet — where does each change go?
+
+The one question that decides where any change belongs: **does it persist across *every* image
+of this thing, or is it just this shot?** (Full reference: [`canon-guide.md`](canon-guide.md).)
+
+| Home | Use it for | Persists across | How it's applied | Examples |
+|------|------------|-----------------|------------------|----------|
+| **Canon `locked`** (`canon set` / `canon edit`) | The **immutable identity** of a named entity — a character **or a recurring place** | **Every** image that names the entity | Locked text injected into the prompt deterministically on every `draft`/`redraft` | Narrator's dreadlocks & build; the bar's 55″ flat-screen TVs; the terracotta facade |
+| **Canon `forbid`** (`canon set` / `canon edit`) | Wrong words that keep creeping back in | Same as above (only while that subject is named) | The phrasing is stripped from the whole prompt | strip `CRT`, `lanky`, `chalkboard` |
+| **`--points`** (per `draft`) | **This-shot** creative choices that **vary** scene to scene | Just that one render | Composed into the prompt by the LLM (advisory) | Clothing, camera framing, time of day, what's in/out of frame |
+| **`draft --from <gen_id>`** (refine) | Iterating on a render you **mostly like** | Builds on one good frame (img2img) | The change rides on top of the source frame | "take this frame, pull the camera back, make it night, drop the tables" |
+| **`settings`** (on the spec) | Engine knobs | The spec | Mapped through the template slot map at `generate` | `steps`, `cfg`, `denoise`, `width`/`height` |
+
+**Decision shortcuts:**
+- Never changes (a character, or a recurring place's look) → **canon `locked`**.
+- A trait the model keeps getting *wrong in words* → reinforce with **canon `forbid`** (use
+  multi-word phrases — a bare `"tall"` also strips `me`**`tall`**`ic`).
+- Changes per scene (clothing, time, framing, props that come and go) → **`--points`**, never
+  canon. If a garment can hide the hair, **state the occlusion** ("hood down, dreadlocks falling
+  over the collar to mid-back").
+- A render whose composition you already like → **`draft --from`**, don't re-roll.
+
+---
+
 ## Phase 0 — Prerequisites (shared by all workflows)
 
 ### 0.1 — Qdrant up (retrieval + memory backend)
@@ -90,6 +114,15 @@ ls ~/agent-projects/celeste-you-dangerous/
 
 - **Does:** locks both leads' identities deterministically. `canon show` should now list **two
   subjects** — each with `aliases`, `locked`, (`forbid` for Chris). **No `lora:` line yet** (Workflow 6 adds one per lead).
+- **Recurring places are canon too.** The story's bar is a recurring set, so lock it the same way
+  — as **place-subjects** with non-overlapping aliases (an *exterior* `"the storefront"` and an
+  *interior* `"inside the bar"`), so its facade / TVs / seating stay consistent across scenes.
+  Full worked commands (incl. the two-exterior-TVs + interior-seating locks) are in
+  [`canon-guide.md`](canon-guide.md) §6.
+- **Editing canon later — use `canon edit`, not `canon set`.** `canon set` **replaces** the whole
+  subject (omitting `--forbid`/`--lora` drops them). To add a trait or alias without restating
+  everything: `canon edit <project> <subject> --locked … --add-forbid … --add-alias …` (prints
+  Before/After; select the subject by any alias). See [`canon-guide.md`](canon-guide.md) §5.
 - **⚠ Forbid bleeds across subjects — keep forbid lists minimal with two leads.** `--forbid` strips
   the phrase from the **whole prompt**, not just its own subject's text. So in a two-shot:
   - Chris forbids `shoulder-length` → that's why Celeste's hair is phrased **"past her shoulders"**
@@ -255,18 +288,32 @@ agent visual-generation draft \
 ```
 
 - **Does:** discovers the project's docs, narrows to the **Arrival** section of `directed.md`,
-  compiles that + retrieved knowledge + your points into a prompt Claude composes. No `INTENT`
-  string needed.
+  compiles that + retrieved knowledge + your points into a prompt Claude composes. **Canon
+  characters the scene names are fed into composition as the scene's cast** — the Arrival
+  narration names *Chris*, so Claude is told to render the narrator by name with his locked
+  look, and `enforce_canon` then injects/pins on the alias. No `INTENT` string needed.
 - **Expected — look for:**
   - `── Compiled from (your project docs) ────` listing `directed.md` (Arrival) and likely
     `brief.md`/`techniques.md` if present — **this is the proof your script fed the prompt.**
-  - `── Knowledge surfaced ──` and `── Canon enforced ──` as in Workflow 2.
-  - A `Prompt:` that reflects the Arrival beat (not your literal points verbatim).
+  - `── Knowledge surfaced ──` and `── Canon enforced ──` as in Workflow 2 — **for a scene that
+    features a lead, the Canon-enforced block should now fire** (the cast made Claude name him).
+  - A `Prompt:` that reflects the Arrival beat **and includes Chris** (not your literal points verbatim).
+- **The cast / absent advisory (the fix for "the scene dropped Chris"):**
+  - Because Arrival is *about* Chris, the draft weaves him in from the scene text even though
+    your `--points` were pure scenery. If the composed prompt still omits a scene-named lead
+    (e.g. a deliberate empty establishing shot), you'll see a non-blocking
+    `⚠ Canon character(s) named in this scene but ABSENT from the prompt: 'the narrator' …`.
+    That advisory is the proof canon can no longer be *silently* ignored.
+  - Want a true characterless establishing shot? The advisory is harmless — ignore it, or use a
+    scene with no named lead. Want the lead in for sure? Add a point naming him
+    (`--points "Chris at the bar door"`).
 - **Options to alter:**
   - Drop `--scene` → the **whole** `directed.md` becomes context (broader, less focused).
   - `--points` is repeatable; for a refinement (next workflows) points describe the *change*.
   - `--scene "The Win and the Loss"` etc. — any of the four real headings.
 - **Try this to verify behavior:**
+  - Re-run the exact pure-scenery draft above → expect **Chris now present + `Canon enforced`**
+    firing (the regression this fix targets), or the `⚠ … ABSENT` advisory if he's still dropped.
   - Run with a **wrong** scene name (`--scene "Nonexistent"`) → expect the compile to fall back
     (whole-doc or a visible "missing input"), never a crash. Confirms degrade-on-absence.
   - Compare the `Prompt:` from `--scene "Arrival"` vs `--scene "Again and Again"` — they should
@@ -492,9 +539,11 @@ agent visual-generation canon set celeste-you-dangerous \
   - `:STRENGTH` per lead — `0.8` start; lower (`:0.6`) if a LoRA over-powers the scene, higher if the
     identity is weak. (The main dial in the validation round — tune each lead independently.)
   - `NAME` must match the registry asset name exactly (from `model list`).
-- **⚠ Two notes:** (1) `canon set` **replaces** the subject — re-pass *all* of its
-  `--alias`/`--locked`/`--forbid` each time or you'll drop them (copy from `canon show` first).
-  (2) Keep the **forbid-bleed** rule from §0.2 — that's why Celeste carries no `--forbid`.
+- **⚠ Two notes:** (1) To **add** the `--lora` to an existing subject, use
+  `canon edit <project> <subject> --lora NAME[:STRENGTH]` — it sets the pin without touching the
+  aliases/forbid/locked you already have (don't re-run `canon set`, which **replaces** the whole
+  subject). `--clear-lora` removes it. (2) Keep the **forbid-bleed** rule from §0.2 — that's why
+  Celeste carries no `--forbid`.
 
 ### Step 6.5 — Draft and confirm the pins (free) — including the two-shot test
 
@@ -633,9 +682,10 @@ agent visual-generation chain show <ROOT_GEN_ID>             # lineage tree (dra
 | `draft "<intent>" --project P` | ✅ | craft one spec (text2img or `--from`/`--image` refine) | `--points` `--scene` `--template` `--model` `--provider` `--from` `--image` `--mask` `--denoise` `-o` |
 | `batch build P` | ✅ | one spec per `directed.md` scene | `--from` `--image` `--denoise` `--template` `--model` `-o` |
 | `batch rebuild P` | ✅ | overwrite an existing batch | (same as build) |
-| `batch list <file>` / `batch rm <file> <id>` | ✅ | inspect / prune specs | `--yes` (rm) |
+| `batch list [--project <slug>]` / `batch rm <id> [--project <slug>]` | ✅ | inspect / prune specs (id first; target by `--project` or a path) | `--yes` (rm) |
 | `redraft <gen> "<change>"` | ✅ | prose-only revise (inherits recipe/seed) | `--model` `--provider` `-o` |
-| `canon set P --alias … --locked … [--forbid …] [--lora N[:S]]` | ✅ | lock identity (text + character LoRA) | replaces the subject — re-pass all fields |
+| `canon set P --alias … --locked … [--forbid …] [--lora N[:S]]` | ✅ | create / **replace** a subject (character or place) | replaces the whole subject — re-pass all fields |
+| `canon edit P <subject> [--add-alias/--rm-alias/--add-forbid/--rm-forbid/--locked]` | ✅ | **surgically** change one field (prints Before/After) | select by any alias; won't drop the rest |
 | `canon show/rm P` | ✅ | view / remove canon | — |
 | `generate <file> --endpoint <url>` | 💸 | render on the pod | `--section` `--all` `--gpu-rate` `--max-session-cost` `--yes` |
 | `report <gen> --reaction X` | ✅ | record reaction → memory | `--rating` `--notes` `--context` |
