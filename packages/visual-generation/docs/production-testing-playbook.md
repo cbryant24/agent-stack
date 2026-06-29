@@ -36,7 +36,7 @@ workflow, capture the marked output, and report back; we adjust from there.
 - **Project facts this playbook assumes** (already true on your machine):
   - Slug: `celeste-you-dangerous`; docs at `~/agent-projects/celeste-you-dangerous/` (`directed.md`, `script.md`, `techniques.md`, `story.md`).
   - `directed.md` scenes: **Arrival**, **The Adversity and the Advesary**, **The Win and the Loss**, **Again and Again**.
-  - Canon set for the narrator (puppet descriptor + `forbid` list); **no character LoRA yet** (Workflow 6 adds one).
+  - **Two visible leads** → **two canon subjects**: **Chris** (the narrator puppet — dreadlocks) and **Celeste** (the waitress — yarn hair past her shoulders), who share scenes 2–4. **No character LoRA yet** — Workflow 6 trains **one per lead**.
 - **What to capture & report back per step:** paste the marked **`── … ──`** blocks (Knowledge
   surfaced / Compiled from / Canon enforced), plus anything under a ⚠. Those are the signal.
 
@@ -56,17 +56,43 @@ curl -s http://localhost:6333/ | head -1        # expect a JSON banner, not a re
 - **Verify:** `agent visual-generation knowledge-verify "z-image turbo dreadlocks" --project celeste-you-dangerous`
   should show non-zero collection sizes (next section). If everything reads `unreachable/absent`, Qdrant isn't up.
 
-### 0.2 — Confirm project docs + canon are present (free, instant)
+### 0.2 — Confirm project docs + canon for BOTH leads (free, instant)
+
+This story has **two visible leads**, so canon needs **two subjects** — Chris and Celeste. Canon's
+`subjects` array holds both; each `canon set` upserts one subject (keyed by `aliases[0]`) without
+touching the other.
 
 ```bash
+# Chris (the narrator puppet). Note "Chris"/"the man" as aliases so the lock fires whether a
+# prompt names him "the narrator" OR "Chris" — your prompts use both.
+agent visual-generation canon set celeste-you-dangerous \
+  --alias "the narrator" --alias "narrator" --alias "@narrator" \
+  --alias "Chris" --alias "the man" \
+  --locked "a felt-and-clay stop-motion puppet of a young Black man, deep caramel-brown felt skin, long black yarn dreadlocks falling to mid-back" \
+  --forbid "short hair" --forbid "shoulder-length" --forbid "buzz cut"
+
+# Celeste (the waitress). Descriptor seeded from your existing renders; outfit deliberately
+# OMITTED (it changes per scene). NO --forbid (see the caveat below).
+agent visual-generation canon set celeste-you-dangerous \
+  --alias "Celeste" --alias "the waitress" \
+  --locked "a felt-and-clay stop-motion puppet of a young woman, smooth matte felt skin, long black yarn hair falling just past her shoulders, bare felt face with no makeup, glossy black stitched sewing-button eyes"
+
 agent visual-generation canon show celeste-you-dangerous
 ls ~/agent-projects/celeste-you-dangerous/
 ```
 
-- **Does:** confirms the doc-compilation source and the deterministic canon both exist.
-- **Expected:** `canon show` prints the narrator subject — `aliases`, `locked` (the puppet
-  descriptor), `forbid`. **No `lora:` line yet** (that arrives in Workflow 6).
-- **Report back:** the `canon show` output.
+- **Does:** locks both leads' identities deterministically. `canon show` should now list **two
+  subjects** — each with `aliases`, `locked`, (`forbid` for Chris). **No `lora:` line yet** (Workflow 6 adds one per lead).
+- **⚠ Forbid bleeds across subjects — keep forbid lists minimal with two leads.** `--forbid` strips
+  the phrase from the **whole prompt**, not just its own subject's text. So in a two-shot:
+  - Chris forbids `shoulder-length` → that's why Celeste's hair is phrased **"past her shoulders"**
+    (not the token "shoulder-length"), so it isn't clipped.
+  - **Do NOT give Celeste `--forbid "dreadlocks"`** — it would strip *Chris's* "long black yarn
+    dreadlocks" in any scene they share. Her positive descriptor ("hair past her shoulders") does
+    the differentiating instead.
+  - Rule of thumb: prefer distinguishing leads by their **positive `locked` text**; use `forbid`
+    only for a token that can't collide with the other lead's locked descriptor.
+- **Report back:** the `canon show` output (both subjects).
 
 ### 0.3 — (PAID workflows only) Pod up + model registry sync
 
@@ -331,35 +357,47 @@ agent visual-generation batch build celeste-you-dangerous \
 
 ## Workflow 6 — Character-LoRA continuity (feature C — the durable fix)
 
-**Path for:** the strongest continuity — a **trained character LoRA** pinned into **every** scene
-the narrator appears in, via canon. Identity travels at the model level, not just the text. This is
-the only path that fully locks the narrator's face across all four scenes.
+**Path for:** the strongest continuity — a **trained character LoRA** pinned into **every** scene a
+lead appears in, via canon. Identity travels at the model level, not just the text. This is the only
+path that fully locks a face across all four scenes.
 
 This workflow includes the training itself as first-class steps, grounded in your ingested tutorial
 **"How to Train a Character LoRA for Z-Image Turbo"** (Seb G., `k0UWypeLcJ4`) — the one Workflow 1
-surfaces. Steps 6.1–6.3 produce the LoRA; 6.4–6.6 pin and use it. Pick a **trigger word** up front —
-this playbook uses **`celestenarr8`** (short token + digit, like the tutorial's `aki8`).
+surfaces. Steps 6.1–6.3 produce a LoRA; 6.4–6.6 pin and use it.
 
+> **You have TWO leads, so you run this workflow TWICE — once per lead.** Each gets its **own
+> dataset, own trigger word, own `.safetensors`, and own canon pin** on its own subject. The steps
+> below are written once with `<CHARACTER>` / `<TRIGGER>` placeholders; substitute each lead's row:
+>
+> | Lead | Subject alias | `<CHARACTER>` (folder/LoRA/job name) | `<TRIGGER>` | Dataset source |
+> |---|---|---|---|---|
+> | Chris (narrator) | `the narrator` | `celeste-narrator` | `celestenarr8` | mine existing narrator renders + fan-out |
+> | Celeste (waitress) | `Celeste` | `celeste-waitress` | `celestechar8` | **bootstrap from ONE good render** (she had no lock until now — see 6.1) |
+>
 > **Two different pods.** Training runs on a **separate, manually-deployed Ostris AI-Toolkit pod**
 > (a cheap 4090 is plenty) — **not** `scripts/pod` (that script is only for the inference ComfyUI
-> pod). Deploy the training pod from the RunPod console; delete it when training finishes.
+> pod). Deploy the training pod from the RunPod console; delete it when training finishes. You can
+> train both LoRAs in one pod session (two jobs back-to-back) to save spin-ups.
 
-### Step 6.1 — Curate the dataset (free, ~30 min)
+### Step 6.1 — Curate the dataset (free, ~30 min per lead)
 
-- **Goal:** 20–30 images of the narrator puppet, all **1024×1024**, varied — different angles,
-  expressions, poses, framing (close-ups + mid + a couple full-body). Main features must stay
-  consistent: **felt-and-clay stop-motion puppet, caramel-brown felt skin, black yarn dreadlocks to
-  mid-back.** Per the tutorial, captioning will be **trigger-word-only**, so variety in the *images*
-  is what teaches identity.
-- **How (puppet-specific):** you already have rendered narrator stills (prior `report`ed
-  generations, the anchor frames from Workflow 5, `visual-batch.md` outputs). Use those as the base.
-  To fill gaps in angle/pose, take one strong render and fan it out — either with a multi-angle
-  workflow (the tutorial's Qwen multi-angle approach) or by `draft --from <gen_id>` at higher
-  denoise to restage. Normalize any non-square frame to 1024×1024.
-- **Land them in:** `~/agent-projects/celeste-you-dangerous/refs/narrator-lora/` (one folder, named
-  for the character).
-- **Report back:** how many frames you assembled and the angle/pose spread (this is the #1 driver of
-  LoRA quality — a narrow dataset = a narrow LoRA).
+- **Goal:** 20–30 images of `<CHARACTER>`, all **1024×1024**, varied — different angles, expressions,
+  poses, framing (close-ups + mid + a couple full-body). Main features must stay consistent (Chris:
+  caramel felt skin, black yarn **dreadlocks to mid-back**; Celeste: felt skin, black yarn hair
+  **just past her shoulders**, stitched button eyes). Captioning is **trigger-word-only**, so variety
+  in the *images* is what teaches identity.
+- **How — Chris:** you already have ~47 rendered project stills. Pick the strongest on-model narrator
+  frames; fill gaps in angle/pose by fanning one strong render out (the tutorial's Qwen multi-angle
+  approach, or `draft --from <gen_id>` at higher denoise to restage).
+- **How — Celeste (different — read this):** because she had **no canon lock** until now, her 47-image
+  back-catalog has likely **drifted** (inconsistent identity). Do **not** scoop 20–30 mixed renders —
+  that trains a blurry average. Instead **bootstrap from ONE**: pick your single best Celeste render
+  (now that her canon is set), then fan *that one image* out to 20–30 via Nano Banana Pro / GPT Image
+  side-by-side or the Qwen multi-angle workflow — all derived from the one seed, so they stay on-model.
+  (This is the step we agreed to revisit together — we'll pick the seed before you fan it out.)
+- **Land them in:** `~/agent-projects/celeste-you-dangerous/refs/<CHARACTER>/` (one folder per lead).
+- **Report back:** per lead — how many frames, the angle/pose spread, and (Celeste) which seed render
+  you fanned out. Dataset consistency is the #1 driver of LoRA quality.
 
 ### Step 6.2 — Train on Ostris AI-Toolkit (RunPod — PAID, cheap 4090)
 
@@ -368,11 +406,12 @@ Deploy and train per the tutorial. This is a UI flow, not a CLI command:
 1. **Deploy** a RunPod pod with your storage volume, GPU **4090** (5090/H200 if you want speed),
    template = **Ostris** (search "Ostris AI-Toolkit"). Deploy On Demand; wait for the ready log.
 2. **Open** the AI-Toolkit UI (Connect → the web port). Default password if prompted: `password`.
-3. **Datasets → New Dataset** → name it `celeste-narrator` → drag-drop your Step-6.1 frames.
-4. **Captions:** set **just the trigger word** `celestenarr8` on **every** image — no descriptive
+3. **Datasets → New Dataset** → name it `<CHARACTER>` → drag-drop that lead's Step-6.1 frames.
+4. **Captions:** set **just the trigger word** `<TRIGGER>` on **every** image — no descriptive
    paragraphs. (The tutorial tested paragraph vs. keyword captions and found keyword-only works
-   best for Z-Image specifically.)
-5. **Job:** name the LoRA `celeste-narrator`; **Trigger Words** = `celestenarr8`.
+   best for Z-Image specifically.) **Use a distinct trigger per lead** (`celestenarr8` vs
+   `celestechar8`) so the two LoRAs never cross-fire.
+5. **Job:** name the LoRA `<CHARACTER>`; **Trigger Words** = `<TRIGGER>`.
 6. **Model:** search "Zimage" → select **"Z-Image Turbo with the training adapter"** (important —
    this is what makes fine-tuning the distilled Turbo model work; the raw Turbo weights are
    "generation only"). Untick low-VRAM on a 4090+.
@@ -380,10 +419,11 @@ Deploy and train per the tutorial. This is a UI flow, not a CLI command:
    over-trains for robustness), **learning rate `1e-5`** (or `2e-5`), resolution **1024**, caption
    dropout **0**, sample every 250 steps, **guidance scale 2**, **sample steps 16**, Cache Text
    Embeddings optional.
-8. **Create Job → Play.** Watch the 250-step sample grid: the narrator should start resolving around
+8. **Create Job → Play.** Watch the 250-step sample grid: `<CHARACTER>` should start resolving around
    **1250–1500 steps** and tighten from there.
-9. **Download** the resulting `.safetensors` when the job completes. **Delete the training pod** to
-   stop billing (your volume/LoRA download survive).
+9. **Download** the resulting `.safetensors` when the job completes. **Repeat steps 3–8 for the
+   second lead** (new dataset, new trigger, new job) — you can queue it in the same pod session.
+   **Delete the training pod** once both finish (your volume/LoRA downloads survive).
 - **Options to alter (for the validation round):** dataset size (20 vs 30), steps (3000 vs 6000),
   LR (1e-5 vs 2e-5), and rank/dim if exposed — these are exactly the knobs we'll tune if the first
   LoRA is weak or over-baked.
@@ -393,69 +433,93 @@ Deploy and train per the tutorial. This is a UI flow, not a CLI command:
 ### Step 6.3 — Place + register the LoRA (PAID sync against the inference pod)
 
 ```bash
-# Put the .safetensors where the INFERENCE ComfyUI pod can see it:
-#   ComfyUI/models/loras/celeste-narrator.safetensors   (name it to match what you'll pin)
+# Put BOTH .safetensors where the INFERENCE ComfyUI pod can see them:
+#   ComfyUI/models/loras/celeste-narrator.safetensors
+#   ComfyUI/models/loras/celeste-waitress.safetensors   (names must match what you'll pin)
 agent visual-generation model sync --endpoint <ENDPOINT>
 agent visual-generation model list
 ```
 
-- **Does:** copy the trained file into the inference pod's `models/loras/` (via the pod's volume /
-  upload), then `model sync` reads `/object_info` and registers it; `model list` should now show
-  `[lora       ] celeste-narrator.safetensors`.
+- **Does:** copy the trained files into the inference pod's `models/loras/` (via the pod's volume /
+  upload), then `model sync` reads `/object_info` and registers them; `model list` should now show
+  `[lora       ] celeste-narrator.safetensors` **and** `[lora       ] celeste-waitress.safetensors`.
 - **Optional — flag identity_bearing:** there's **no CLI flag yet** — edit
   `~/agent-data/visual-generation/models.json` and set `"identity_bearing": true` on that asset.
   **Optional for continuity** (the pin applies the LoRA regardless); it only routes outputs to the
   secured path and adds the `[identity-bearing]` markers.
 - **Report back:** the `model list` line for the LoRA (and whether you flagged it).
 
-### Step 6.4 — Pin the LoRA into canon, trigger word and all (free)
+### Step 6.4 — Pin each LoRA into its canon subject, trigger word and all (free)
+
+One pin **per lead** — the `locked`/`forbid` differ, and each bakes **its own trigger** as the first
+token of `--locked`:
 
 ```bash
+# Chris (narrator) — trigger celestenarr8 prepended; keeps his forbid list.
 agent visual-generation canon set celeste-you-dangerous \
   --alias "the narrator" --alias "narrator" --alias "@narrator" \
+  --alias "Chris" --alias "the man" \
   --locked "celestenarr8, a felt-and-clay stop-motion puppet of a young Black man, deep caramel-brown felt skin, long black yarn dreadlocks falling to mid-back" \
   --forbid "short hair" --forbid "shoulder-length" --forbid "buzz cut" \
   --lora celeste-narrator.safetensors:0.8
+
+# Celeste (waitress) — trigger celestechar8 prepended; NO --forbid (forbid-bleed caveat, §0.2).
+agent visual-generation canon set celeste-you-dangerous \
+  --alias "Celeste" --alias "the waitress" \
+  --locked "celestechar8, a felt-and-clay stop-motion puppet of a young woman, smooth matte felt skin, long black yarn hair falling just past her shoulders, bare felt face with no makeup, glossy black stitched sewing-button eyes" \
+  --lora celeste-waitress.safetensors:0.8
 ```
 
-- **Does:** re-upserts the narrator subject **with** the character LoRA. **Note the trigger word
-  `celestenarr8` is now the first token of `--locked`** — this is the integration detail that makes
-  it work: a LoRA only activates when its trigger word is in the prompt, so baking the trigger into
-  the locked descriptor means canon injects *both* the trigger (fires the LoRA) *and* pins the LoRA
-  into the stack — text and model identity travel together.
-- **Expected:** the echo now includes a `lora: celeste-narrator.safetensors@0.8` line.
-- **Verify it stuck:** `agent visual-generation canon show celeste-you-dangerous` → the subject
-  shows the `lora:` line and the trigger-prefixed `locked`.
+- **Does:** re-upserts each subject **with** its character LoRA. **The trigger word is the first
+  token of `--locked`** — the integration detail that makes it work: a LoRA only activates when its
+  trigger is in the prompt, so baking the trigger into the locked descriptor means canon injects
+  *both* the trigger (fires that lead's LoRA) *and* pins it — text and model identity travel together,
+  per subject, so each lead fires only its own LoRA.
+- **Expected:** each echo includes its `lora:` line; `canon show` lists **two subjects**, each with a
+  trigger-prefixed `locked` and a `lora:` line.
 - **Options to alter:**
-  - `:STRENGTH` — omit for `1.0`; lower (`:0.6`) if the LoRA over-powers the scene, higher if the
-    identity is weak. (This is the main dial in the validation round.)
+  - `:STRENGTH` per lead — `0.8` start; lower (`:0.6`) if a LoRA over-powers the scene, higher if the
+    identity is weak. (The main dial in the validation round — tune each lead independently.)
   - `NAME` must match the registry asset name exactly (from `model list`).
-- **⚠ Note:** `--lora` (like any `canon set`) **replaces** the subject — always re-pass
-  `--alias`/`--locked`/`--forbid` or you'll drop them. Copy the values from `canon show` first.
+- **⚠ Two notes:** (1) `canon set` **replaces** the subject — re-pass *all* of its
+  `--alias`/`--locked`/`--forbid` each time or you'll drop them (copy from `canon show` first).
+  (2) Keep the **forbid-bleed** rule from §0.2 — that's why Celeste carries no `--forbid`.
 
-### Step 6.5 — Draft and confirm the pin (free)
+### Step 6.5 — Draft and confirm the pins (free) — including the two-shot test
+
+The single-lead case proves each pin fires; the **two-shot** (a scene with both Chris and Celeste —
+scenes 2–4) is the real multi-subject test: both subjects must fire **independently**.
 
 ```bash
+# Solo lead (Arrival is Chris only):
 agent visual-generation draft --project celeste-you-dangerous --scene "Arrival" \
   --points "wide establishing shot" --points "dusk"
+
+# Two-shot (both leads — the multi-subject test):
+agent visual-generation draft --project celeste-you-dangerous \
+  --scene "The Adversity and the Advesary" --points "Chris and Celeste at the bar, mid two-shot"
 ```
 
-- **Expected — look for:**
-  - The `Prompt:` begins with the trigger word `celestenarr8` (canon injected it).
-  - `LoRAs:    celeste-narrator.safetensors@0.8` on the spec.
-  - `── Canon enforced ──` lists `injected canon for 'the narrator'` **and**
-    `pinned canon LoRA 'celeste-narrator.safetensors'@0.8`.
-  - `Model: … [identity-bearing]` **if** you flagged the LoRA identity_bearing.
-  - **⚠ if you see** `N LoRA(s) won't apply: this template has no LoRA loader slots` — the resolved
-    template can't load a LoRA. Force a LoRA-capable template with `--template <name>` (check
-    `workflow list`). This advisory is the feature working — surfacing a silent drop, not hiding it.
+- **Expected — solo (Arrival):**
+  - `Prompt:` begins with `celestenarr8`; `LoRAs:  celeste-narrator.safetensors@0.8`.
+  - `── Canon enforced ──` lists `injected canon for 'the narrator'` **and** `pinned canon LoRA 'celeste-narrator.safetensors'@0.8`.
+- **Expected — two-shot:** **both** subjects fire — the prompt carries **both** triggers
+  (`celestenarr8` *and* `celestechar8`), `LoRAs:` lists **both** `.safetensors@0.8`, and
+  `── Canon enforced ──` shows two `injected canon …` + two `pinned canon LoRA …` notes.
+  - `Model: … [identity-bearing]` if you flagged either LoRA.
+  - **⚠ Template slot count matters on two-shots.** A two-LoRA scene needs a template with **two**
+    loader slots (`lora_0`, `lora_1`). The draft-time `N LoRA(s) won't apply …` advisory only fires
+    when the template has **zero** loader slots — it does **not** currently catch the "1 slot, 2
+    LoRAs" case, so the second LoRA could **silently drop** at generate. So: before generating a
+    two-shot, confirm your chosen template actually exposes two loader slots (`workflow list`), and
+    eyeball the generate output for both identities. (Flagged as a known gap — tell me if you hit it
+    and we'll add an insufficient-slots warning.)
 - **Try this to verify behavior:**
-  1. Draft a scene that **doesn't** name the narrator → the LoRA should **not** be pinned and the
-     trigger should **not** appear (pin is scoped to subject presence). Confirms it's not blind.
-  2. A draft where the LLM also picks the same LoRA → confirm the pin **dedupes** (one entry, your
-     `0.8` kept), not doubled.
-- **Report back:** the `Prompt:` head (trigger present?), the `LoRAs:` line, and the `pinned canon
-  LoRA …` note (plus any ⚠ won't-apply line).
+  1. A scene naming **neither** lead → **no** triggers, **no** LoRAs pinned (scoped to presence).
+  2. Confirm the two-shot didn't **cross-fire** — Chris's text doesn't get Celeste's LoRA and vice
+     versa; each subject pins only its own.
+- **Report back:** the two-shot `Prompt:` head (both triggers?), `LoRAs:` line (both?), the two
+  `pinned canon LoRA …` notes, and any ⚠ won't-apply line.
 
 ### Step 6.6 — Build a LoRA-pinned batch + generate (free build, PAID generate)
 
@@ -465,13 +529,14 @@ agent visual-generation batch list /tmp/celeste-lora.batch.md
 agent visual-generation generate /tmp/celeste-lora.batch.md --all --endpoint <ENDPOINT> --gpu-rate 2.09
 ```
 
-- **Does:** every scene naming the narrator gets the trigger word + LoRA, so the face holds across
-  all four scenes — the durable counterpart to Workflow 5's img2img anchor.
-- **Verify:** open `/tmp/celeste-lora.batch.md` and confirm each narrator scene's prompt starts with
-  `celestenarr8` and carries the LoRA in `lora_stack`. After generate, eyeball cross-scene
-  consistency — this is the payoff shot of the whole feature.
-- **Report back:** whether trigger+LoRA appear in each scene's spec, and how consistent the narrator
-  looks scene-to-scene (vs. Workflow 5's img2img anchor, if you ran it).
+- **Does:** each scene gets the trigger(s) + LoRA(s) for whichever lead(s) it names — Arrival just
+  Chris; scenes 2–4 both — so each face holds across all four scenes. The durable counterpart to
+  Workflow 5's img2img anchor.
+- **Verify:** open `/tmp/celeste-lora.batch.md` — Arrival's spec carries `celestenarr8` + the
+  narrator LoRA; the two-shot scenes carry **both** triggers + **both** LoRAs. After generate,
+  eyeball cross-scene consistency for **each** lead — this is the payoff shot of the whole feature.
+- **Report back:** per scene, which triggers+LoRAs landed, any ⚠ won't-apply (two-slot template?),
+  and how consistent each lead looks scene-to-scene (vs. Workflow 5's img2img anchor, if you ran it).
 
 ---
 
