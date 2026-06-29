@@ -17,6 +17,12 @@ class RuntimeConfig(BaseSettings):
 
     anthropic_api_key: str = Field(validation_alias="PRODUCTION_AGENTS_ANTHROPIC_API_KEY")
     orchestrator_anthropic_api_key: str | None = None
+    openai_api_key: str | None = Field(
+        default=None, validation_alias="PRODUCTION_AGENTS_OPENAI_API_KEY"
+    )
+    default_llm_provider: str = Field(
+        default="anthropic", validation_alias="PRODUCTION_AGENTS_DEFAULT_LLM_PROVIDER"
+    )
     voyage_api_key: str
     tavily_api_key: str | None = None
     elevenlabs_api_key: str | None = None

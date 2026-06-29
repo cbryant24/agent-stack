@@ -65,6 +65,7 @@ from agent_runtime.knowledge import (
     ingest_docs_sync,
     parse_docs,
 )
+from agent_runtime.llm import LLMCompletion, LLMProvider, get_provider
 
 __all__ = [
     "__version__",
@@ -133,4 +134,8 @@ __all__ = [
     "parse_docs",
     "ingest_docs",
     "ingest_docs_sync",
+    # llm provider seam
+    "LLMProvider",
+    "LLMCompletion",
+    "get_provider",
 ]

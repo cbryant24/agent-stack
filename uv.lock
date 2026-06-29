@@ -29,6 +29,7 @@ name = "agent-runtime"
 version = "0.1.0"
 source = { editable = "packages/agent-runtime" }
 dependencies = [
+    { name = "anthropic" },
     { name = "click" },
     { name = "httpx" },
     { name = "jinja2" },
@@ -48,6 +49,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = ">=0.40" },
     { name = "click", specifier = ">=8.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
