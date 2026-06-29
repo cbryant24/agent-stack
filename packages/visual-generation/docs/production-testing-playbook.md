@@ -32,10 +32,14 @@ workflow, capture the marked output, and report back; we adjust from there.
   spends GPU and needs a live pod.
 - **`<ENDPOINT>`** = your pod's ComfyUI URL on port 8188 (e.g. `https://<pod-id>-8188.proxy.runpod.net`),
   printed by `scripts/pod up`.
-- **`<GEN_ID>` / `<SPEC_ID>`** = ids echoed by earlier steps. **`report` needs the FULL gen id** (it
-  does an exact point-id lookup — a 12-char prefix fails with "not found"). You don't have to copy it
-  by hand: `generate` and `review-pending` now print a ready `React: agent visual-generation report
-  <full-id> --reaction <…>` line — paste that.
+- **`<SPEC_ID>` vs `<GEN_ID>` — these are different ids, and mixing them is the #1 papercut.**
+  - **`<SPEC_ID>`** = a *recipe*, from `draft` (`Spec:`) / `batch list`. It's what **`generate --section`** consumes.
+  - **`<GEN_ID>`** = a *rendered image*, a **new** id `generate` mints per render (`Gen id:` / `React:`). It's what **`report`** and **`chain show`** consume.
+  - So: `draft` → spec id → `generate --section <spec id>` → **new** gen id → `report <gen id>`.
+    Passing a spec id to `report` fails with "no generation with id …" — that's the mixup, not a bug.
+  - **`report` needs the FULL gen id** (exact point-id lookup; a 12-char prefix also fails). Don't
+    copy by hand: `generate` and `review-pending` print a ready `React: agent visual-generation
+    report <full-gen-id> --reaction <…>` line — paste that.
 - **Project facts this playbook assumes** (already true on your machine):
   - Slug: `celeste-you-dangerous`; docs at `~/agent-projects/celeste-you-dangerous/` (`directed.md`, `script.md`, `techniques.md`, `story.md`).
   - `directed.md` scenes: **Arrival**, **The Adversity and the Advesary**, **The Win and the Loss**, **Again and Again**.

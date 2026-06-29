@@ -181,4 +181,7 @@ def test_cli_report_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("visual_generation.cli.report_sync", lambda *a, **k: None)
     out = CliRunner().invoke(cli, ["report", "missing", "--reaction", "liked"])
     assert out.exit_code != 0
-    assert "not found" in out.output
+    assert "no generation with id 'missing'" in out.output
+    # The message disambiguates the common spec-id/gen-id mixup and points to the recovery path.
+    assert "SPEC id" in out.output
+    assert "review-pending" in out.output

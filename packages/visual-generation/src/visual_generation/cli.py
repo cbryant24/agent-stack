@@ -684,7 +684,15 @@ def report(gen_id: str, reaction: str, rating: int | None,
         )
     gen = report_sync(gen_id, reaction, rating=rating, notes=notes, context=context)
     if gen is None:
-        click.echo(f"Error: generation '{gen_id}' not found.", err=True)
+        click.echo(
+            f"Error: no generation with id '{gen_id}'.\n"
+            "  • `report` needs a GENERATION id — from `generate`'s `Gen id:` / `React:` line.\n"
+            "  • A SPEC id (from `draft` or `batch list`) is a different id; you can't report a\n"
+            "    spec that hasn't been rendered yet — run `generate` first.\n"
+            "  • To see rendered generations + their ready report commands:\n"
+            "      agent visual-generation review-pending",
+            err=True,
+        )
         raise SystemExit(1)
     rating_str = f" ★{rating}" if rating is not None else ""
     click.echo(f"Recorded: {gen_id[:12]} → {reaction}{rating_str}")
