@@ -133,7 +133,7 @@ def model_list() -> None:
     registry = ModelRegistry()
     assets = registry.list_models()
     if not assets:
-        click.echo("No models registered. Run: visual-generation model sync --endpoint <url>")
+        click.echo("No models registered. Run: agent visual-generation model sync --endpoint <url>")
         return
     click.echo(f"{len(assets)} registered asset(s):\n")
     for a in sorted(assets, key=lambda x: (x.kind, x.name)):
@@ -409,12 +409,12 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
     if result.research_offer:
         click.echo(
             f"\nKnowledge gap — little local context for this. Consider (Step 5):\n"
-            f'  visual-generation research "{result.research_offer}"'
+            f'  agent visual-generation research "{result.research_offer}"'
         )
 
     if result.batch_path:
         click.echo(f"\nAppended to: {result.batch_path}")
-        click.echo(f"Next: visual-generation generate {result.batch_path} --section "
+        click.echo(f"Next: agent visual-generation generate {result.batch_path} --section "
                    f"{spec.spec_id} --endpoint <url>")
 
 
@@ -487,7 +487,7 @@ def redraft(gen_id: str, change: str, output: str | None, project: str | None,
 
     if result.batch_path:
         click.echo(f"\nAppended to: {result.batch_path}")
-        click.echo(f"Next: visual-generation generate {result.batch_path} --section "
+        click.echo(f"Next: agent visual-generation generate {result.batch_path} --section "
                    f"{spec.spec_id} --endpoint <url>")
 
 
@@ -556,7 +556,8 @@ def _run_batch(project: str, output: str | None, model: str | None, provider: st
             click.echo(f"  • {r.spec.spec_id}  {r.spec.heading}{srcs}")
     if drafted:
         click.echo(f"\nWrote: {drafted[0].batch_path}")
-        click.echo("Review/edit, then: visual-generation generate <batch> --all --endpoint <url>")
+        click.echo(f"Review/edit, then: agent visual-generation generate {drafted[0].batch_path} "
+                   "--all --endpoint <url>")
 
 
 # ── generate (Phase B — GPU spend, soft-inform gate) ─────────────────────────
@@ -637,6 +638,9 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
         click.echo(f"GPU cost: ${r.gpu_cost_usd:.4f}  (running ${r.session_cost_running_usd:.4f})")
         if r.rationale:
             click.echo(f"Recipe:   {r.rationale}")
+        click.echo(f"Gen id:   {r.generation_id}")
+        click.echo(f"React:    agent visual-generation report {r.generation_id} "
+                   f"--reaction <{'|'.join(REACTIONS)}>")
     if result.skip_reasons:
         click.echo("\nSkipped:")
         for reason in result.skip_reasons:
@@ -650,7 +654,7 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
         click.echo("Stop your pod now to stop GPU billing — the agent issues no RunPod stop.")
         click.echo("⚠ Idle warning: every minute the pod stays up keeps billing, even idle.")
 
-    click.echo("\nReview, then: visual-generation report <gen_id> --reaction <X>")
+    click.echo("\nReview each asset, then run its `React:` command above (the gen id is filled in).")
     if result.report_path:
         click.echo(f"\nReport: {result.report_path}")
 
@@ -759,8 +763,9 @@ def digest(project: str, limit: int) -> None:
         if pending:
             click.echo(f"\n── Awaiting your reaction ({len(pending)}) ───────────────")
             for g in pending:
-                click.echo(f"  {g.entry_id[:12]}  {(g.caption or g.prompt or '')[:70]}")
-            click.echo("  → record with: visual-generation report <id> <reaction>")
+                click.echo(f"  {(g.caption or g.prompt or '')[:66]}")
+                click.echo(f"    agent visual-generation report {g.entry_id} "
+                           f"--reaction <{'|'.join(REACTIONS)}>")
 
         if lessons:
             click.echo(f"\n── Confirmed technique lessons ({len(lessons)}) ──────────")

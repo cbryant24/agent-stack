@@ -18,6 +18,7 @@ from typing import Any
 
 from agent_runtime import MemoryStore, get_memory_store
 
+from visual_generation.constants import REACTIONS
 from visual_generation.models import TechniqueLesson, VisualGeneration, WorkflowTemplate
 from visual_generation.store import VisualGenerationStore
 
@@ -72,7 +73,8 @@ def render_pending(gens: list[VisualGeneration]) -> str:
             tag = "  [identity-bearing]" if gen.identity_bearing else ""
             lines.append(f"  Asset:    {gen.asset_path}{tag}")
         lines.append(f"  Created:  {gen.created_at}")
-        lines.append("  Use: visual-generation report <id> --reaction <X>")
+        lines.append(f"  React: agent visual-generation report {gen.entry_id} "
+                     f"--reaction <{'|'.join(REACTIONS)}>")
         lines.append("")
     return "\n".join(lines).rstrip("\n")
 

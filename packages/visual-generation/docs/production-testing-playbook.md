@@ -32,7 +32,10 @@ workflow, capture the marked output, and report back; we adjust from there.
   spends GPU and needs a live pod.
 - **`<ENDPOINT>`** = your pod's ComfyUI URL on port 8188 (e.g. `https://<pod-id>-8188.proxy.runpod.net`),
   printed by `scripts/pod up`.
-- **`<GEN_ID>` / `<SPEC_ID>`** = ids echoed by earlier steps (12-char prefixes are fine for `report`).
+- **`<GEN_ID>` / `<SPEC_ID>`** = ids echoed by earlier steps. **`report` needs the FULL gen id** (it
+  does an exact point-id lookup — a 12-char prefix fails with "not found"). You don't have to copy it
+  by hand: `generate` and `review-pending` now print a ready `React: agent visual-generation report
+  <full-id> --reaction <…>` line — paste that.
 - **Project facts this playbook assumes** (already true on your machine):
   - Slug: `celeste-you-dangerous`; docs at `~/agent-projects/celeste-you-dangerous/` (`directed.md`, `script.md`, `techniques.md`, `story.md`).
   - `directed.md` scenes: **Arrival**, **The Adversity and the Advesary**, **The Win and the Loss**, **Again and Again**.
@@ -202,7 +205,8 @@ agent visual-generation generate \
     (`Spend ~$… ?`) — answer `y`.
   - `── Generation <id> (spec …) ──` with `Asset: <path>`; `[identity-bearing → secured path]`
     appended **only** if the spec used an identity-bearing model/LoRA.
-  - `Review, then: visual-generation report <gen_id> …` and a `Report:` path.
+  - Per generation: a `Gen id:  <full-id>` line and a ready `React: agent visual-generation report
+    <full-id> --reaction <…>` command (paste it in Step 2.3), plus a `Report:` path.
 - **Options to alter:**
   - `--all` instead of `--section` — render every spec in the batch (used in Workflow 4).
   - `--gpu-rate 2.09` — set the $/hr used for cost tracking (default 0.69; set it to your real pod rate for honest numbers).
@@ -212,8 +216,11 @@ agent visual-generation generate \
 
 ### Step 2.3 — Report (free — closes the memory loop)
 
+Paste the `React:` command Step 2.2 printed (it has the full gen id filled in) and add your taste
+notes — `--reaction` plus optional `--rating`/`--notes`/`--context`:
+
 ```bash
-agent visual-generation report <GEN_ID> --reaction liked --rating 4 \
+agent visual-generation report <full-gen-id-from-the-React-line> --reaction liked --rating 4 \
   --notes "dreadlocks read well; push the neon cooler next time" \
   --context "rooftop establishing shot for Arrival"
 ```

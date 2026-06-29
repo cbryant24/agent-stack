@@ -114,6 +114,11 @@ def test_cli_generate_gate_and_stop_prompt(monkeypatch: pytest.MonkeyPatch, tmp_
     assert "GPU cost gate" in out.output
     assert "Est. session cost" in out.output
     assert "(default)" in out.output
+    # The FULL gen id (not a 12-char prefix) + a ready, agent-prefixed report command — so the
+    # echoed value can be pasted straight into `report` (it does an exact point-id lookup).
+    assert "gen-123456789012" in out.output
+    assert "agent visual-generation report gen-123456789012 --reaction" in out.output
+    assert "<loved|liked|" in out.output  # reaction vocabulary is filled in
     # Drain → stop-prompt + idle warning (advisory; no RunPod stop).
     assert "Batch drained" in out.output
     assert "Stop your pod" in out.output
