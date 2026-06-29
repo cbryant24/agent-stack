@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import TYPE_CHECKING
 
 from agent_runtime.llm import LLMProvider
 from agent_runtime.tracing import record_llm_call
@@ -21,6 +22,9 @@ from agent_runtime.tracing import record_llm_call
 from visual_generation.constants import MAX_DRAFT_TOKENS
 from visual_generation.models import ModelAsset, VisualGeneration, WorkflowTemplate
 from visual_generation.retrieval import RetrievedContext, build_context_prompt
+
+if TYPE_CHECKING:
+    from visual_generation.canon import CanonSubject
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +129,33 @@ def _format_models(models: list[ModelAsset]) -> str:
     return "\n".join(lines)
 
 
+def _format_cast(cast: list[CanonSubject]) -> str:
+    """One line per canon subject the scene features: primary name, other plain aliases,
+    and the locked appearance the model must honor."""
+    lines: list[str] = []
+    for s in cast:
+        others = [a for a in s.aliases[1:] if not a.startswith("@")]
+        also = f" (also called: {', '.join(others)})" if others else ""
+        lines.append(f'- "{s.aliases[0]}"{also}: {s.locked}')
+    return "\n".join(lines)
+
+
+def _cast_block(cast: list[CanonSubject] | None) -> str:
+    """Composition-time canon: instruct the model to render the scene's canon characters
+    by name with their locked look, so identity is in the prompt before the deterministic
+    `enforce_canon` pass (which then matches the alias and pins the LoRA). Empty when the
+    scene names no canon subject."""
+    if not cast:
+        return ""
+    return (
+        "\nProject canon — characters this scene features. Render EACH of them by name, "
+        "present and recognizable in the shot; do not omit them and do not restyle their "
+        "hair, build, skin, or face. Name the character in the prompt (the exact locked "
+        "descriptor is injected deterministically afterward, so place and pose them rather "
+        "than paraphrasing their appearance):\n" + _format_cast(cast) + "\n"
+    )
+
+
 def _build_user_message(
     intent: str,
     ctx: RetrievedContext,
@@ -132,8 +163,10 @@ def _build_user_message(
     models: list[ModelAsset],
     parent: VisualGeneration | None = None,
     revise: bool = False,
+    cast: list[CanonSubject] | None = None,
 ) -> str:
     context_block = build_context_prompt(ctx) if not ctx.is_empty() else "(no prior context)"
+    cast_block = _cast_block(cast)
     if template is not None:
         slots = ", ".join(sorted(template.slot_map.keys())) or "(none)"
         template_block = (
@@ -196,7 +229,7 @@ Craft one settled generation spec that applies this change to the source."""
 
     return f"""Creative intent:
 {intent}
-
+{cast_block}
 {template_block}
 
 Available models (pick model/LoRA names from these):
@@ -219,6 +252,7 @@ async def craft_spec(
     refinement: bool = False,
     revise: bool = False,
     model: str | None = None,
+    cast: list[CanonSubject] | None = None,
 ) -> dict:
     """Run the craft chain once (retry once on a parse failure), returning the spec dict.
 
@@ -242,7 +276,7 @@ async def craft_spec(
         system = _SYSTEM_PROMPT + _REVISE_MODE_SYSTEM
     else:
         system = _SYSTEM_PROMPT
-    user_message = _build_user_message(intent, ctx, template, models, parent, revise=revise)
+    user_message = _build_user_message(intent, ctx, template, models, parent, revise=revise, cast=cast)
     valid_model_names = {m.name for m in models}
     resolved = provider.resolve_model(model)
 

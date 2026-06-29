@@ -322,7 +322,7 @@ def test_batch_rm_removes_only_the_target(tmp_path: Path) -> None:
     target = before[1]
     survivors = [before[0], before[2]]
 
-    result = CliRunner().invoke(cli, ["batch", "rm", str(path), target.spec_id, "--yes"])
+    result = CliRunner().invoke(cli, ["batch", "rm", target.spec_id, str(path), "--yes"])
     assert result.exit_code == 0
 
     after = read_batch(path).specs
@@ -333,6 +333,29 @@ def test_batch_rm_removes_only_the_target(tmp_path: Path) -> None:
 
 def test_batch_rm_unknown_id_errors(tmp_path: Path) -> None:
     path = _batch_file(tmp_path)
-    result = CliRunner().invoke(cli, ["batch", "rm", str(path), "no-such-id", "--yes"])
+    result = CliRunner().invoke(cli, ["batch", "rm", "no-such-id", str(path), "--yes"])
     assert result.exit_code != 0
     assert "No spec with id" in result.output
+
+
+def test_batch_rm_resolves_by_project_slug(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`batch rm <spec_id> --project <slug>` finds the default batch file — no path needed."""
+    import importlib
+
+    from visual_generation.batch_file import read_batch
+
+    path = _batch_file(tmp_path)
+    target = read_batch(path).specs[0]
+    # The default-path resolver is imported lazily from draft; point it at our temp file.
+    draft_mod = importlib.import_module("visual_generation.draft")
+    monkeypatch.setattr(draft_mod, "_default_batch_path", lambda project: path)
+
+    result = CliRunner().invoke(cli, ["batch", "rm", target.spec_id, "--project", "proj", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert target.spec_id not in [s.spec_id for s in read_batch(path).specs]
+
+
+def test_batch_rm_without_path_or_project_is_a_usage_error(tmp_path: Path) -> None:
+    result = CliRunner().invoke(cli, ["batch", "rm", "some-spec-id"])
+    assert result.exit_code != 0
+    assert "BATCH_FILE path or --project" in result.output

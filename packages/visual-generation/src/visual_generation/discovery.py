@@ -41,6 +41,11 @@ class CompiledContext:
     text: str
     query: str
     sources: list[str] = field(default_factory=list)
+    # The narrative scene body alone (the chosen `##` section, or the whole narrative doc
+    # when no scene is named) — the "who/what is in THIS shot" text. Canon-cast detection
+    # scans this, not `text`, so a lead named only in whole-doc context (story.md) isn't
+    # mistaken for being present in an establishing shot.
+    focus: str = ""
 
 
 def _read_doc(folder: Path, name: str) -> str | None:
@@ -108,6 +113,7 @@ def compile_creative_input(
 
     parts: list[str] = []
     sources: list[str] = []
+    focus = ""
     if key_points:
         parts.append("Key points from the director:\n" + "\n".join(f"- {p}" for p in key_points))
 
@@ -127,6 +133,7 @@ def compile_creative_input(
                     body, label = section, f"{name} (scene: {scene})"
             parts.append(f"[from {label}]:\n{_excerpt(body)}")
             sources.append(label)
+            focus = body  # the scene body (or whole narrative doc) — for canon-cast detection
             break
 
         # Whole-doc context.
@@ -142,4 +149,4 @@ def compile_creative_input(
     if scene:
         query = f"{query}; {scene}" if query else scene
 
-    return CompiledContext(text="\n\n".join(parts), query=query, sources=sources)
+    return CompiledContext(text="\n\n".join(parts), query=query, sources=sources, focus=focus)

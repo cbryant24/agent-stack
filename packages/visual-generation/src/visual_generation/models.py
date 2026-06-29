@@ -319,6 +319,7 @@ class DraftResult(BaseModel):
     inert_inheritance: list[str] = Field(default_factory=list)  # inherited attrs the template can't apply
     revise_warnings: list[str] = Field(default_factory=list)  # redraft advisories (e.g. parent was img2img)
     canon_applied: list[str] = Field(default_factory=list)  # deterministic canon edits made to the prompt
+    canon_absent: list[str] = Field(default_factory=list)  # scene-named canon subjects missing from the prompt
     research_offer: str | None = None  # a gap topic to OFFER (never auto-run)
     overall_reasoning: str = ""
     run_id: str = ""

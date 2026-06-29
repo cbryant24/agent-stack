@@ -197,6 +197,92 @@ def test_draft_pins_canon_character_lora(
     assert any("pinned canon LoRA" in note for note in result.canon_applied)
 
 
+def _patch_scene(monkeypatch, draft_mod, *, focus: str) -> None:
+    """Force the compiled scene body (so cast detection has a known scene to scan) without
+    touching disk."""
+    from visual_generation.discovery import CompiledContext
+
+    monkeypatch.setattr(
+        draft_mod, "compile_creative_input",
+        lambda *a, **k: CompiledContext(
+            text=f"[from directed.md (scene: Arrival)]:\n{focus}", query="wide shot",
+            sources=["directed.md (scene: Arrival)"], focus=focus,
+        ),
+    )
+
+
+def _patch_cast(monkeypatch, draft_mod) -> "object":
+    """Stub scene_cast to a content-sensitive fake: the narrator subject is 'named' iff the
+    text mentions narrator/Chris. So the SAME stub returns the subject for the scene body
+    but NOT for a characterless prompt — driving the absent check honestly."""
+    import re
+
+    from visual_generation.canon import CanonSubject
+
+    narrator = CanonSubject(aliases=["the narrator", "Chris"], locked="felt puppet, dreadlocks")
+
+    def fake(text, project, **kw):
+        return [narrator] if project and re.search(r"narrator|Chris", text or "", re.I) else []
+
+    monkeypatch.setattr(draft_mod, "scene_cast", fake)
+    # No-op the deterministic canon edits so the prompt is left as the LLM wrote it.
+    monkeypatch.setattr(draft_mod, "enforce_canon", lambda p, proj, **k: (p, []))
+    monkeypatch.setattr(draft_mod, "canon_loras_for", lambda p, proj, **k: [])
+    return narrator
+
+
+def test_draft_flags_canon_character_absent_from_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
+) -> None:
+    """The scene names Chris, but the crafted prompt is a characterless cityscape — the
+    dropped lead is surfaced as an advisory (not silently ignored)."""
+    from visual_generation.draft import draft_sync
+
+    import importlib
+    draft_mod = importlib.import_module("visual_generation.draft")
+    _patch_scene(monkeypatch, draft_mod, focus="a man named Chris arrives in Argentina")
+    _patch_chain(monkeypatch, RetrievedContext(),
+                 _crafted(prompt="a wide empty neon cityscape at dusk, no people"))
+    _patch_cast(monkeypatch, draft_mod)
+
+    store = _store(flux_template, [ModelAsset(name="flux1-dev.safetensors", kind="checkpoint")])
+    result = draft_sync(
+        "wide shot", batch_path=tmp_path / "celeste.batch.md", template_name="flux-txt2img",
+        project="celeste", scene="Arrival",
+        store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
+    )
+
+    assert len(result.canon_absent) == 1
+    assert "the narrator" in result.canon_absent[0]
+    assert "Arrival" in result.canon_absent[0]
+
+
+def test_draft_no_absent_flag_and_passes_cast_to_craft_when_subject_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
+) -> None:
+    """When the crafted prompt does name the scene's canon character, no advisory fires —
+    and the cast was handed to the craft step so composition could place them."""
+    from visual_generation.draft import draft_sync
+
+    import importlib
+    draft_mod = importlib.import_module("visual_generation.draft")
+    _patch_scene(monkeypatch, draft_mod, focus="a man named Chris arrives in Argentina")
+    craft = AsyncMock(return_value=_crafted(prompt="the narrator stands at a neon bar"))
+    monkeypatch.setattr(draft_mod, "retrieve_context", AsyncMock(return_value=RetrievedContext()))
+    monkeypatch.setattr(draft_mod, "craft_spec", craft)
+    narrator = _patch_cast(monkeypatch, draft_mod)
+
+    store = _store(flux_template, [ModelAsset(name="flux1-dev.safetensors", kind="checkpoint")])
+    result = draft_sync(
+        "wide shot", batch_path=tmp_path / "celeste.batch.md", template_name="flux-txt2img",
+        project="celeste", scene="Arrival",
+        store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
+    )
+
+    assert result.canon_absent == []
+    assert craft.await_args.kwargs["cast"] == [narrator]
+
+
 def test_draft_canon_lora_not_duplicated_when_already_present(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
 ) -> None:

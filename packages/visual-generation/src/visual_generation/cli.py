@@ -396,6 +396,11 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
         for note in result.canon_applied:
             click.echo(f"  • {note}")
 
+    if result.canon_absent:
+        click.echo("\n⚠ Canon character(s) named in this scene but ABSENT from the prompt:")
+        for note in result.canon_absent:
+            click.echo(f"  • {note}")
+
     if result.tutor_notes:
         click.echo("\n── Your own technique lessons (relevant) ────────────")
         for note in result.tutor_notes:
@@ -633,12 +638,16 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
     click.echo(f"Generated:    {result.items_processed} spec(s)")
     click.echo(f"Session cost: ${result.session_cost_usd:.4f}  (GPU, agent-local)")
     for r in result.results:
-        click.echo(f"\n── Generation {r.generation_id[:12]} (spec {r.spec_id}) ──")
+        # Full gen id in the header — it's what `report` needs (exact point-id lookup) and
+        # equals the asset filename stem. Never truncate it here: a clipped id looks
+        # copy-pasteable but Qdrant rejects it as an invalid point id. Spec id goes on its
+        # own line below (you don't report a spec).
+        click.echo(f"\n── Generation {r.generation_id} ──")
+        click.echo(f"Spec:     {r.spec_id}")
         click.echo(f"Asset:    {r.asset_path}" + ("  [identity-bearing → secured path]" if r.identity_bearing else ""))
         click.echo(f"GPU cost: ${r.gpu_cost_usd:.4f}  (running ${r.session_cost_running_usd:.4f})")
         if r.rationale:
             click.echo(f"Recipe:   {r.rationale}")
-        click.echo(f"Gen id:   {r.generation_id}")
         click.echo(f"React:    agent visual-generation report {r.generation_id} "
                    f"--reaction <{'|'.join(REACTIONS)}>")
     if result.skip_reasons:
@@ -695,7 +704,7 @@ def report(gen_id: str, reaction: str, rating: int | None,
         )
         raise SystemExit(1)
     rating_str = f" ★{rating}" if rating is not None else ""
-    click.echo(f"Recorded: {gen_id[:12]} → {reaction}{rating_str}")
+    click.echo(f"Recorded: {gen_id} → {reaction}{rating_str}")
 
 
 # ── Inspect (review-pending / chain show / recall) — pure reads ───────────────
@@ -887,11 +896,34 @@ def batch_rebuild(project: str, output: str | None, model: str | None, provider:
                source=source, denoise=denoise, template_name=template_name)
 
 
+def _resolve_batch_path(batch_file: str | None, project: str | None) -> Path:
+    """Locate the batch file from an explicit path OR a --project slug (the default
+    `<project>.batch.md`, same as draft/generate), so you can manage a batch by the same
+    slug you drafted it with instead of typing the full path."""
+    from visual_generation.draft import _default_batch_path
+
+    if batch_file:
+        path = Path(batch_file)
+    elif project:
+        path = _default_batch_path(project)
+    else:
+        raise click.UsageError("Give a BATCH_FILE path or --project <slug>.")
+    if not path.is_file():
+        hint = "Check the path." if batch_file else f"Has '{project}' been drafted yet?"
+        raise click.UsageError(f"No batch file at {path}. {hint}")
+    return path
+
+
 @batch.command("list")
-@click.argument("batch_file", type=click.Path(exists=True, dir_okay=False))
-def batch_list(batch_file: str) -> None:
-    """List the specs in BATCH_FILE (spec_id, section title, workflow_ref)."""
-    parsed = read_batch(Path(batch_file))
+@click.argument("batch_file", required=False, type=click.Path(dir_okay=False))
+@click.option("--project", "-p", default=None,
+              help="Resolve the default <project>.batch.md instead of passing a path.")
+def batch_list(batch_file: str | None, project: str | None) -> None:
+    """List the specs in a batch (spec_id, section title, workflow_ref).
+
+    Target it by BATCH_FILE path or by --project <slug> (the same default batch file
+    draft/generate use)."""
+    parsed = read_batch(_resolve_batch_path(batch_file, project))
     if not parsed.specs:
         click.echo("No specs in this batch file.")
         return
@@ -902,12 +934,19 @@ def batch_list(batch_file: str) -> None:
 
 
 @batch.command("rm")
-@click.argument("batch_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("spec_id")
+@click.argument("batch_file", required=False, type=click.Path(dir_okay=False))
+@click.option("--project", "-p", default=None,
+              help="Resolve the default <project>.batch.md instead of passing a path.")
 @click.option("--yes", "-y", is_flag=True, default=False, help="Delete without the confirmation prompt.")
-def batch_rm(batch_file: str, spec_id: str, yes: bool) -> None:
-    """Remove the spec with SPEC_ID from BATCH_FILE (other specs are untouched)."""
-    path = Path(batch_file)
+def batch_rm(spec_id: str, batch_file: str | None, project: str | None, yes: bool) -> None:
+    """Remove the spec with SPEC_ID from a batch (other specs are untouched).
+
+    Target the batch by --project <slug> (recommended) or a trailing BATCH_FILE path:
+
+        agent visual-generation batch rm <spec_id> --project celeste-you-dangerous
+    """
+    path = _resolve_batch_path(batch_file, project)
     parsed = read_batch(path)
     target = next((s for s in parsed.specs if s.spec_id == spec_id), None)
     if target is None:
@@ -963,15 +1002,31 @@ def canon_set(
     """Upsert a locked subject for PROJECT (keyed by its first alias)."""
     lora_ref = _parse_lora(lora) if lora else None
     store = ProjectCanon(project)
+    existed = any(selector_matches(s, aliases[0]) for s in store.load())
     subject = store.set_subject(list(aliases), locked, list(forbid), lora=lora_ref)
-    click.echo(f"Canon set for {project!r} (subject '{subject.aliases[0]}'):")
-    click.echo(f"  aliases: {', '.join(subject.aliases)}")
-    click.echo(f"  locked:  {subject.locked}")
-    if subject.forbid:
-        click.echo(f"  forbid:  {', '.join(subject.forbid)}")
-    if subject.lora:
-        click.echo(f"  lora:    {subject.lora.name}@{subject.lora.strength}")
+    verb = "replaced" if existed else "set"
+    click.echo(f"Canon {verb} for {project!r} (subject '{subject.aliases[0]}'):")
+    _echo_subject(subject, indent="  ")
+    if existed:
+        click.echo(
+            "\nNote: `canon set` REPLACES the whole subject. To change just one field "
+            "without restating the rest, use `canon edit`."
+        )
     click.echo(f"\nStored at: {store.path}")
+
+
+def selector_matches(subject: object, alias: str) -> bool:
+    return alias.lower() in [a.lower() for a in subject.aliases]  # type: ignore[attr-defined]
+
+
+def _echo_subject(s: object, *, indent: str = "  ") -> None:
+    """Print one canon subject's fields (shared by set/edit/show)."""
+    click.echo(f"{indent}aliases: {', '.join(s.aliases)}")          # type: ignore[attr-defined]
+    click.echo(f"{indent}locked:  {s.locked}")                       # type: ignore[attr-defined]
+    if s.forbid:                                                     # type: ignore[attr-defined]
+        click.echo(f"{indent}forbid:  {', '.join(s.forbid)}")        # type: ignore[attr-defined]
+    if s.lora:                                                       # type: ignore[attr-defined]
+        click.echo(f"{indent}lora:    {s.lora.name}@{s.lora.strength}")  # type: ignore[attr-defined]
 
 
 @canon.command("show")
@@ -991,6 +1046,63 @@ def canon_show(project: str) -> None:
             click.echo(f"    forbid:  {', '.join(s.forbid)}")
         if s.lora:
             click.echo(f"    lora:    {s.lora.name}@{s.lora.strength}")
+
+
+@canon.command("edit")
+@click.argument("project")
+@click.argument("subject")
+@click.option("--add-alias", "add_alias", multiple=True, help="Add an alias (repeatable).")
+@click.option("--rm-alias", "rm_alias", multiple=True, help="Remove an alias (repeatable).")
+@click.option("--add-forbid", "add_forbid", multiple=True,
+              help="Add a forbidden phrase (repeatable). Match is raw substring — prefer "
+                   "multi-word phrases over bare words (a bare 'tall' also strips 'metallic').")
+@click.option("--rm-forbid", "rm_forbid", multiple=True, help="Remove a forbidden phrase (repeatable).")
+@click.option("--locked", "locked", default=None,
+              help="Replace the locked descriptor (the only field that's a full overwrite).")
+@click.option("--lora", "lora", default=None,
+              help="Set/replace the pinned character LoRA as NAME[:STRENGTH] (registry name).")
+@click.option("--clear-lora", "clear_lora", is_flag=True, default=False,
+              help="Remove the pinned character LoRA.")
+def canon_edit(
+    project: str, subject: str,
+    add_alias: tuple[str, ...], rm_alias: tuple[str, ...],
+    add_forbid: tuple[str, ...], rm_forbid: tuple[str, ...], locked: str | None,
+    lora: str | None, clear_lora: bool,
+) -> None:
+    """Edit ONE subject of PROJECT's canon in place, selected by SUBJECT (any of its aliases).
+
+    Surgical alternative to `canon set` (which replaces the whole subject): change just an
+    alias, a forbid phrase, the locked descriptor, or the pinned LoRA without restating the rest.
+
+        canon edit celeste-you-dangerous "the narrator" \\
+          --locked "...the full new descriptor..." --add-forbid "lanky"
+    """
+    if not any([add_alias, rm_alias, add_forbid, rm_forbid, locked is not None,
+                lora is not None, clear_lora]):
+        raise click.UsageError(
+            "Nothing to edit. Pass at least one of --add-alias / --rm-alias / "
+            "--add-forbid / --rm-forbid / --locked / --lora / --clear-lora."
+        )
+    if lora and clear_lora:
+        raise click.UsageError("Pass either --lora or --clear-lora, not both.")
+    store = ProjectCanon(project)
+    before = next((s for s in store.load() if selector_matches(s, subject)), None)
+    if before is not None:
+        click.echo("Before:")
+        _echo_subject(before, indent="  ")
+    try:
+        updated = store.update_subject(
+            subject,
+            add_aliases=list(add_alias), remove_aliases=list(rm_alias),
+            add_forbid=list(add_forbid), remove_forbid=list(rm_forbid),
+            locked=locked,
+            lora=_parse_lora(lora) if lora else None, clear_lora=clear_lora,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo("\nAfter:")
+    _echo_subject(updated, indent="  ")
+    click.echo(f"\nStored at: {store.path}")
 
 
 @canon.command("rm")

@@ -28,7 +28,7 @@ from agent_runtime import (
 )
 
 from visual_generation.batch_file import append_spec
-from visual_generation.canon import canon_loras_for, enforce_canon
+from visual_generation.canon import canon_loras_for, enforce_canon, scene_cast
 from visual_generation.chains import craft_spec
 from visual_generation.discovery import compile_creative_input, discover_scenes
 from visual_generation.constants import (
@@ -151,6 +151,11 @@ async def draft(
     missing_models: list[str] = []
     inert_inheritance: list[str] = []
     canon_applied: list[str] = []
+    canon_absent: list[str] = []
+    # Canon characters this scene names (from the scene body, not the whole brief) — fed
+    # into composition so the LLM renders them, and checked again after enforce so a
+    # silently-dropped lead is surfaced rather than ignored.
+    cast = scene_cast(compiled.focus, project)
     research_offer: str | None = None
     overall_reasoning = ""
     tracker_ref: BudgetTracker | None = None
@@ -177,7 +182,7 @@ async def draft(
                 crafted = await craft_spec(
                     compiled.text, ctx, template, models, prov,
                     parent=parent, refinement=(source is not None),
-                    model=model,
+                    model=model, cast=(cast if source is None else None),
                 )
 
                 spec = VisualSpec(
@@ -211,6 +216,20 @@ async def draft(
                 # Pin the present subject's character LoRA too (model-level continuity);
                 # re-derives identity_bearing inside, superseding the pre-fill above.
                 canon_applied += _pin_canon_loras(spec, project, store)
+
+                # Did every scene-named canon character actually land in the prompt? A lead
+                # the scene features but the shot omitted is surfaced as an advisory (never
+                # blocks — an establishing shot may intentionally have no figure).
+                if cast:
+                    present = {s.aliases[0] for s in scene_cast(spec.prompt, project)}
+                    where = f"scene '{scene}'" if scene else "the compiled scene"
+                    for subj in cast:
+                        if subj.aliases[0] not in present:
+                            canon_absent.append(
+                                f"'{subj.aliases[0]}' is named in {where} but absent from the "
+                                "drafted prompt — re-draft with a point naming them, or proceed "
+                                "if this shot intentionally omits them."
+                            )
 
                 overall_reasoning = crafted["rationale"]
                 tutor_notes = [le.statement for _, le in ctx.technique_lessons]
@@ -276,6 +295,7 @@ async def draft(
         missing_models=missing_models,
         inert_inheritance=inert_inheritance,
         canon_applied=canon_applied,
+        canon_absent=canon_absent,
         research_offer=research_offer,
         overall_reasoning=overall_reasoning,
         run_id=run_id,

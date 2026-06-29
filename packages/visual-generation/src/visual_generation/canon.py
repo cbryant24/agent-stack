@@ -107,6 +107,75 @@ class ProjectCanon:
         self._write(kept)
         return True
 
+    def update_subject(
+        self,
+        selector: str,
+        *,
+        add_aliases: list[str] | None = None,
+        remove_aliases: list[str] | None = None,
+        add_forbid: list[str] | None = None,
+        remove_forbid: list[str] | None = None,
+        locked: str | None = None,
+        lora: LoraRef | None = None,
+        clear_lora: bool = False,
+    ) -> CanonSubject:
+        """Edit ONE field-set of an existing subject in place — without restating the rest.
+
+        `selector` matches the subject by ANY of its aliases (case-insensitive). Only the
+        named edits apply; everything else (the locked descriptor you don't touch, the
+        LoRA, untouched aliases/forbids) is preserved. `lora` sets/replaces the pinned
+        character LoRA; `clear_lora` removes it (mutually exclusive with `lora`). The
+        complement to `set_subject`, which replaces a whole subject — this is the surgical
+        edit. Raises ValueError if no subject matches, or if an edit would leave the subject
+        with zero aliases."""
+        if lora is not None and clear_lora:
+            raise ValueError("pass either a new lora or clear_lora, not both")
+        subjects = self.load()
+        sel = selector.lower()
+        idx = next(
+            (i for i, s in enumerate(subjects) if sel in [a.lower() for a in s.aliases]), None
+        )
+        if idx is None:
+            known = "; ".join(", ".join(s.aliases) for s in subjects) or "(none)"
+            raise ValueError(f"No canon subject matches {selector!r}. Known aliases: {known}")
+
+        s = subjects[idx]
+        aliases = list(s.aliases)
+        for a in add_aliases or []:
+            if a.lower() not in [x.lower() for x in aliases]:
+                aliases.append(a)
+        if remove_aliases:
+            drop = {a.lower() for a in remove_aliases}
+            aliases = [a for a in aliases if a.lower() not in drop]
+        if not aliases:
+            raise ValueError("a subject must keep at least one alias")
+
+        forbid = list(s.forbid)
+        for f in add_forbid or []:
+            if f not in forbid:
+                forbid.append(f)
+        if remove_forbid:
+            dropf = set(remove_forbid)
+            forbid = [f for f in forbid if f not in dropf]
+
+        new_lora = None if clear_lora else (lora if lora is not None else s.lora)
+        updated = CanonSubject(
+            aliases=aliases,
+            locked=locked if locked is not None else s.locked,
+            forbid=forbid,
+            lora=new_lora,
+        )
+        # Guard against the new primary alias colliding with a different subject's key.
+        new_key = aliases[0].lower()
+        for j, other in enumerate(subjects):
+            if j != idx and other.aliases and other.aliases[0].lower() == new_key:
+                raise ValueError(
+                    f"alias {aliases[0]!r} would collide with another subject's key"
+                )
+        subjects[idx] = updated
+        self._write(subjects)
+        return updated
+
 
 def _tidy(prompt: str) -> str:
     """Clean up doubled spaces/commas left by stripping forbidden phrases."""
@@ -178,6 +247,26 @@ def _subject_present(prompt: str, subj: CanonSubject) -> bool:
         if plain and re.search(rf"\b{re.escape(plain)}\b", prompt, re.IGNORECASE):
             return True
     return False
+
+
+def scene_cast(
+    scene_text: str, project: str | None, *, base_dir: Path | None = None
+) -> list[CanonSubject]:
+    """Canon subjects whose aliases are named in `scene_text` (e.g. a scene's narration).
+
+    Makes canon an *input* to composition, not just a post-hoc filter: when the
+    director's scene text names a locked subject, the craft step is told to render that
+    subject by name with their canonical appearance — so identity reaches the prompt at
+    compose time (and `enforce_canon`/`canon_loras_for` then fire deterministically on
+    the alias) instead of the character being silently dropped. Same alias/locked match
+    as `_subject_present`. No project / no canon file / empty text → []."""
+    if not project or not scene_text:
+        return []
+    return [
+        s
+        for s in ProjectCanon(project, base_dir=base_dir).load()
+        if _subject_present(scene_text, s)
+    ]
 
 
 def canon_loras_for(
