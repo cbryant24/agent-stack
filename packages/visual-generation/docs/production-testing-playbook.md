@@ -5,6 +5,7 @@ production, so we can confirm the recent implementation behaves as we both expec
 workflow, capture the marked output, and report back; we adjust from there.
 
 **What we're validating** (the recent work):
+
 - **Knowledge surfacing** — categorized Qdrant knowledge actually reaches the LLM at draft time.
 - **Direct verification** — `knowledge-verify` + the `── Knowledge surfaced ──` provenance block prove it, deterministically.
 - **Doc compilation** — your own `directed.md`/`script.md`/etc. compile into the prompt (`── Compiled from ──`), so you feed key points, not hand-written prompts.
@@ -17,9 +18,11 @@ workflow, capture the marked output, and report back; we adjust from there.
 ## Conventions (read once)
 
 - **Invocation.** Examples use the `agent` wrapper from the repo root:
+
   ```bash
   agent() { op run --env-file=.env -- uv run "$@"; }   # one-time, in your shell
   ```
+
   So `agent visual-generation draft …` = `op run --env-file=.env -- uv run visual-generation draft …`.
   Anything that hits an API (Anthropic craft, Voyage embeddings, ComfyUI) needs this. Pure
   file ops (`canon set/show`, `batch list`) work under plain `uv run` too, but using `agent`
@@ -47,6 +50,7 @@ workflow, capture the marked output, and report back; we adjust from there.
 docker compose -f infrastructure/docker-compose.yml up -d qdrant
 curl -s http://localhost:6333/ | head -1        # expect a JSON banner, not a refusal
 ```
+
 - **Does:** starts the vector store the draft/verify/memory legs read. If it's down, retrieval
   legs silently degrade to empty (and Qdrant-dependent tests auto-skip).
 - **Verify:** `agent visual-generation knowledge-verify "z-image turbo dreadlocks" --project celeste-you-dangerous`
@@ -58,6 +62,7 @@ curl -s http://localhost:6333/ | head -1        # expect a JSON banner, not a re
 agent visual-generation canon show celeste-you-dangerous
 ls ~/agent-projects/celeste-you-dangerous/
 ```
+
 - **Does:** confirms the doc-compilation source and the deterministic canon both exist.
 - **Expected:** `canon show` prints the narrator subject — `aliases`, `locked` (the puppet
   descriptor), `forbid`. **No `lora:` line yet** (that arrives in Workflow 6).
@@ -70,6 +75,7 @@ scripts/pod up                                  # prints the ComfyUI endpoint; n
 agent visual-generation model sync --endpoint <ENDPOINT>
 agent visual-generation model list
 ```
+
 - **Does:** `pod up` creates a fresh RunPod ComfyUI pod (create/delete lifecycle — never start/stop).
   `model sync` reads the pod's `/object_info` and writes the local registry (`~/agent-data/visual-generation/models.json`),
   preserving any manual `identity_bearing` flags. `model list` shows what's registered.
@@ -92,6 +98,7 @@ This is the centerpiece of the "stop ignoring my knowledge" work.
 agent visual-generation knowledge-verify \
   "z-image turbo dreadlocks rooftop puppet" --project celeste-you-dangerous
 ```
+
 - **Does:** runs the *same* retrieval the draft uses, then prints collection sizes, per-leg
   provenance, and gap flags. No LLM craft, no GPU.
 - **Expected — look for:**
@@ -113,6 +120,7 @@ agent visual-generation knowledge-verify \
 ```bash
 agent visual-generation digest celeste-you-dangerous
 ```
+
 - **Does:** bounded "where did I leave off" view — recent generations + reactions, confirmed
   lessons, pending. Read-only. Empty early on; fills as you `report`.
 - **Report back:** whatever it shows (sets a baseline for the memory-loop check in Workflow 9).
@@ -131,6 +139,7 @@ agent visual-generation draft \
   "the narrator on a rooftop at dusk, wide cinematic shot, neon glow" \
   --project celeste-you-dangerous
 ```
+
 - **Does:** retrieves knowledge, has Claude compose a full prompt + settings + model/LoRA picks,
   enforces canon deterministically, and appends the spec to the project's batch file. **No GPU.**
 - **Expected — look for:**
@@ -159,6 +168,7 @@ agent visual-generation generate \
   ~/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md \
   --section <SPEC_ID> --endpoint <ENDPOINT>
 ```
+
 - **Does:** resolves the spec's template, uploads any source, renders on the pod, records the
   generation (pending reaction). The `<SPEC_ID>` is from 2.1's `Spec:` line.
 - **Expected — look for:**
@@ -181,6 +191,7 @@ agent visual-generation report <GEN_ID> --reaction liked --rating 4 \
   --notes "dreadlocks read well; push the neon cooler next time" \
   --context "rooftop establishing shot for Arrival"
 ```
+
 - **Does:** records your reaction (flips pending→complete) into `visual_generation_memory`, so it
   surfaces in future drafts/`recall`/`digest`.
 - **Reaction vocabulary:** `loved`, `liked`, `liked_with_changes`, `disliked` (rendered faithfully
@@ -205,6 +216,7 @@ agent visual-generation draft \
   --scene "Arrival" \
   --points "wide establishing shot" --points "dusk" --points "neon city below"
 ```
+
 - **Does:** discovers the project's docs, narrows to the **Arrival** section of `directed.md`,
   compiles that + retrieved knowledge + your points into a prompt Claude composes. No `INTENT`
   string needed.
@@ -240,14 +252,17 @@ compilation across the real four-scene structure.
 ```bash
 agent visual-generation batch build celeste-you-dangerous -o /tmp/celeste-test.batch.md
 ```
+
 - **Does:** loops the compile over each `##` scene in `directed.md` (Arrival → Again and Again),
   canon-enforcing each, writing one spec per scene. **Refuses to overwrite** an existing batch
   (use `batch rebuild` to replace). `-o` to a temp path keeps your real `visual-batch.md` untouched while testing.
 - **Expected:** an info line per scene as it compiles; a final write to the `-o` path.
 - **Inspect:**
+
   ```bash
   agent visual-generation batch list /tmp/celeste-test.batch.md
   ```
+
   → **4 specs**, each `[<template>]` with the scene title. Confirm all four scenes are present.
 - **Options to alter:**
   - `--model` / `--provider` — same craft controls as `draft`.
@@ -262,6 +277,7 @@ agent visual-generation batch build celeste-you-dangerous -o /tmp/celeste-test.b
 ```bash
 agent visual-generation generate /tmp/celeste-test.batch.md --all --endpoint <ENDPOINT> --gpu-rate 2.09
 ```
+
 - **Does:** renders every spec. The gate estimates the **session** cost across all four.
 - **Expected:** four `── Generation … ──` blocks; a `── Batch drained ──` reminder to stop the pod.
 - **⚠** After this, `scripts/pod down` if you're done — idle pods keep billing.
@@ -285,6 +301,7 @@ Pick the best narrator still you've already rendered (e.g. from Workflow 2/4) an
 agent visual-generation batch build celeste-you-dangerous \
   --from <GEN_ID> --denoise 0.55 -o /tmp/celeste-anchored.batch.md
 ```
+
 - **Does:** every scene is composed as an **img2img** refinement off that one frame, so the
   narrator carries across scenes instead of being re-rolled. Auto-targets the
   `visual-workflow-img2img` template when anchored.
@@ -314,75 +331,147 @@ agent visual-generation batch build celeste-you-dangerous \
 
 ## Workflow 6 — Character-LoRA continuity (feature C — the durable fix)
 
-**Path for:** the strongest continuity — a trained character LoRA pinned into **every** scene the
-narrator appears in, via canon. Identity travels at the model level, not just the text.
+**Path for:** the strongest continuity — a **trained character LoRA** pinned into **every** scene
+the narrator appears in, via canon. Identity travels at the model level, not just the text. This is
+the only path that fully locks the narrator's face across all four scenes.
 
-> **Prerequisites (one-time, GPU/curation — do these before the CLI steps):**
-> 1. **Curate** ~15–30 stills of the approved narrator puppet (varied pose/angle/light, consistent
->    identity) into `~/agent-projects/celeste-you-dangerous/refs/narrator-lora/`. Your best
->    `report`ed generations + anchor renders are good sources.
-> 2. **Train** a Z-Image Turbo LoRA per the ingested tutorial (the one Workflow 1 surfaced) on the
->    pod → a `.safetensors` placed in the pod's `models/loras/`.
-> 3. **Register** it: `agent visual-generation model sync --endpoint <ENDPOINT>` then
->    `model list` to confirm the LoRA appears.
->    - To flag it `identity_bearing` (routes outputs to the secured path) there is **no CLI flag
->      yet** — edit `~/agent-data/visual-generation/models.json` and set `"identity_bearing": true`
->      on that asset. **This is optional for continuity:** the pin applies the LoRA regardless;
->      the flag only governs secured-path routing.
+This workflow includes the training itself as first-class steps, grounded in your ingested tutorial
+**"How to Train a Character LoRA for Z-Image Turbo"** (Seb G., `k0UWypeLcJ4`) — the one Workflow 1
+surfaces. Steps 6.1–6.3 produce the LoRA; 6.4–6.6 pin and use it. Pick a **trigger word** up front —
+this playbook uses **`celestenarr8`** (short token + digit, like the tutorial's `aki8`).
 
-### Step 6.1 — Pin the LoRA into canon (free)
+> **Two different pods.** Training runs on a **separate, manually-deployed Ostris AI-Toolkit pod**
+> (a cheap 4090 is plenty) — **not** `scripts/pod` (that script is only for the inference ComfyUI
+> pod). Deploy the training pod from the RunPod console; delete it when training finishes.
+
+### Step 6.1 — Curate the dataset (free, ~30 min)
+
+- **Goal:** 20–30 images of the narrator puppet, all **1024×1024**, varied — different angles,
+  expressions, poses, framing (close-ups + mid + a couple full-body). Main features must stay
+  consistent: **felt-and-clay stop-motion puppet, caramel-brown felt skin, black yarn dreadlocks to
+  mid-back.** Per the tutorial, captioning will be **trigger-word-only**, so variety in the *images*
+  is what teaches identity.
+- **How (puppet-specific):** you already have rendered narrator stills (prior `report`ed
+  generations, the anchor frames from Workflow 5, `visual-batch.md` outputs). Use those as the base.
+  To fill gaps in angle/pose, take one strong render and fan it out — either with a multi-angle
+  workflow (the tutorial's Qwen multi-angle approach) or by `draft --from <gen_id>` at higher
+  denoise to restage. Normalize any non-square frame to 1024×1024.
+- **Land them in:** `~/agent-projects/celeste-you-dangerous/refs/narrator-lora/` (one folder, named
+  for the character).
+- **Report back:** how many frames you assembled and the angle/pose spread (this is the #1 driver of
+  LoRA quality — a narrow dataset = a narrow LoRA).
+
+### Step 6.2 — Train on Ostris AI-Toolkit (RunPod — PAID, cheap 4090)
+
+Deploy and train per the tutorial. This is a UI flow, not a CLI command:
+
+1. **Deploy** a RunPod pod with your storage volume, GPU **4090** (5090/H200 if you want speed),
+   template = **Ostris** (search "Ostris AI-Toolkit"). Deploy On Demand; wait for the ready log.
+2. **Open** the AI-Toolkit UI (Connect → the web port). Default password if prompted: `password`.
+3. **Datasets → New Dataset** → name it `celeste-narrator` → drag-drop your Step-6.1 frames.
+4. **Captions:** set **just the trigger word** `celestenarr8` on **every** image — no descriptive
+   paragraphs. (The tutorial tested paragraph vs. keyword captions and found keyword-only works
+   best for Z-Image specifically.)
+5. **Job:** name the LoRA `celeste-narrator`; **Trigger Words** = `celestenarr8`.
+6. **Model:** search "Zimage" → select **"Z-Image Turbo with the training adapter"** (important —
+   this is what makes fine-tuning the distilled Turbo model work; the raw Turbo weights are
+   "generation only"). Untick low-VRAM on a 4090+.
+7. **Training params** (tutorial's recipe): **steps 6000** (min 3000 — don't go lower; 6000
+   over-trains for robustness), **learning rate `1e-5`** (or `2e-5`), resolution **1024**, caption
+   dropout **0**, sample every 250 steps, **guidance scale 2**, **sample steps 16**, Cache Text
+   Embeddings optional.
+8. **Create Job → Play.** Watch the 250-step sample grid: the narrator should start resolving around
+   **1250–1500 steps** and tighten from there.
+9. **Download** the resulting `.safetensors` when the job completes. **Delete the training pod** to
+   stop billing (your volume/LoRA download survive).
+- **Options to alter (for the validation round):** dataset size (20 vs 30), steps (3000 vs 6000),
+  LR (1e-5 vs 2e-5), and rank/dim if exposed — these are exactly the knobs we'll tune if the first
+  LoRA is weak or over-baked.
+- **Report back:** the final step count, LR, and a couple of the late-step sample images so we can
+  judge identity lock before spending inference GPU.
+
+### Step 6.3 — Place + register the LoRA (PAID sync against the inference pod)
+
+```bash
+# Put the .safetensors where the INFERENCE ComfyUI pod can see it:
+#   ComfyUI/models/loras/celeste-narrator.safetensors   (name it to match what you'll pin)
+agent visual-generation model sync --endpoint <ENDPOINT>
+agent visual-generation model list
+```
+
+- **Does:** copy the trained file into the inference pod's `models/loras/` (via the pod's volume /
+  upload), then `model sync` reads `/object_info` and registers it; `model list` should now show
+  `[lora       ] celeste-narrator.safetensors`.
+- **Optional — flag identity_bearing:** there's **no CLI flag yet** — edit
+  `~/agent-data/visual-generation/models.json` and set `"identity_bearing": true` on that asset.
+  **Optional for continuity** (the pin applies the LoRA regardless); it only routes outputs to the
+  secured path and adds the `[identity-bearing]` markers.
+- **Report back:** the `model list` line for the LoRA (and whether you flagged it).
+
+### Step 6.4 — Pin the LoRA into canon, trigger word and all (free)
 
 ```bash
 agent visual-generation canon set celeste-you-dangerous \
   --alias "the narrator" --alias "narrator" --alias "@narrator" \
-  --locked "a felt-and-clay stop-motion puppet of a young Black man, deep caramel-brown felt skin, long black yarn dreadlocks falling to mid-back" \
+  --locked "celestenarr8, a felt-and-clay stop-motion puppet of a young Black man, deep caramel-brown felt skin, long black yarn dreadlocks falling to mid-back" \
   --forbid "short hair" --forbid "shoulder-length" --forbid "buzz cut" \
   --lora celeste-narrator.safetensors:0.8
 ```
-- **Does:** re-upserts the narrator subject (keyed by first alias) **with** a character LoRA.
-  Re-passing the aliases/locked/forbid keeps them; `--lora NAME[:STRENGTH]` adds the model-level identity.
+
+- **Does:** re-upserts the narrator subject **with** the character LoRA. **Note the trigger word
+  `celestenarr8` is now the first token of `--locked`** — this is the integration detail that makes
+  it work: a LoRA only activates when its trigger word is in the prompt, so baking the trigger into
+  the locked descriptor means canon injects *both* the trigger (fires the LoRA) *and* pins the LoRA
+  into the stack — text and model identity travel together.
 - **Expected:** the echo now includes a `lora: celeste-narrator.safetensors@0.8` line.
 - **Verify it stuck:** `agent visual-generation canon show celeste-you-dangerous` → the subject
-  shows the `lora:` line.
+  shows the `lora:` line and the trigger-prefixed `locked`.
 - **Options to alter:**
-  - `:STRENGTH` — omit it for `1.0`; lower (`:0.6`) for a lighter identity influence.
-  - The `NAME` must match a registry asset name exactly (from `model list`).
-- **⚠ Note:** `--lora` on `canon set` **replaces** the subject — always re-pass `--alias`/`--locked`/`--forbid`
-  or you'll drop them. (Copy the values from `canon show` first.)
+  - `:STRENGTH` — omit for `1.0`; lower (`:0.6`) if the LoRA over-powers the scene, higher if the
+    identity is weak. (This is the main dial in the validation round.)
+  - `NAME` must match the registry asset name exactly (from `model list`).
+- **⚠ Note:** `--lora` (like any `canon set`) **replaces** the subject — always re-pass
+  `--alias`/`--locked`/`--forbid` or you'll drop them. Copy the values from `canon show` first.
 
-### Step 6.2 — Draft and confirm the pin (free)
+### Step 6.5 — Draft and confirm the pin (free)
 
 ```bash
 agent visual-generation draft --project celeste-you-dangerous --scene "Arrival" \
   --points "wide establishing shot" --points "dusk"
 ```
-- **Expected — look for:**
-  - `LoRAs:    celeste-narrator.safetensors@0.8` on the spec.
-  - `── Canon enforced ──` now also lists **`pinned canon LoRA 'celeste-narrator.safetensors'@0.8`**.
-  - `Model: … [identity-bearing]` **if** you flagged the LoRA identity_bearing in the registry.
-  - **⚠ if you see** `N LoRA(s) won't apply: this template has no LoRA loader slots` — the
-    resolved template can't load a LoRA. Force a LoRA-capable template with `--template <name>`
-    (check `workflow list`), or register one. This advisory is the feature working — it's
-    surfacing a silent drop, not hiding it.
-- **Try this to verify behavior:**
-  1. Draft a scene that **doesn't** name the narrator → the LoRA should **not** be pinned (the
-     pin is scoped to subject presence, same as the text). Confirms it's not blindly appended.
-  2. Temporarily hand-pick the same LoRA in a prompt and confirm the pin **dedupes** (one entry,
-     your strength kept) rather than doubling.
-- **Report back:** the `LoRAs:` line + the `pinned canon LoRA …` note (and any ⚠ won't-apply line).
 
-### Step 6.3 — Build a LoRA-pinned batch + generate (free build, PAID generate)
+- **Expected — look for:**
+  - The `Prompt:` begins with the trigger word `celestenarr8` (canon injected it).
+  - `LoRAs:    celeste-narrator.safetensors@0.8` on the spec.
+  - `── Canon enforced ──` lists `injected canon for 'the narrator'` **and**
+    `pinned canon LoRA 'celeste-narrator.safetensors'@0.8`.
+  - `Model: … [identity-bearing]` **if** you flagged the LoRA identity_bearing.
+  - **⚠ if you see** `N LoRA(s) won't apply: this template has no LoRA loader slots` — the resolved
+    template can't load a LoRA. Force a LoRA-capable template with `--template <name>` (check
+    `workflow list`). This advisory is the feature working — surfacing a silent drop, not hiding it.
+- **Try this to verify behavior:**
+  1. Draft a scene that **doesn't** name the narrator → the LoRA should **not** be pinned and the
+     trigger should **not** appear (pin is scoped to subject presence). Confirms it's not blind.
+  2. A draft where the LLM also picks the same LoRA → confirm the pin **dedupes** (one entry, your
+     `0.8` kept), not doubled.
+- **Report back:** the `Prompt:` head (trigger present?), the `LoRAs:` line, and the `pinned canon
+  LoRA …` note (plus any ⚠ won't-apply line).
+
+### Step 6.6 — Build a LoRA-pinned batch + generate (free build, PAID generate)
 
 ```bash
 agent visual-generation batch build celeste-you-dangerous -o /tmp/celeste-lora.batch.md
 agent visual-generation batch list /tmp/celeste-lora.batch.md
 agent visual-generation generate /tmp/celeste-lora.batch.md --all --endpoint <ENDPOINT> --gpu-rate 2.09
 ```
-- **Does:** every scene naming the narrator gets the LoRA pinned, so the face holds across all
-  four scenes — the durable counterpart to Workflow 5's img2img anchor.
-- **Verify:** open `/tmp/celeste-lora.batch.md` and confirm the LoRA is in each narrator scene's
-  `lora_stack`. After generate, eyeball that the narrator is consistent scene-to-scene.
-- **Report back:** whether the LoRA appears in each scene's spec, and a note on cross-scene consistency.
+
+- **Does:** every scene naming the narrator gets the trigger word + LoRA, so the face holds across
+  all four scenes — the durable counterpart to Workflow 5's img2img anchor.
+- **Verify:** open `/tmp/celeste-lora.batch.md` and confirm each narrator scene's prompt starts with
+  `celestenarr8` and carries the LoRA in `lora_stack`. After generate, eyeball cross-scene
+  consistency — this is the payoff shot of the whole feature.
+- **Report back:** whether trigger+LoRA appear in each scene's spec, and how consistent the narrator
+  looks scene-to-scene (vs. Workflow 5's img2img anchor, if you ran it).
 
 ---
 
@@ -397,6 +486,7 @@ agent visual-generation generate /tmp/celeste-lora.batch.md --all --endpoint <EN
 agent visual-generation draft "warmer key light, hold the composition" \
   --from <GEN_ID> --denoise 0.45 --project celeste-you-dangerous
 ```
+
 - **Does:** the spec becomes a refinement — your text is the *change*, the prior generation's
   frame is the source (uploaded at `generate`), and lineage is recorded.
 - **Expected — look for:**
@@ -423,6 +513,7 @@ recipe, model, LoRAs, dimensions, and template so nothing drifts.
 ```bash
 agent visual-generation redraft <GEN_ID> "make the sky stormier, keep everything else"
 ```
+
 - **Does:** produces a **text2img** spec (not an img2img edit of the pixels) that changes only the
   prose; records descent via `revised_from`.
 - **Expected — look for:** `Revised from: <GEN_ID>`, `Template: … (recipe inherited from parent)`,
@@ -446,6 +537,7 @@ agent visual-generation digest celeste-you-dangerous         # recent gens + rea
 agent visual-generation recall "narrator rooftop dusk"       # semantic recall across memory
 agent visual-generation chain show <ROOT_GEN_ID>             # lineage tree (draft→redraft→refine)
 ```
+
 - **Does, in order:** list un-reacted renders → record a reaction → see the bounded session
   primer → semantically recall prior work → inspect a generation's lineage.
 - **Expected:** `digest` lists the just-reported generation under "Recent generations"; `recall`
