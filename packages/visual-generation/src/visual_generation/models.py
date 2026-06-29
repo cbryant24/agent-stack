@@ -312,6 +312,7 @@ class DraftResult(BaseModel):
     spec: VisualSpec
     batch_path: Path | None = None
     template_name: str | None = None
+    template_modality: str | None = None  # text2img | img2img | inpaint (from the template's slots)
     compiled_from: list[str] = Field(default_factory=list)  # project docs compiled into the input
     provenance: list[ProvenanceLeg] = Field(default_factory=list)  # what retrieval surfaced (deterministic)
     tutor_notes: list[str] = Field(default_factory=list)  # the user's own surfaced lessons

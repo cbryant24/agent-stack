@@ -211,6 +211,39 @@ def test_resolve_template_falls_back_when_no_modality_match() -> None:
     assert got is not None and got.name == "vw-inpaint"
 
 
+def test_draft_reports_template_modality(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The resolved template's modality is surfaced (text2img for a slotless template)."""
+    from visual_generation.draft import draft_sync
+
+    _patch_chain(monkeypatch, RetrievedContext(), _crafted())
+    store = _store(_template("vw", set()), [ModelAsset(name="flux1-dev.safetensors", kind="checkpoint")])
+    result = draft_sync(
+        "a wolf", batch_path=tmp_path / "p.batch.md", template_name="vw",
+        store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
+    )
+    assert result.template_modality == "text2img"
+
+
+def test_draft_warns_when_sourceless_spec_lands_on_inpaint_template(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If a sourceless draft ends up on an img2img/inpaint template (forced by name), the
+    mismatch is surfaced at draft time, before any GPU spend."""
+    from visual_generation.draft import draft_sync
+
+    _patch_chain(monkeypatch, RetrievedContext(), _crafted())
+    inpaint = _template("vw-inpaint", {"init_image", "mask"})
+    store = _store(inpaint, [ModelAsset(name="flux1-dev.safetensors", kind="checkpoint")])
+    result = draft_sync(
+        "a wolf", batch_path=tmp_path / "p.batch.md", template_name="vw-inpaint",
+        store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
+    )
+    assert result.template_modality == "inpaint"
+    assert any("no source image" in w and "skip" in w for w in result.inert_inheritance)
+
+
 def test_draft_passes_force_canon_through_to_enforce(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
 ) -> None:

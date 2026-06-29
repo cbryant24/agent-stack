@@ -89,6 +89,19 @@ async def _resolve_template(
     return (matching or candidates)[0]
 
 
+def _template_modality(template: WorkflowTemplate | None) -> str | None:
+    """The graph's modality, read from its slots: inpaint (init_image + mask),
+    img2img (init_image), else text2img. None when no template resolved."""
+    if template is None:
+        return None
+    slots = template.slot_map
+    if "init_image" in slots and "mask" in slots:
+        return "inpaint"
+    if "init_image" in slots:
+        return "img2img"
+    return "text2img"
+
+
 def _default_batch_path(project: str | None) -> Path:
     stem = project or "default"
     return get_config().agent_data_dir / "visual-generation" / "batches" / f"{stem}.batch.md"
@@ -292,6 +305,18 @@ async def draft(
                             "Inherited dimensions are ignored for this template; "
                             "img2img output size follows the init image."
                         )
+                    # Modality vs. source mismatch — caught here, before any GPU spend.
+                    modality = _template_modality(template)
+                    if source is None and modality in ("img2img", "inpaint"):
+                        inert_inheritance.append(
+                            f"Template is {modality} but this spec has no source image — "
+                            "`generate` will skip it. Re-draft without forcing a refine template."
+                        )
+                    elif source is not None and modality == "text2img":
+                        inert_inheritance.append(
+                            "Template is text2img but this spec has a source — it can't img2img; "
+                            "`generate` will skip it. Pass --template <img2img/inpaint>."
+                        )
 
                 # Research is OFFERED on a gap, never run here (Step 5 owns `research`).
                 if ctx.is_empty() or ctx.max_local_score() < RESEARCH_GAP_THRESHOLD:
@@ -321,6 +346,7 @@ async def draft(
         spec=spec if spec is not None else VisualSpec(prompt="", heading=""),
         batch_path=out_path if spec is not None else None,
         template_name=template.name if template else None,
+        template_modality=_template_modality(template),
         compiled_from=compiled_from,
         provenance=provenance,
         tutor_notes=tutor_notes,
@@ -543,6 +569,7 @@ async def redraft(
         spec=spec if spec is not None else VisualSpec(prompt="", heading=""),
         batch_path=out_path if spec is not None else None,
         template_name=template.name,
+        template_modality=_template_modality(template),
         tutor_notes=tutor_notes,
         revise_warnings=revise_warnings,
         canon_applied=canon_applied,

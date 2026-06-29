@@ -369,7 +369,8 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
     click.echo(f"Status:   {result.status}")
     click.echo(f"Cost:     ${result.cost_usd:.4f}  (Claude — GPU is spent at `generate`)")
     click.echo(f"Spec:     {spec.spec_id}")
-    click.echo(f"Template: {result.template_name or '(none — settings are unconstrained)'}")
+    modality = f"  [{result.template_modality}]" if result.template_modality else ""
+    click.echo(f"Template: {result.template_name or '(none — settings are unconstrained)'}{modality}")
     click.echo(f"Model:    {spec.model or '(none chosen)'}"
                + ("  [identity-bearing]" if spec.identity_bearing else ""))
     if spec.source is not None:
@@ -475,7 +476,8 @@ def redraft(gen_id: str, change: str, output: str | None, project: str | None,
     click.echo(f"Cost:      ${result.cost_usd:.4f}  (Claude — GPU is spent at `generate`)")
     click.echo(f"Spec:      {spec.spec_id}")
     click.echo(f"Revised from: {spec.revised_from}")
-    click.echo(f"Template:  {result.template_name}  (recipe inherited from parent)")
+    modality = f" [{result.template_modality}]" if result.template_modality else ""
+    click.echo(f"Template:  {result.template_name}{modality}  (recipe inherited from parent)")
     click.echo(f"Model:     {spec.model or '(none)'}"
                + ("  [identity-bearing]" if spec.identity_bearing else ""))
     click.echo(f"Seed:      {spec.seed}  ({spec.seed_strategy})")
