@@ -164,6 +164,53 @@ def test_draft_applies_and_surfaces_canon(
     assert "LOCKED-HAIR" in batch.specs[0].prompt
 
 
+def test_resolve_template_prefers_txt2img_for_sourceless_draft() -> None:
+    """A text2img prompt that semantically ranks an inpaint template first must NOT pick
+    it — its init_image/mask slots can't be filled without a source (would 400 at submit)."""
+    import asyncio
+
+    from visual_generation.draft import _resolve_template
+    from visual_generation.retrieval import RetrievedContext
+
+    txt2img = _template("vw", set())
+    inpaint = _template("vw-inpaint", {"init_image", "mask"})
+    ctx = RetrievedContext()
+    ctx.workflow_templates = [(0.9, inpaint), (0.5, txt2img)]  # inpaint ranks higher
+    got = asyncio.run(_resolve_template(MagicMock(), None, ctx, source=None))
+    assert got is not None and got.name == "vw"
+
+
+def test_resolve_template_prefers_source_capable_for_refinement() -> None:
+    import asyncio
+
+    from visual_generation.draft import _resolve_template
+    from visual_generation.retrieval import RetrievedContext
+
+    txt2img = _template("vw", set())
+    img2img = _template("vw-i2i", {"init_image"})
+    ctx = RetrievedContext()
+    ctx.workflow_templates = [(0.9, txt2img), (0.5, img2img)]  # txt2img ranks higher
+    got = asyncio.run(
+        _resolve_template(MagicMock(), None, ctx, source=VisualSource(from_generation="g"))
+    )
+    assert got is not None and got.name == "vw-i2i"
+
+
+def test_resolve_template_falls_back_when_no_modality_match() -> None:
+    """Only an inpaint template retrieved + sourceless → fall back to it (advisory); the
+    generate side then skips it cleanly rather than 400-ing."""
+    import asyncio
+
+    from visual_generation.draft import _resolve_template
+    from visual_generation.retrieval import RetrievedContext
+
+    inpaint = _template("vw-inpaint", {"init_image", "mask"})
+    ctx = RetrievedContext()
+    ctx.workflow_templates = [(0.9, inpaint)]
+    got = asyncio.run(_resolve_template(MagicMock(), None, ctx, source=None))
+    assert got is not None and got.name == "vw-inpaint"
+
+
 def test_draft_passes_force_canon_through_to_enforce(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
 ) -> None:

@@ -218,6 +218,17 @@ async def _provision_source(
     spec. Raises `_SourceSkip` (with a plain reason) when the source can't be honored."""
     src = sp.spec.source
     if src is None:
+        # Sourceless (text2img) spec, but the resolved template is an img2img/inpaint graph
+        # whose init_image/mask slots can't be filled without a source — submitting it would
+        # 400 at the pod ("Invalid image file: mask"). Skip with a clear reason instead.
+        slots = sp.template.slot_map
+        if "init_image" in slots or "mask" in slots:
+            needs = "init_image" + ("/mask" if "mask" in slots else "")
+            raise _SourceSkip(
+                f"Skipped {sp.spec.spec_id}: no source image, but its template "
+                f"'{sp.template.name}' is an img2img/inpaint graph (needs {needs}). "
+                "Re-draft as text2img (drop --from/--image), or pass --template <txt2img>."
+            )
         return None
 
     parent_id: str | None = None

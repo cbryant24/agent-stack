@@ -61,13 +61,32 @@ async def _resolve_template(
     store: VisualGenerationStore,
     template_name: str | None,
     ctx: RetrievedContext,
+    *,
+    source: VisualSource | None = None,
 ) -> WorkflowTemplate | None:
-    """By explicit name, else the top retrieved template, else None (advisory)."""
+    """By explicit name, else the top retrieved template matching the spec's MODALITY,
+    else None (advisory).
+
+    Modality match matters: retrieval ranks templates by prompt similarity, so a text2img
+    prompt about screens/TVs can surface the inpaint template first — but an img2img/inpaint
+    graph's init_image/mask slots can't be filled without a source, so it 400s at submit.
+    So a sourceless draft prefers a pure txt2img template (no init_image slot), and a source
+    draft prefers one that can apply the source (init_image, plus mask when the source is
+    masked). Falls back to the top retrieved template when nothing matches."""
     if template_name:
         return await store.get_template_by_name(template_name)
-    if ctx.workflow_templates:
-        return ctx.workflow_templates[0][1]
-    return None
+    candidates = [t for _, t in ctx.workflow_templates]
+    if not candidates:
+        return None
+    if source is None:
+        txt2img = [t for t in candidates if "init_image" not in t.slot_map]
+        return (txt2img or candidates)[0]
+    wants_mask = source.mask is not None
+    matching = [
+        t for t in candidates
+        if "init_image" in t.slot_map and (("mask" in t.slot_map) if wants_mask else True)
+    ]
+    return (matching or candidates)[0]
 
 
 def _default_batch_path(project: str | None) -> Path:
@@ -181,7 +200,7 @@ async def draft(
                 # would dilute the embedding); the craft sees the full compiled brief.
                 ctx = await retrieve_context(compiled.query or compiled.text, store, memory_store)
                 provenance = summarize_provenance(ctx)
-                template = await _resolve_template(store, template_name, ctx)
+                template = await _resolve_template(store, template_name, ctx, source=source)
                 models = store.list_models()
 
                 # Edit-mode refinement: seed from the parent generation so the draft

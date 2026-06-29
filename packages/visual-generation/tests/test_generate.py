@@ -392,6 +392,26 @@ def test_missing_parent_generation_skips_with_reason_no_upload(tmp_path: Path, f
     assert any("ghost" in r and "not found" in r for r in result.skip_reasons)
 
 
+def test_sourceless_spec_on_inpaint_template_skips_instead_of_400(tmp_path: Path) -> None:
+    """A text2img (sourceless) spec that landed on an img2img/inpaint template is skipped
+    with a clear reason — its init_image/mask slots can't be filled, so submitting would
+    400 at the pod ('Invalid image file: mask')."""
+    store = _store()
+    fake = _FakeComfyUpload()
+    spec = _spec(workflow_ref="z-img2img")  # NB: no source
+
+    result = spend_generation_sync(
+        _source_plan(_img2img_template(with_mask=True), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    assert fake.uploads == []  # never reached submit
+    store.upsert_generation.assert_not_called()
+    assert spec.spec_id in result.skipped
+    assert any("no source image" in r and "init_image" in r for r in result.skip_reasons)
+
+
 def test_sourceless_spend_uploads_nothing(tmp_path: Path, flux_template) -> None:
     fake = _FakeComfyUpload()
     spend_generation_sync(
