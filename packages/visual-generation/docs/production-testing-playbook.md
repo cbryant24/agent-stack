@@ -69,7 +69,13 @@ of this thing, or is it just this shot?** (Full reference: [`canon-guide.md`](ca
 - Changes per scene (clothing, time, framing, props that come and go) → **`--points`**, never
   canon. If a garment can hide the hair, **state the occlusion** ("hood down, dreadlocks falling
   over the collar to mid-back").
-- A render whose composition you already like → **`draft --from`**, don't re-roll.
+- A render whose composition you already like → **`draft --from`**, don't re-roll. (With no
+  `--template` it auto-selects the img2img graph — `visual-workflow-img2img`, or
+  `visual-workflow-inpaint` with `--mask` — so `generate` doesn't skip it.)
+- Canon **didn't fire** for a subject (no `── Canon enforced ──` line for it — the LLM named it by
+  other words, common for **places** and **`--from`** refinements) → force it:
+  **`draft --canon "the sports bar"`** (repeatable) injects the lock + strips its forbids even
+  when the prompt never names it.
 
 ---
 
@@ -679,7 +685,7 @@ agent visual-generation chain show <ROOT_GEN_ID>             # lineage tree (dra
 | Command | Free? | Purpose | Key options |
 |---|---|---|---|
 | `knowledge-verify "<q>" --project P` | ✅ | prove knowledge surfaces + gap flags | `--limit` |
-| `draft "<intent>" --project P` | ✅ | craft one spec (text2img or `--from`/`--image` refine) | `--points` `--scene` `--template` `--model` `--provider` `--from` `--image` `--mask` `--denoise` `-o` |
+| `draft "<intent>" --project P` | ✅ | craft one spec (text2img or `--from`/`--image` refine) | `--points` `--scene` `--template` `--canon` `--model` `--provider` `--from` `--image` `--mask` `--denoise` `-o` |
 | `batch build P` | ✅ | one spec per `directed.md` scene | `--from` `--image` `--denoise` `--template` `--model` `-o` |
 | `batch rebuild P` | ✅ | overwrite an existing batch | (same as build) |
 | `batch list [--project <slug>]` / `batch rm <id> [--project <slug>]` | ✅ | inspect / prune specs (id first; target by `--project` or a path) | `--yes` (rm) |

@@ -164,6 +164,35 @@ def test_draft_applies_and_surfaces_canon(
     assert "LOCKED-HAIR" in batch.specs[0].prompt
 
 
+def test_draft_passes_force_canon_through_to_enforce(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
+) -> None:
+    """`--canon` selectors reach enforce_canon as `force=…` so a subject the LLM never
+    named is injected anyway."""
+    from visual_generation.draft import draft_sync
+
+    import importlib
+    draft_mod = importlib.import_module("visual_generation.draft")
+    _patch_chain(monkeypatch, RetrievedContext(), _crafted(prompt="a wide cityscape, no people"))
+    seen: dict = {}
+
+    def fake_enforce(prompt, project, **kw):
+        seen["force"] = kw.get("force")
+        return prompt, []
+
+    monkeypatch.setattr(draft_mod, "enforce_canon", fake_enforce)
+    monkeypatch.setattr(draft_mod, "subjects_matching", lambda sel, proj, **k: [])
+    monkeypatch.setattr(draft_mod, "canon_loras_for", lambda p, proj, **k: [])
+    store = _store(flux_template, [ModelAsset(name="flux1-dev.safetensors", kind="checkpoint")])
+
+    draft_sync(
+        "a wide cityscape", batch_path=tmp_path / "celeste.batch.md", template_name="flux-txt2img",
+        project="celeste", force_canon=["the sports bar"],
+        store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
+    )
+    assert seen["force"] == ["the sports bar"]
+
+
 def test_draft_pins_canon_character_lora(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
 ) -> None:

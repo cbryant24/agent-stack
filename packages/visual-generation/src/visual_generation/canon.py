@@ -185,25 +185,43 @@ def _tidy(prompt: str) -> str:
     return prompt.strip().strip(",").strip()
 
 
+def _alias_set(subj: CanonSubject) -> set[str]:
+    """A subject's aliases lower-cased, with and without a leading ``@`` (so a selector
+    like ``narrator`` matches the token alias ``@narrator``)."""
+    return {a.lower() for a in subj.aliases} | {a.lower().lstrip("@") for a in subj.aliases}
+
+
 def enforce_canon(
-    prompt: str, project: str | None, *, base_dir: Path | None = None
+    prompt: str,
+    project: str | None,
+    *,
+    base_dir: Path | None = None,
+    force: tuple[str, ...] | list[str] = (),
 ) -> tuple[str, list[str]]:
     """Rewrite `prompt` to honor the project's locked canon. Returns (prompt, applied).
 
     Deterministic, no LLM. For each subject named in the prompt: expand any ``@alias``
     token to the locked descriptor, inject the locked descriptor when a plain alias is
-    named but the canonical text is absent, and strip any forbidden phrasing. `applied`
-    is a human-readable list of what was changed (empty = no-op). A project with no
-    canon file is a no-op."""
+    named but the canonical text is absent, and strip any forbidden phrasing.
+
+    `force` is a list of subject **selectors** (aliases) to apply **even if the prompt
+    never names them** — the escape hatch for when the LLM refers to a subject by other
+    words (e.g. writes "sports-bar" but the alias is "the sports bar"), so canon would
+    otherwise miss. A forced subject is injected + its forbids stripped regardless.
+
+    `applied` is a human-readable list of what was changed (empty = no-op). A project with
+    no canon file is a no-op."""
     if not project:
         return prompt, []
     subjects = ProjectCanon(project, base_dir=base_dir).load()
     if not subjects:
         return prompt, []
 
+    forced = {f.lower() for f in force}
     applied: list[str] = []
     for subj in subjects:
         locked = subj.locked
+        is_forced = bool(forced & _alias_set(subj))
         present = locked.lower() in prompt.lower()
         plain_match: str | None = None
 
@@ -217,9 +235,10 @@ def enforce_canon(
             elif re.search(rf"\b{re.escape(alias)}\b", prompt, re.IGNORECASE):
                 plain_match = plain_match or alias
 
-        if plain_match and not present:
+        if (plain_match or is_forced) and not present:
             prompt = f"{prompt.rstrip().rstrip(',.')}, {locked}"
-            applied.append(f"injected canon for '{plain_match}'")
+            verb = "injected" if plain_match else "forced"
+            applied.append(f"{verb} canon for '{plain_match or subj.aliases[0]}'")
             present = True
 
         if present:
@@ -232,6 +251,22 @@ def enforce_canon(
     if applied:
         prompt = _tidy(prompt)
     return prompt, applied
+
+
+def subjects_matching(
+    selectors: list[str], project: str | None, *, base_dir: Path | None = None
+) -> list[CanonSubject]:
+    """The canon subjects any of whose aliases match one of `selectors` (the `--canon`
+    force targets). Lets the caller also feed forced subjects into composition. Empty for
+    no project / no canon / no selectors / no match."""
+    if not project or not selectors:
+        return []
+    wanted = {s.lower() for s in selectors}
+    return [
+        subj
+        for subj in ProjectCanon(project, base_dir=base_dir).load()
+        if wanted & _alias_set(subj)
+    ]
 
 
 def _subject_present(prompt: str, subj: CanonSubject) -> bool:

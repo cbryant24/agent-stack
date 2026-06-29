@@ -58,6 +58,29 @@ Knowing these four mechanics explains every behavior — and every gotcha:
    **verbatim — it does NOT re-enforce canon.** → *Corollary:* if you hand-edit a batch spec and
    delete the locked text, `generate` won't put it back. Re-`draft` to re-apply.
 
+### Forcing canon when the LLM names the subject by *other words* — `draft --canon`
+
+Because injection is an **exact word-boundary alias match**, canon **misses** when the model
+refers to a subject by words that aren't an alias — e.g. it writes *"sports-bar corner building"*
+or *"the bar entrance"* while your alias is `"the sports bar"`, so the bar lock never fires (no
+`── Canon enforced ──` line for it). This is most common with **places** and on **`draft --from`
+refinements** (where the prompt is inherited from a pre-canon parent).
+
+The escape hatch is **`draft --canon "<subject>"`** (repeatable; also on `redraft`): it **forces**
+the named subject's locked text in **and strips its forbids — even if the prompt never names it**.
+Select the subject by **any** alias. The applied line reads `forced canon for '<subject>'`.
+
+```bash
+# The bar's exterior lock fires even though the LLM wrote "sports-bar", not the alias:
+agent visual-generation draft --from <gen_id> --project celeste-you-dangerous --scene "Arrival" \
+  --points "pull the camera back; night" \
+  --canon "the sports bar"        # ← forces the storefront lock (flat-screens in, CRT stripped)
+```
+
+Two better long-term fixes that reduce the need for `--canon`: (1) add aliases that match how the
+model actually phrases it (but keep them **non-overlapping** between subjects — §3); (2) name the
+exact alias in `--points`. `--canon` is the guaranteed override when those aren't enough.
+
 ### Cast-weaving (canon as a *composition input*, not just a filter)
 
 Because injection only fires on an alias that's *already in the prompt*, a scene could silently
@@ -254,6 +277,8 @@ look. Seating, crowd, and clothing are deliberately **not** locked (they're per-
 | `--forbid "tall"` mangled unrelated words | `forbid` is a raw substring strip | Forbid multi-word phrases / non-substring words; lean on positive locked text |
 | Wrong lock fired (exterior look in an interior shot) | Two subjects share an alias | Non-overlapping aliases; don't name both in one draft (§3) |
 | Canon change didn't affect an existing render | Canon runs at `draft`/`redraft`, not `generate` | Re-`draft` (or `batch rebuild`) the scene |
+| A subject's lock didn't fire (no `Canon enforced` line for it) | The LLM named it by other words, not an exact alias (common for places / `--from` refinements) | `draft --canon "<subject>"` to force it; or add a matching (non-overlapping) alias |
+| `draft --from` render was **skipped** at `generate` ("no init_image slot") | A refinement landed on a txt2img template | Fixed — `--from`/`--image` now default to the img2img graph (inpaint when `--mask`). Pass `--template` to override |
 | Scene's lead missing, no `Canon enforced` block | LLM composed a characterless prompt → no alias to enforce | Cast-weaving now writes them in; if still absent you get the `⚠ ABSENT` advisory — add a `--points` naming them |
 | Canon set on machine A, missing on machine B | `canon/*.json` lives in `~/agent-data`, outside git | Set canon on each machine, or copy the JSON |
 | Long lock, diluted output | Exterior + interior crammed into one subject | Split into place-subjects; keep each lean (§4) |

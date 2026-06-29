@@ -57,7 +57,51 @@ def test_cli_draft_from_sets_source_and_shows_refining(monkeypatch: pytest.Monke
     assert out.exit_code == 0, out.output
     assert captured["source"].from_generation == "gen-parent"
     assert captured["denoise"] == 0.6
+    # A refinement with no --template defaults to the img2img graph (else `generate` skips it).
+    assert captured["template_name"] == "visual-workflow-img2img"
     assert "Refining" in out.output and "gen-parent" in out.output
+
+
+def test_cli_draft_from_with_mask_defaults_to_inpaint_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake(intent, **kwargs):
+        captured.update(kwargs)
+        return DraftResult(spec=VisualSpec(spec_id="s", prompt="p"),
+                           batch_path=Path("/tmp/p.batch.md"), template_name="visual-workflow-inpaint")
+
+    monkeypatch.setattr("visual_generation.cli.draft_sync", fake)
+    out = CliRunner().invoke(cli, ["draft", "x", "--from", "gen-1", "--mask", "/tmp/m.png"])
+    assert out.exit_code == 0, out.output
+    assert captured["template_name"] == "visual-workflow-inpaint"
+
+
+def test_cli_draft_explicit_template_overrides_the_anchor_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake(intent, **kwargs):
+        captured.update(kwargs)
+        return DraftResult(spec=VisualSpec(spec_id="s", prompt="p"), batch_path=Path("/tmp/p.batch.md"))
+
+    monkeypatch.setattr("visual_generation.cli.draft_sync", fake)
+    out = CliRunner().invoke(cli, ["draft", "x", "--from", "gen-1", "--template", "custom-i2i"])
+    assert out.exit_code == 0, out.output
+    assert captured["template_name"] == "custom-i2i"
+
+
+def test_cli_draft_canon_force_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake(intent, **kwargs):
+        captured.update(kwargs)
+        return DraftResult(spec=VisualSpec(spec_id="s", prompt="p"), batch_path=Path("/tmp/p.batch.md"))
+
+    monkeypatch.setattr("visual_generation.cli.draft_sync", fake)
+    out = CliRunner().invoke(
+        cli, ["draft", "x", "--canon", "the sports bar", "--canon", "inside the bar"]
+    )
+    assert out.exit_code == 0, out.output
+    assert captured["force_canon"] == ["the sports bar", "inside the bar"]
 
 
 def test_cli_draft_from_and_image_is_a_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:

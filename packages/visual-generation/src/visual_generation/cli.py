@@ -37,6 +37,7 @@ from visual_generation.constants import (
     DEFAULT_GPU_RATE_USD_PER_HR,
     EXPLAIN_LEVELS,
     IMG2IMG_TEMPLATE_NAME,
+    INPAINT_TEMPLATE_NAME,
     LESSON_SCOPE_MODEL,
     LESSON_SCOPE_PROMPT,
     LESSON_SCOPE_SETTINGS,
@@ -309,10 +310,15 @@ def _echo_provenance(legs: list) -> None:
               help="Model alias (sonnet|opus) or a concrete id; the provider resolves it.")
 @click.option("--provider", "provider", default=None,
               help="LLM provider for the craft (anthropic|openai; default: config).")
+@click.option("--canon", "canon_force", multiple=True,
+              help="Force a canon subject (by any alias) into the prompt even if the LLM "
+                   "didn't name it — its locked text is injected + forbids stripped. "
+                   "Repeatable. Use when the model refers to a subject by other words.")
 def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
           output: str | None, template_name: str | None, project: str | None,
           from_generation: str | None, image_path: str | None, mask_path: str | None,
-          denoise: float | None, model: str | None, provider: str | None) -> None:
+          denoise: float | None, model: str | None, provider: str | None,
+          canon_force: tuple[str, ...]) -> None:
     """Craft a settled generation spec and append it to a batch file. Free.
 
     Give a few key points (INTENT and/or --points) — optionally a --scene — and the
@@ -333,6 +339,11 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
         source = VisualSource(
             from_generation=from_generation, image_path=image_path, mask=mask_path
         )
+        # A refinement needs a template with an init_image (+ mask) slot; a txt2img
+        # template can't apply the source and `generate` skips it. Default to the right
+        # graph when the director didn't name one (mirrors the anchored-batch default).
+        if template_name is None:
+            template_name = INPAINT_TEMPLATE_NAME if mask_path else IMG2IMG_TEMPLATE_NAME
 
     result = draft_sync(
         intent,
@@ -345,6 +356,7 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
         denoise=denoise,
         model=model,
         provider=provider,
+        force_canon=list(canon_force) or None,
     )
 
     if result.status == "failed":
@@ -436,8 +448,11 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
               help="Model alias (sonnet|opus) or a concrete id; the provider resolves it.")
 @click.option("--provider", "provider", default=None,
               help="LLM provider for the craft (anthropic|openai; default: config).")
+@click.option("--canon", "canon_force", multiple=True,
+              help="Force a canon subject (by any alias) into the revised prompt even if it "
+                   "isn't named. Repeatable.")
 def redraft(gen_id: str, change: str, output: str | None, project: str | None,
-            model: str | None, provider: str | None) -> None:
+            model: str | None, provider: str | None, canon_force: tuple[str, ...]) -> None:
     """Revise a prior generation's PROMPT (text2img) by applying CHANGE. Free.
 
     Inherits the parent's seed, recipe, model, LoRAs, dimensions, and workflow template so
@@ -445,7 +460,8 @@ def redraft(gen_id: str, change: str, output: str | None, project: str | None,
     img2img edit of the parent's pixels) and records descent via `revised_from`.
     """
     result = redraft_sync(
-        gen_id, change, batch_path=output, project=project, model=model, provider=provider
+        gen_id, change, batch_path=output, project=project, model=model, provider=provider,
+        force_canon=list(canon_force) or None,
     )
 
     if result.status == "failed":

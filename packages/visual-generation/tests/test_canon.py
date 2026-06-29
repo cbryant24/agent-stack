@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from visual_generation.canon import ProjectCanon, canon_loras_for, enforce_canon, scene_cast
+from visual_generation.canon import (
+    ProjectCanon,
+    canon_loras_for,
+    enforce_canon,
+    scene_cast,
+    subjects_matching,
+)
 from visual_generation.models import LoraRef
 
 _NARRATOR = "a young African American man with deep caramel-brown skin, long black yarn dreadlocks falling to the middle of his back"
@@ -77,6 +83,41 @@ def test_strips_forbidden_phrasing(tmp_path: Path) -> None:
     assert "short hair" not in out
     assert _NARRATOR in out
     assert any("removed forbidden phrasing" in a for a in applied)
+
+
+def test_force_injects_subject_not_named_in_prompt(tmp_path: Path) -> None:
+    _seed_canon(tmp_path)  # narrator subject; not named below
+    out, applied = enforce_canon(
+        "a wide empty neon cityscape, no people", "celeste",
+        base_dir=tmp_path, force=["the narrator"],
+    )
+    assert _NARRATOR in out                                   # locked text injected anyway
+    assert any("forced canon for 'the narrator'" in a for a in applied)
+
+
+def test_force_matches_token_alias_without_at(tmp_path: Path) -> None:
+    _seed_canon(tmp_path)  # aliases include "@narrator"
+    out, applied = enforce_canon(
+        "a rooftop at dusk", "celeste", base_dir=tmp_path, force=["narrator"],
+    )
+    assert _NARRATOR in out
+
+
+def test_force_also_strips_forbids_for_the_forced_subject(tmp_path: Path) -> None:
+    _seed_canon(tmp_path)  # forbids include "short hair"
+    out, _ = enforce_canon(
+        "a portrait with short hair", "celeste", base_dir=tmp_path, force=["the narrator"],
+    )
+    assert "short hair" not in out.lower()
+    assert _NARRATOR in out
+
+
+def test_subjects_matching_resolves_selectors(tmp_path: Path) -> None:
+    _seed_two_subjects(tmp_path)
+    got = subjects_matching(["the waitress"], "celeste", base_dir=tmp_path)
+    assert [s.aliases[0] for s in got] == ["Celeste"]
+    assert subjects_matching(["nobody"], "celeste", base_dir=tmp_path) == []
+    assert subjects_matching([], "celeste", base_dir=tmp_path) == []
 
 
 def test_noop_when_subject_not_named(tmp_path: Path) -> None:

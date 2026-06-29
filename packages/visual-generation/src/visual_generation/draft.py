@@ -28,7 +28,12 @@ from agent_runtime import (
 )
 
 from visual_generation.batch_file import append_spec
-from visual_generation.canon import canon_loras_for, enforce_canon, scene_cast
+from visual_generation.canon import (
+    canon_loras_for,
+    enforce_canon,
+    scene_cast,
+    subjects_matching,
+)
 from visual_generation.chains import craft_spec
 from visual_generation.discovery import compile_creative_input, discover_scenes
 from visual_generation.constants import (
@@ -99,6 +104,7 @@ async def draft(
     denoise: float | None = None,
     model: str | None = None,
     provider: str | None = None,
+    force_canon: list[str] | None = None,
     budget: BudgetEnvelope | None = None,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
@@ -154,8 +160,14 @@ async def draft(
     canon_absent: list[str] = []
     # Canon characters this scene names (from the scene body, not the whole brief) — fed
     # into composition so the LLM renders them, and checked again after enforce so a
-    # silently-dropped lead is surfaced rather than ignored.
+    # silently-dropped lead is surfaced rather than ignored. Subjects the director FORCED
+    # via --canon are merged in (deduped) so they're composed in too, and are enforced
+    # post-hoc regardless of whether the prompt names them.
+    forced = list(force_canon or [])
     cast = scene_cast(compiled.focus, project)
+    for subj in subjects_matching(forced, project):
+        if subj.aliases[0] not in {c.aliases[0] for c in cast}:
+            cast.append(subj)
     research_offer: str | None = None
     overall_reasoning = ""
     tracker_ref: BudgetTracker | None = None
@@ -211,8 +223,9 @@ async def draft(
                 spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
 
                 # Deterministically enforce locked project canon (e.g. the narrator's
-                # hair) — the one channel that doesn't depend on LLM discretion.
-                spec.prompt, canon_applied = enforce_canon(spec.prompt, project)
+                # hair) — the one channel that doesn't depend on LLM discretion. Forced
+                # subjects are injected even if the composed prompt never names them.
+                spec.prompt, canon_applied = enforce_canon(spec.prompt, project, force=forced)
                 # Pin the present subject's character LoRA too (model-level continuity);
                 # re-derives identity_bearing inside, superseding the pre-fill above.
                 canon_applied += _pin_canon_loras(spec, project, store)
@@ -388,6 +401,7 @@ async def redraft(
     project: str | None = None,
     model: str | None = None,
     provider: str | None = None,
+    force_canon: list[str] | None = None,
     budget: BudgetEnvelope | None = None,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
@@ -480,7 +494,9 @@ async def redraft(
 
                 # Enforce locked canon on the revised prompt too (continuity can't drift
                 # away from canon across a redraft) — text and character LoRA both.
-                spec.prompt, canon_applied = enforce_canon(spec.prompt, project or parent.project)
+                spec.prompt, canon_applied = enforce_canon(
+                    spec.prompt, project or parent.project, force=list(force_canon or [])
+                )
                 canon_applied += _pin_canon_loras(spec, project or parent.project, store)
 
                 overall_reasoning = crafted["rationale"]

@@ -220,6 +220,11 @@ DENOISE_COHERENCE_WARN = 0.85
 # set and no --template is given, ensuring every scene actually img2img's the anchor.
 IMG2IMG_TEMPLATE_NAME = "visual-workflow-img2img"
 
+# Canonical inpaint workflow template name. A masked refinement needs both an
+# `init_image` and a `mask` slot — only the inpaint graph exposes them. A `--from`/`--image`
+# draft with a `--mask` defaults its template to this when no --template is given.
+INPAINT_TEMPLATE_NAME = "visual-workflow-inpaint"
+
 # ── Asset write paths + Q8 opsec (under agent_data_dir / AGENT_SUBDIR) ────────
 AGENT_SUBDIR = "visual-generation"
 ASSETS_SUBDIR = "assets"          # non-identity assets

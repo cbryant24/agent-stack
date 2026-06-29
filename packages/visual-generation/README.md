@@ -522,7 +522,10 @@ want the *same* render with a changed prose prompt, not an img2img edit of the p
   `VisualSource`** — so `generate` still treats the spec as plain text2img (no image is
   uploaded to the pod). Append-only.
 - **Contrast with `draft --from`.** `draft --from` is **img2img/inpaint** refinement: it
-  attaches a `VisualSource`, uploads the parent image, and keeps a *fresh* seed.
+  attaches a `VisualSource`, uploads the parent image, and keeps a *fresh* seed. With no
+  `--template` it now **defaults to the img2img graph** (`visual-workflow-img2img`, or
+  `visual-workflow-inpaint` when `--mask` is given) — a txt2img template has no `init_image` slot,
+  so `generate` would otherwise **skip** the spec.
   `redraft` keeps `source=None`, **re-renders fresh text2img**, and **inherits the
   parent's seed**. Reach for `--from` to edit the existing pixels; reach for `redraft` to
   re-roll the same recipe with a reworded prompt.
@@ -632,11 +635,17 @@ visual-generation canon edit celeste-you-dangerous "the narrator" \
 ```
 
 `canon edit` options: `--add-alias` / `--rm-alias` / `--add-forbid` / `--rm-forbid` / `--locked`
-(all optional; select the subject by **any** alias). **Two rules that bite:** `--forbid` is a raw
-substring strip (`"tall"` also hits `me`**`tall`**`ic` — forbid phrases, not bare words), and two
-subjects must have **non-overlapping aliases** (a shared `"the bar"` fires the wrong lock). See
-the guide. Note: `canon/*.json` lives in `~/agent-data` (**outside git**) — it does **not** sync
-between machines.
+/ `--lora` / `--clear-lora` (all optional; select the subject by **any** alias). **Two rules that
+bite:** `--forbid` is a raw substring strip (`"tall"` also hits `me`**`tall`**`ic` — forbid
+phrases, not bare words), and two subjects must have **non-overlapping aliases** (a shared
+`"the bar"` fires the wrong lock). See the guide. Note: `canon/*.json` lives in `~/agent-data`
+(**outside git**) — it does **not** sync between machines.
+
+**Forcing canon — `draft --canon "<subject>"`.** Injection only fires on an **exact alias match**,
+so canon **misses** when the model names a subject by other words (e.g. writes "sports-bar" while
+the alias is "the sports bar") — common for **places** and **`--from` refinements**. `draft
+--canon "<subject>"` (repeatable; also on `redraft`) **forces** that subject's lock in and strips
+its forbids **even if the prompt never names it** (applied line: `forced canon for '…'`).
 
 **Character LoRA (model-level continuity).** `--lora NAME[:STRENGTH]` pins a trained character
 LoRA into the stack on *every* scene the subject appears in — the model-level half of canon.
