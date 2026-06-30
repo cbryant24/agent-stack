@@ -109,5 +109,9 @@ def build_prompt_graph(spec: VisualSpec, template: WorkflowTemplate) -> tuple[di
 
     for i, lora in enumerate(spec.lora_stack):
         put(f"lora_{i}", lora.name, advise_as=f"lora_{i}")
+        # Strength rides a parallel `lora_{i}_strength` slot. Templates that predate
+        # it simply lack the slot, so the value is collected as advisory and never
+        # forced — the loader node keeps its own default. Backward-compatible.
+        put(f"lora_{i}_strength", lora.strength, advise_as=f"lora_{i}_strength")
 
     return graph, unmapped

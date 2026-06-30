@@ -350,6 +350,11 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
     )
     for i, nid in enumerate(lora_ids):
         slot_map[f"lora_{i}"] = _slot(nid, "lora_name")
+        # Map the model-side strength too (both LoraLoader and LoraLoaderModelOnly
+        # expose `strength_model`), so a canon-pinned `name:strength` reaches the
+        # graph — graph_build writes the matching `lora_{i}_strength` slot.
+        if "strength_model" in graph[nid].get("inputs", {}):
+            slot_map[f"lora_{i}_strength"] = _slot(nid, "strength_model")
     if len(lora_ids) > 1:
         result.notes.append(
             f"{len(lora_ids)} LoRA loaders found (lora_0..lora_{len(lora_ids) - 1}); "

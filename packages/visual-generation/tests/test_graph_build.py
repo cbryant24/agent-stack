@@ -61,6 +61,47 @@ def test_extra_lora_beyond_slots_is_unmapped(flux_template) -> None:
     assert "lora_0" in unmapped
 
 
+def test_lora_name_and_strength_land_in_a_lora_template() -> None:
+    # A Z-Image-style txt2img graph with a LoraLoaderModelOnly between the UNET
+    # loader and the sampler — the shape visual-workflow-lora is built from.
+    from visual_generation.models import WorkflowTemplate
+    from visual_generation.slot_inference import infer_slots
+
+    graph = {
+        "10": {"class_type": "UNETLoader", "inputs": {"unet_name": "z_image.safetensors"}},
+        "11": {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "model": ["10", 0], "lora_name": "placeholder.safetensors", "strength_model": 1.0}},
+        "12": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["13", 0]}},
+        "13": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_4b.safetensors"}},
+        "14": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["12", 0]}},
+        "15": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "3": {"class_type": "KSampler", "inputs": {
+            "seed": 1, "steps": 8, "cfg": 1.0, "sampler_name": "res_multistep", "scheduler": "simple",
+            "denoise": 1.0, "model": ["11", 0], "positive": ["12", 0], "negative": ["14", 0],
+            "latent_image": ["15", 0]}},
+    }
+    inferred = infer_slots(graph)
+    # Both the name and the model-side strength get their own slots.
+    assert inferred.slot_map["lora_0"] == {"node_id": "11", "input_key": "lora_name"}
+    assert inferred.slot_map["lora_0_strength"] == {"node_id": "11", "input_key": "strength_model"}
+
+    template = WorkflowTemplate(
+        name="z-lora", descriptor="x", graph=graph,
+        slot_map=inferred.slot_map, required_models=inferred.required_models,
+    )
+    spec = VisualSpec(
+        prompt="a felt puppet",
+        lora_stack=[LoraRef(name="narrator-zimage.safetensors", strength=0.9)],
+        workflow_ref="z-lora",
+    )
+    out, unmapped = build_prompt_graph(spec, template)
+    # The canon-pinned name AND its 0.9 strength both reach the loader node.
+    assert out["11"]["inputs"]["lora_name"] == "narrator-zimage.safetensors"
+    assert out["11"]["inputs"]["strength_model"] == 0.9
+    assert "lora_0" not in unmapped
+    assert "lora_0_strength" not in unmapped
+
+
 # ── source filenames (img2img / inpaint init_image + mask) ───────────────────
 
 

@@ -83,28 +83,33 @@ level — consistent look, much leaner prompts.
 - [ ] **Order:** narrator first (most reference, most shots), Celeste second.
 - [ ] Confirm RunPod budget for a ~1–2 h 24 GB training run (separate from the inference pod).
 
-### Phase 1 — make a LoRA-capable z-image template  ⟵ prerequisite, currently UNMET
-Confirmed: `visual-workflow`, `visual-workflow-inpaint`, `visual-workflow-img2img` have **no LoRA
-slot**. Mechanics that matter (from source):
+### Phase 1 — make a LoRA-capable z-image template  ✅ DONE 2026-06-29 (machine B)
+Confirmed: `visual-workflow`, `visual-workflow-inpaint`, `visual-workflow-img2img` had **no LoRA
+slot**. Mechanics that mattered (from source):
 - `graph_build.py:110-111` writes each `spec.lora_stack[i].name` into a template slot named
   **`lora_{i}`** (so `lora_0`, `lora_1`, …). No such slot ⇒ the LoRA is collected as advisory and
   **never applied**. `draft.py` also warns when `lora_stack` is set but no `lora_`-prefixed slot
   exists.
-- ⚠ Only the LoRA **name** is mapped by `lora_{i}`. **Strength is not written** by the current code —
-  verify the `LoraLoaderModelOnly` node's `strength_model` either defaults acceptably in the graph or
-  add code/slot for it. (Decide: hardcode strength in the registered graph, or extend `graph_build`.)
+- **Correction to the original worry:** `slot_inference.infer_slots` **already** maps `lora_0` →
+  `lora_name` for `LoraLoader`/`LoraLoaderModelOnly` nodes — no manual slot declaration needed.
+- **Strength resolved (was the real gap):** only the LoRA **name** was mapped; `LoraRef.strength`
+  (e.g. canon's `narrator-zimage:0.9`) was silently dropped. Fixed by extending **both**
+  `graph_build` (writes `lora_{i}_strength`) **and** `slot_inference` (infers `lora_{i}_strength` →
+  the loader's `strength_model`), backward-compatible (older templates lack the slot ⇒ advisory).
+  Chosen over hardcoding so canon's per-character strength actually applies and the Phase-4
+  strength-0-vs-1 sanity check is a one-value change.
 
 Steps:
-- [ ] In ComfyUI (on the inference pod), build the official **Z-Image-Turbo** workflow
-      (diffusion-model loader + Qwen-3-4B text encoder + VAE), insert a **`LoraLoaderModelOnly`**
-      between the diffusion-model loader and the sampler. Export **API format** JSON.
-- [ ] Commit that graph to `packages/visual-generation/workflows/` (e.g. `z-image-turbo-lora-api.json`)
-      so it syncs across machines.
-- [ ] Register it: `agent visual-generation workflow register workflows/z-image-turbo-lora-api.json
-      --name visual-workflow-lora`. During slot inference, **ensure a `lora_0` slot maps to the
-      LoraLoader's `lora_name` input** (confirm interactively; the inferrer may not propose it).
+- [x] Built the **Z-Image-Turbo** LoRA graph from the registered `visual-workflow` base (UNET loader +
+      Qwen-3-4B + VAE) with a **`LoraLoaderModelOnly`** (node `30:48`) inserted between the UNET loader
+      (`30:46`) and `ModelSamplingAuraFlow` (`30:47`). Saved API-format JSON.
+- [x] Committed to `packages/visual-generation/workflows/z-image-turbo-lora-api.json`.
+- [x] Registered as **`visual-workflow-lora`** (12 slots incl. `lora_0` + `lora_0_strength`). Verified
+      end-to-end: a `LoraRef(name, strength)` lands name + strength on node `30:48`, nothing unmapped.
+      Placeholder `lora_name = narrator-zimage.safetensors` (overwritten by the `lora_0` slot at draft
+      time; shows as a "missing model" advisory until Phase 3/4 trains it).
 - [ ] (Optional but recommended) also make an img2img/inpaint LoRA variant if cast LoRAs are needed in
-      refinement passes.
+      refinement passes. **Deferred.**
 
 ### Phase 2 — dataset (narrator first)
 - [ ] Curate **9–15** of the most *consistent* narrator frames from `~/agent-data/visual-generation/
@@ -176,7 +181,8 @@ this doc. Train the weights once; both machines consume the one `.safetensors`.
 
 ## 6. Open decisions / risks
 - **Base vs Turbo training target** — pick in Phase 0.
-- **LoRA strength not slot-mapped** (§4 Phase 1) — decide hardcode-in-graph vs extend `graph_build`.
+- ~~**LoRA strength not slot-mapped**~~ — ✅ resolved in Phase 1: extended `graph_build` +
+  `slot_inference` to carry `lora_{i}_strength` → loader `strength_model`.
 - **Silent QKV load failure** — the top risk; mitigated by the strength-0-vs-1 sanity check + ZiT
   loader fallback.
 - **Celeste data bootstrap** — she needs a consistent reference set generated first.

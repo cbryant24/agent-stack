@@ -82,6 +82,8 @@ def test_sdxl_resolves_positive_and_negative_by_tracing() -> None:
     assert sm["cfg"] == {"node_id": "3", "input_key": "cfg"}
     assert sm["checkpoint"] == {"node_id": "4", "input_key": "ckpt_name"}
     assert sm["lora_0"] == {"node_id": "10", "input_key": "lora_name"}
+    # The model-side strength gets its own slot so canon `name:strength` applies.
+    assert sm["lora_0_strength"] == {"node_id": "10", "input_key": "strength_model"}
     # No flux_guidance on an SDXL graph.
     assert "flux_guidance" not in sm
 
