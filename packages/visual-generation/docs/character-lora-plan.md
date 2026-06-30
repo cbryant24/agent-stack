@@ -111,14 +111,25 @@ Steps:
 - [ ] (Optional but recommended) also make an img2img/inpaint LoRA variant if cast LoRAs are needed in
       refinement passes. **Deferred.**
 
-### Phase 2 — dataset (narrator first)
-- [ ] Curate **9–15** of the most *consistent* narrator frames from `~/agent-data/visual-generation/
-      assets/celeste-you-dangerous/` (LIKED/★4 gens). Diverse angle/framing, **consistent** felt look,
-      hair length, build. Inconsistency here bakes drift into the LoRA.
-- [ ] Upscale/clean to 1024px as needed.
-- [ ] Caption each: a **rare trigger token** (e.g. `chrsnrtr`) + the stop-motion/felt style + pose.
-- [ ] **Celeste bootstrap problem:** she has ~no good reference yet. Before her LoRA, generate a
-      small *consistent* reference set (lock her via canon text, fixed-ish seeds) → curate → then train.
+### Phase 2 — dataset (narrator first)  ◧ IN PROGRESS 2026-06-29 (machine B)
+**Audit done** (59 assets, 3 parallel vision passes). Full results + inventory:
+`~/agent-data/visual-generation/lora/narrator/narrator-lora-audit.md`. Curated 12-frame set staged in
+`…/lora/narrator/dataset/`.
+- [x] **Angle audit vs. how he's shot:** the narrator is **NOT rear-only** — he's shown **front-on, face
+      visible** in the interior beats (couch/gaming) and **rear** at the storefront. So front-on identity
+      is in scope, and **face reference already exists** (no Celeste-style bootstrap needed for him).
+- [x] **Style decision = FELT** (canon). Two of the director's 4 favorites (`a77c6bb1`, `bfed13d5`) are a
+      smoother/CGI-ish render and a glossy-photoreal storefront cluster exists — **all excluded** from
+      training to avoid a muddy mixed-style LoRA; kept as look-reference only.
+- [x] Curated **12** consistent felt frames (6 front/face + 5 rear + 1 rear-¾), deduped, angle-balanced,
+      anchored on the felt favorites (`0a25cbb2`, `ce0be66f`).
+- [x] **Cropped** the 5 Celeste-in-frame front shots to narrator-only (single-subject LoRA → avoid bleed).
+- [x] **Captioned** all 12 (`.txt` sidecars, ai-toolkit convention). Trigger token **`chrsnrtr`**; token absorbs
+      constant identity, captions describe the controllable variables (angle / framing / pose / wardrobe / setting).
+- [ ] ⚠ **Pose monotony:** fronts are mostly couch-pointing, rears mostly storefront-standing; profile is a
+      gap. Risk of overfitting to those two compositions — consider generating 2–3 fresh poses/expressions.
+- [ ] **Celeste bootstrap problem (her LoRA, later):** she has ~no good reference yet. Before her LoRA,
+      generate a small *consistent* reference set (lock her via canon text, fixed-ish seeds) → curate → train.
 
 ### Phase 3 — train (Ostris ai-toolkit on RunPod 24 GB)
 - [ ] Spin a **24 GB (4090)** RunPod pod with ai-toolkit. Pull **Z-Image-Base** (or Turbo +
