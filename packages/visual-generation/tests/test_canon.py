@@ -136,6 +136,45 @@ def test_idempotent_when_locked_already_present(tmp_path: Path) -> None:
     assert not any("injected canon" in a for a in applied)
 
 
+def test_collapses_duplicate_locked_copies(tmp_path: Path) -> None:
+    # Simulates the LLM weaving the descriptor in AND restating it as a trailing block:
+    # the same verbatim locked text reaching the prompt more than once.
+    _seed_canon(tmp_path)
+    prompt = f"the narrator on a rooftop, {_NARRATOR}, dusk light, {_NARRATOR}"
+    out, applied = enforce_canon(prompt, "celeste", base_dir=tmp_path)
+    assert out.count(_NARRATOR) == 1
+    assert any("deduplicated" in a for a in applied)
+
+
+def test_dedupe_keeps_the_first_occurrence(tmp_path: Path) -> None:
+    _seed_canon(tmp_path)
+    prompt = f"the narrator, {_NARRATOR}, on a rooftop, and again {_NARRATOR}"
+    out, _ = enforce_canon(prompt, "celeste", base_dir=tmp_path)
+    # The earliest (in-prose) copy survives in place; the trailing copy is removed.
+    assert out.count(_NARRATOR) == 1
+    assert out.index(_NARRATOR) < out.index("on a rooftop")
+
+
+def test_collapses_repeated_token_expansions(tmp_path: Path) -> None:
+    # Each @narrator expands to the locked text; the result must still be a single copy.
+    _seed_canon(tmp_path)
+    out, applied = enforce_canon("@narrator on the left, @narrator on the right", "celeste", base_dir=tmp_path)
+    assert "@narrator" not in out
+    assert out.count(_NARRATOR) == 1
+    assert any("expanded" in a for a in applied)
+
+
+def test_dedupe_leaves_an_llm_paraphrase_untouched(tmp_path: Path) -> None:
+    # A paraphrase has no exact match to strip; the verbatim injected copy is the only
+    # one collapsed — the paraphrase is left for the composition-side guard to discourage.
+    _seed_canon(tmp_path)
+    prompt = "the narrator, a man with long dreadlocks, on a rooftop"
+    out, applied = enforce_canon(prompt, "celeste", base_dir=tmp_path)
+    assert out.count(_NARRATOR) == 1  # exactly one verbatim copy injected
+    assert "a man with long dreadlocks" in out  # paraphrase survives
+    assert not any("deduplicated" in a for a in applied)  # nothing verbatim to collapse
+
+
 # ── character LoRA (canon_loras_for) ─────────────────────────────────────────────
 
 

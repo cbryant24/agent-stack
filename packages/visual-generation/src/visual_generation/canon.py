@@ -191,6 +191,30 @@ def _alias_set(subj: CanonSubject) -> set[str]:
     return {a.lower() for a in subj.aliases} | {a.lower().lstrip("@") for a in subj.aliases}
 
 
+def _dedupe_locked(prompt: str, locked: str) -> tuple[str, int]:
+    """Collapse repeated verbatim copies of a locked descriptor down to the FIRST one.
+
+    A subject's appearance can reach the prompt from more than one channel — the LLM
+    weaving it into prose *and* restating it as a trailing identity block (despite being
+    told only to place/pose), multiple ``@token`` expansions, or a ``redraft`` inheriting
+    an already-injected parent prompt. Each full copy past the first is pure dilution at a
+    low step count, so we keep the earliest occurrence (usually the natural in-prose one)
+    and delete the rest. Case-insensitive, literal match; returns (prompt, removed_count).
+
+    Only *verbatim* copies of the current locked text are collapsed — a paraphrase the
+    LLM authored in its own words has no exact match to strip and is left for the
+    composition-side guard to discourage."""
+    if not locked:
+        return prompt, 0
+    spans = [m.span() for m in re.finditer(re.escape(locked), prompt, re.IGNORECASE)]
+    if len(spans) <= 1:
+        return prompt, 0
+    # Delete every occurrence after the first, back-to-front so earlier spans stay valid.
+    for start, end in reversed(spans[1:]):
+        prompt = prompt[:start] + prompt[end:]
+    return prompt, len(spans) - 1
+
+
 def enforce_canon(
     prompt: str,
     project: str | None,
@@ -242,6 +266,17 @@ def enforce_canon(
             present = True
 
         if present:
+            # Idempotency: guarantee exactly one verbatim copy of the locked descriptor,
+            # regardless of how many channels put it there (LLM prose + trailing block,
+            # repeated @token expansions, redraft re-injection). Collapse before stripping
+            # forbids so the dedupe matches the intact locked text.
+            prompt, removed = _dedupe_locked(prompt, locked)
+            if removed:
+                copies = "copy" if removed == 1 else "copies"
+                applied.append(
+                    f"deduplicated {removed} redundant {copies} of canon "
+                    f"for '{plain_match or subj.aliases[0]}'"
+                )
             for bad in subj.forbid:
                 bad_re = re.compile(re.escape(bad), re.IGNORECASE)
                 if bad_re.search(prompt):
