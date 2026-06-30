@@ -112,9 +112,9 @@ Steps:
       refinement passes. **Deferred.**
 
 ### Phase 2 — dataset (narrator first)  ◧ IN PROGRESS 2026-06-29 (machine B)
-**Audit done** (59 assets, 3 parallel vision passes). Full results + inventory:
-`~/agent-data/visual-generation/lora/narrator/narrator-lora-audit.md`. Curated 12-frame set staged in
-`…/lora/narrator/dataset/`.
+**Audit done** (59 assets, 3 parallel vision passes). Full results + inventory (in-repo, canonical):
+[`character-lora-narrator-audit.md`](character-lora-narrator-audit.md). Curated 12-frame set + caption
+sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-git; airdrop-synced).
 - [x] **Angle audit vs. how he's shot:** the narrator is **NOT rear-only** — he's shown **front-on, face
       visible** in the interior beats (couch/gaming) and **rear** at the storefront. So front-on identity
       is in scope, and **face reference already exists** (no Celeste-style bootstrap needed for him).
