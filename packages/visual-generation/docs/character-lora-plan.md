@@ -131,33 +131,57 @@ sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-
 - [ ] **Celeste bootstrap problem (her LoRA, later):** she has ~no good reference yet. Before her LoRA,
       generate a small *consistent* reference set (lock her via canon text, fixed-ish seeds) → curate → train.
 
-### Phase 3 — train (Ostris ai-toolkit on RunPod 24 GB)
-- [ ] Spin a **24 GB (4090)** RunPod pod with ai-toolkit. Pull **Z-Image-Base** (or Turbo +
-      `zimage_turbo_training_adapter`).
-- [ ] Config: rank 8, ~3k steps, LR 5e-5 (tight identity), batch 1–2, sample every ~250 steps on a
-      fixed seed. Watch for overfitting / style collapse.
-- [ ] Output: `narrator-zimage.safetensors`. **Download and keep it** (it does NOT live in git — see §5).
+### Phase 3 — train  ✅ DONE 2026-07-01 (machine B, RunPod 5090)
+- [x] Trained on **Z-Image-Base** (`Tongyi-MAI/Z-Image`) — rank 8, LR 5e-5, **batch 2**, 3000-step cap,
+      ai-toolkit on a RunPod **5090**. Picked **step 1500** (identity locked, no overfit); 1000/1250 kept as
+      backups. All 6 checkpoints (41 MB each) saved to the **`/mnt` volume** + Mac `~/Downloads/narrator-lora/`.
+- [x] Pose-monotony risk did **NOT** materialize — samples in park/beach/kitchen rendered varied/clean
+      (flip aug + caption strategy worked). Loss 0.49→0.41 across 1500 steps.
+- [x] ⚠ Ran training **directly via CLI** (`python run.py <config>`) because the ai-toolkit UI worker
+      queue was wedged. See §Operational gotchas.
 
-### Phase 4 — wire inference
-- [ ] Upload `narrator-zimage.safetensors` to the inference pod's `models/loras/`.
-- [ ] `agent visual-generation model sync --endpoint <url>` to register it; **mark it
-      identity-bearing** in the registry (the flag canon's LoRA-pin relies on — see model registry).
-- [ ] **Sanity-check the silent-load gotcha:** render with LoRA strength 0 vs 1.0 — output MUST
-      change. If not, switch the template's loader to **`Comfyui-ZiT-Lora-loader`** (install the node
-      on the pod) and re-register, or re-export from ai-toolkit in ComfyUI-aware format.
+### Phase 4 — wire inference  ✅ DONE 2026-07-01
+- [x] Uploaded `narrator-zimage_000001500.safetensors` → inference pod `…/ComfyUI/models/loras/` as
+      **`narrator-zimage.safetensors`**; `model sync` registered it; set **`"identity_bearing": true`
+      manually in `models.json`** (⚠ there is **no CLI** for this — `model sync` only *preserves* the flag).
+- [x] **Silent-QKV sanity check PASSED** — strength 0 vs 1.0 clearly differ, so stock `LoraLoaderModelOnly`
+      loads the LoRA on Turbo; **the ZiT-loader fallback was NOT needed.**
+- [x] ⚠ **Base→Turbo attenuation is real:** the Base-trained LoRA needs **high strength (~2.0)** to express
+      on distilled Turbo, and **skin tone under-expresses** (renders pale) — fixed by keeping one skin cue in
+      canon (Phase 5). Identity (dreads, button eyes, felt, build) locks in by ~2.0.
 
-### Phase 5 — pin to canon & verify the payoff
-- [ ] `agent visual-generation canon edit celeste-you-dangerous "the narrator" --lora
-      narrator-zimage:0.9` (tune strength).
-- [ ] **Trim the narrator's locked text** once the LoRA carries identity — keep only what the LoRA
-      can't (e.g. wardrobe is per-shot anyway). Goal: prompts stop carrying the full descriptor.
-- [ ] Draft a test shot using `--template visual-workflow-lora`; confirm the `── Canon enforced ──`
-      block pins the LoRA, the descriptor is lean, and the render still *is* the narrator.
+### Phase 5 — pin to canon & verify  ✅ DONE 2026-07-01
+- [x] `canon edit celeste-you-dangerous "the narrator" --lora narrator-zimage.safetensors:2.0`
+- [x] Trimmed locked text to **`"a young Black man, deep caramel-brown felt skin"`** (LoRA carries
+      dreads/eyes/felt/build; only skin needs a cue on Turbo). Forbid guards kept. *Original (restore if
+      needed):* "a felt-and-clay stop-motion puppet of a young Black man, short and stocky with a compact
+      broad-shouldered build and a large head-to-body ratio, deep caramel-brown felt skin, thick full long
+      black yarn dreadlocks falling to mid-back".
+- [x] Confirmed: bar + portrait renders at strength 2.0 + skin cue → on-model narrator in fresh scenes.
+      Wardrobe (hoodie/jeans/AJ1s) is now **per-shot promptable**.
 
-### Phase 6 — repeat for Celeste
-- [ ] After her reference set exists (Phase 2 bootstrap), repeat 3–5.
-- [ ] **Two-LoRA interior shot:** narrator + Celeste in one frame can bleed identities — plan on
-      regional prompting / deliberate posing, and test strengths together.
+### Phase 6 — repeat for Celeste  ◻ NEXT
+- [ ] Celeste bootstrap: she has ~no good reference — generate a consistent set first (lock via canon
+      text + fixed seeds), curate, then repeat Phases 2–5. **The whole pipeline below is now proven.**
+- [ ] **Two-LoRA interior shot:** narrator + Celeste in one frame can bleed identities — plan regional
+      prompting / deliberate posing, test strengths together.
+
+### Operational gotchas (RunPod / ai-toolkit) — learned 2026-07-01, save the next run
+- **Point outputs at the persistent volume.** ai-toolkit defaults to `/app/ai-toolkit/output` (container
+  disk) which is **wiped when the pod cycles**. We nearly lost the checkpoints; recovered only because we'd
+  `cp`'d them to `/mnt`. Next time: set `training_folder` to `/mnt/output`, or `cp … /mnt/` right after each save.
+- **RunPod DNS is often broken on boot** (`Temporary failure in name resolution`) → model downloads fail with
+  a misleading `httpx` "client has been closed" error. Fix: `printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf`.
+- **ai-toolkit UI worker queue can wedge** (job stuck "queued", never runs). Bypass: write the config to YAML
+  (pull it from the UI's own `/api/jobs` → `job_config`) and run `python run.py <yaml>` directly; set
+  `logging.use_ui_logger: false`. The UI Queue row stays "queued" but the CLI run is real; samples still land
+  in the output dir.
+- **`scp` needs the direct-TCP SSH** (`root@<ip> -p <port>`), NOT the `ssh.runpod.io` proxy (no SFTP subsystem).
+  Use `-P` (capital) for port; add `-O` if "subsystem request failed".
+- **Sample images via API:** `GET /api/jobs/{id}/samples` lists paths; fetch bytes with
+  `GET /api/img/<url-encoded-absolute-path>` (Bearer `AI_TOOLKIT_AUTH`).
+- **Terminating a pod ≠ stop/start** — a new pod ID means a fresh container disk; only `/mnt` (network volume)
+  survives, and it's region-locked + single-attach (can't be on two pods at once → relay via your Mac).
 
 ---
 
