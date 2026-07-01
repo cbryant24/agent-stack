@@ -392,10 +392,12 @@ def test_draft_no_absent_flag_and_passes_cast_to_craft_when_subject_present(
     assert craft.await_args.kwargs["cast"] == [narrator]
 
 
-def test_draft_canon_lora_not_duplicated_when_already_present(
+def test_draft_canon_lora_strength_overrides_llm_guess(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
 ) -> None:
-    """If the LLM already picked the canon LoRA, pinning dedupes by name (no second copy)."""
+    """If the LLM already picked the canon LoRA at its own guessed strength, canon owns
+    the strength: the single entry is overridden to the canon value (not duplicated, and
+    not left at the LLM's guess)."""
     from visual_generation.draft import draft_sync
 
     crafted = _crafted(
@@ -422,9 +424,9 @@ def test_draft_canon_lora_not_duplicated_when_already_present(
     )
 
     names = [lr.name for lr in result.spec.lora_stack]
-    assert names == ["celeste-narrator.safetensors"]  # not doubled
-    assert result.spec.lora_stack[0].strength == 0.6  # the LLM's pick is kept, not overwritten
-    assert not any("pinned canon LoRA" in note for note in result.canon_applied)
+    assert names == ["celeste-narrator.safetensors"]  # single entry, not doubled
+    assert result.spec.lora_stack[0].strength == 0.8  # canon strength overrides the LLM's 0.6
+    assert any("canon override" in note for note in result.canon_applied)
 
 
 # ── Part 1.5: compile project docs into the draft input ──────────────────────

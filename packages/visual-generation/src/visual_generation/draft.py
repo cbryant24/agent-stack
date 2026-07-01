@@ -108,17 +108,25 @@ def _default_batch_path(project: str | None) -> Path:
 
 
 def _pin_canon_loras(spec: VisualSpec, project: str | None, store: Any) -> list[str]:
-    """Pin each present subject's character LoRA into `spec.lora_stack` (dedupe by name),
-    then re-derive identity_bearing now that canon may have added an identity asset.
+    """Pin each present subject's character LoRA into `spec.lora_stack`, then re-derive
+    identity_bearing now that canon may have added an identity asset.
 
     The model-level half of canon enforcement: locked text reaching the prompt is the
     textual identity; this is the same identity at the model level, guaranteed on every
-    scene the subject appears in. Returns human-readable notes for `canon_applied`."""
+    scene the subject appears in. **Canon owns the pinned character LoRA's strength** — if
+    the LLM already put the same LoRA in the stack at a guessed strength, the canon value
+    overrides it (canon is authoritative for identity), rather than being deduped away.
+    Returns human-readable notes for `canon_applied`."""
     notes: list[str] = []
     for lr in canon_loras_for(spec.prompt, project):
-        if not any(existing.name == lr.name for existing in spec.lora_stack):
+        idx = next((i for i, e in enumerate(spec.lora_stack) if e.name == lr.name), None)
+        if idx is None:
             spec.lora_stack.append(lr)
             notes.append(f"pinned canon LoRA '{lr.name}'@{lr.strength}")
+        elif spec.lora_stack[idx].strength != lr.strength:
+            was = spec.lora_stack[idx].strength
+            spec.lora_stack[idx] = lr  # canon strength wins over the LLM's guess
+            notes.append(f"canon LoRA '{lr.name}' strength {was}→{lr.strength} (canon override)")
     spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
     return notes
 
