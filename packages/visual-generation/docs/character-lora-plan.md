@@ -184,8 +184,14 @@ sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-
   **Cool TV-glow rim light broke a button eye into a cartoon eye** — keep profiles warm-lit.
   When the Anthropic API is unavailable, specs can be **hand-cloned in the batch file** (copy a
   proven vg-spec JSON + prompt, new UUID) and `generate` runs fine — only `draft` needs the LLM.
-- [ ] **Train** (repeat Phase 3 recipe): Z-Image-Base, rank 8, LR 5e-5, batch 2, 3000-step cap,
-      sample ~every 250; expect the winner near step ~1500. RunPod 24 GB+; outputs → `/mnt/output`.
+- [x] **Trained 2026-07-02** — fully CLI-driven via the new `scripts/lora-train` (no ai-toolkit UI:
+      config = `docs/celeste-zimage.yaml`, hand-derived from the committed `docs/narrator-zimage.yaml`).
+      Same recipe (Z-Image-Base, rank 8, LR 5e-5, batch 2), RunPod 5090 EU-RO-1. Run was cut at step
+      ~1596/3000 by an accidental pod deletion — **harmless**: checkpoints save every 250 straight to
+      `/mnt/output` (the lora-train default), so 250–1500 all survived. **Step-1500 samples show locked
+      identity** (park/portrait/beach-rear/kitchen, wardrobe promptable, felt intact) — same winning
+      step as the narrator. All 6 checkpoints on Mac `~/Downloads/celeste-zimage-lora/` + `/mnt`.
+      Identity was already resolving at step 1250; step-250 samples were still generic (expected).
 - [ ] **Wire + pin** (repeat Phases 4–5): upload as `celeste-zimage.safetensors`, `model sync`,
       manual `"identity_bearing": true`, strength-0-vs-1 sanity check, expect ~2.0 on Turbo, then
       `canon edit … "Celeste" --lora celeste-zimage.safetensors:2.0` + trim her locked text.

@@ -391,7 +391,7 @@ print(cfg)
 cmd_train() {
   local job="${1:-}"
   [[ -z "$job" ]] && { echo "error: train needs the job name." >&2; exit 1; }
-  run_ssh "cd $TOOLKIT_DIR && nohup python run.py $VOLUME_MOUNT_PATH/configs/$job.yaml > $VOLUME_MOUNT_PATH/output/$job.log 2>&1 & echo started pid \$!"
+  run_ssh "mkdir -p $VOLUME_MOUNT_PATH/output && cd $TOOLKIT_DIR && nohup python run.py $VOLUME_MOUNT_PATH/configs/$job.yaml > $VOLUME_MOUNT_PATH/output/$job.log 2>&1 & echo started pid \$!"
   log "training started. The UI Queue row may stay 'queued' forever — ignore it; the CLI run is real."
   log "follow with: lora-train log $job"
 }

@@ -1,0 +1,119 @@
+# celeste-zimage.yaml — ai-toolkit config for the Celeste character LoRA (Z-Image).
+#
+# Derived from narrator-zimage.yaml (the proven run) with ONLY these changes:
+#   • name/meta.name: celeste-zimage
+#   • training_folder: /mnt/output          (persistent volume — the narrator run's near-miss fix)
+#   • datasets[0].folder_path: /mnt/datasets/celeste  (15 images + .txt captions)
+#   • sample prompts: trigger token clstwtrss (lives IN the captions; trigger_word stays null)
+# Run: cd /app/ai-toolkit && python run.py /mnt/configs/celeste-zimage.yaml
+job: extension
+config:
+  name: celeste-zimage
+  process:
+  - type: diffusion_trainer
+    training_folder: /mnt/output
+    sqlite_db_path: ./aitk_db.db
+    device: cuda
+    trigger_word: null
+    performance_log_every: 10
+    network:
+      type: lora
+      linear: 8
+      linear_alpha: 8
+      lokr_full_rank: true
+      lokr_factor: -1
+      network_kwargs:
+        ignore_if_contains: []
+      conv: 16
+      conv_alpha: 16
+    save:
+      dtype: bf16
+      save_every: 250
+      max_step_saves_to_keep: 12
+      save_format: diffusers
+      push_to_hub: false
+    datasets:
+    - folder_path: /mnt/datasets/celeste
+      mask_path: null
+      mask_min_value: 0.1
+      default_caption: ''
+      caption_ext: txt
+      caption_dropout_rate: 0.05
+      cache_latents_to_disk: true
+      is_reg: false
+      network_weight: 1
+      resolution:
+      - 512
+      - 768
+      - 1024
+      controls: []
+      shrink_video_to_frames: true
+      num_frames: 1
+      flip_x: true
+      flip_y: false
+      num_repeats: 1
+    train:
+      batch_size: 2
+      bypass_guidance_embedding: false
+      steps: 3000
+      gradient_accumulation: 1
+      train_unet: true
+      train_text_encoder: false
+      gradient_checkpointing: true
+      noise_scheduler: flowmatch
+      optimizer: adamw8bit
+      timestep_type: weighted
+      content_or_style: balanced
+      optimizer_params:
+        weight_decay: 0.0001
+      unload_text_encoder: false
+      cache_text_embeddings: true
+      lr: 5.0e-05
+      ema_config:
+        use_ema: false
+        ema_decay: 0.99
+      skip_first_sample: false
+      force_first_sample: true
+      disable_sampling: false
+      dtype: bf16
+      diff_output_preservation: false
+      diff_output_preservation_multiplier: 1
+      diff_output_preservation_class: person
+      switch_boundary_every: 1
+      loss_type: mse
+    logging:
+      log_every: 1
+      use_ui_logger: false
+    model:
+      name_or_path: Tongyi-MAI/Z-Image
+      quantize: true
+      qtype: qfloat8
+      quantize_te: true
+      qtype_te: qfloat8
+      arch: zimage
+      low_vram: true
+      model_kwargs: {}
+      compile: false
+      layer_offloading: false
+      layer_offloading_text_encoder_percent: 1
+      layer_offloading_transformer_percent: 1
+    sample:
+      sampler: flowmatch
+      sample_every: 250
+      width: 1024
+      height: 1024
+      samples:
+      - prompt: clstwtrss, stop-motion puppet, front view, full body, standing in a sunny park
+      - prompt: clstwtrss, stop-motion puppet, front view, close-up portrait, soft smile, plain background
+      - prompt: clstwtrss, stop-motion puppet, rear view from behind, full body, walking down a beach at sunset
+      - prompt: clstwtrss, stop-motion puppet, three-quarter view, full body, standing in a kitchen
+      neg: ''
+      seed: 42
+      walk_seed: false
+      guidance_scale: 4
+      sample_steps: 30
+      num_frames: 1
+      fps: 1
+meta:
+  name: celeste-zimage
+  version: '1.0'
