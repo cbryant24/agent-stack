@@ -192,11 +192,25 @@ sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-
       identity** (park/portrait/beach-rear/kitchen, wardrobe promptable, felt intact) — same winning
       step as the narrator. All 6 checkpoints on Mac `~/Downloads/celeste-zimage-lora/` + `/mnt`.
       Identity was already resolving at step 1250; step-250 samples were still generic (expected).
-- [ ] **Wire + pin** (repeat Phases 4–5): upload as `celeste-zimage.safetensors`, `model sync`,
-      manual `"identity_bearing": true`, strength-0-vs-1 sanity check, expect ~2.0 on Turbo, then
-      `canon edit … "Celeste" --lora celeste-zimage.safetensors:2.0` + trim her locked text.
-- [ ] **Two-LoRA interior shot:** narrator + Celeste in one frame can bleed identities — plan regional
-      prompting / deliberate posing, test strengths together.
+- [x] **Wired + pinned 2026-07-02:** step-1500 checkpoint uploaded to the pod volume as
+      `celeste-zimage.safetensors` (NOTE: ComfyUI lives at `/workspace/runpod-slim/ComfyUI/` on the
+      gen-usne1 network volume — that's why models survive pod cycles), `model sync`'d, manual
+      `identity_bearing: true`. **QKV sanity PASSED** (fixed-seed A/B, strength 0.05 vs 2.0 —
+      night-and-day). Pinned `celeste-zimage.safetensors:2.0`; locked text trimmed to
+      `"a young woman with pale cream felt skin, plain uncolored felt cheeks with no blush"`
+      (the blush cue must stay — it re-emerges without it, her analog of the narrator's skin cue).
+      *Original locked text (restore if needed):* "a felt-and-clay stop-motion puppet of a young
+      woman, pale cream felt skin, plain uncolored pale cream felt cheeks matching the rest of her
+      face, long straight black yarn hair hanging down just past her shoulders, large glossy black
+      four-hole sewing-button eyes with visible thread holes, thin stitched black eyebrows, small
+      round felt nose, bare felt face with no makeup".
+- [ ] Final cosmetic verification render (spec `571b47a0` drafted, awaiting a pod).
+- [ ] **Two-LoRA interior shot** — template UNBLOCKED 2026-07-02: single-slot `visual-workflow-lora`
+      silently drops the 2nd LoRA (advisory only); built + registered **`visual-workflow-lora2`**
+      (`workflows/z-image-turbo-lora2-api.json`, chained LoraLoaderModelOnly → `lora_0`+`lora_1`
+      slots; `slot_inference` maps multi-LoRA automatically, node-id order). First two-shot spec
+      `83b7e5e5` drafted (both LoRAs @2.0, spatial-separation prompt), awaiting a pod. Watch for
+      identity bleed; strengths may need lowering when stacked.
 
 ### Operational gotchas (RunPod / ai-toolkit) — learned 2026-07-01, save the next run
 - **Point outputs at the persistent volume.** ai-toolkit defaults to `/app/ai-toolkit/output` (container
