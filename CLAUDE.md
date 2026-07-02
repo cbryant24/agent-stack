@@ -17,7 +17,8 @@ agent-stack/
 ├── infrastructure/
 │   └── docker-compose.yml  # Qdrant (6333/6334) + Jaeger (16686/4318) ONLY
 ├── scripts/
-│   ├── pod                 # RunPod ComfyUI pod create/delete + idle-cost watchdog
+│   ├── pod                 # RunPod ComfyUI (inference) pod create/delete + idle-cost watchdog
+│   ├── lora-train          # RunPod ai-toolkit (training) pod + character-LoRA run driver
 │   ├── agent_costs.py      # cost reports from trace.jsonl (stdlib; no op run)
 │   ├── ingest_user_knowledge.py
 │   └── music-curation-report.sh

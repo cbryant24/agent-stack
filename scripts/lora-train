@@ -1,0 +1,448 @@
+#!/usr/bin/env bash
+#
+# lora-train — RunPod lifecycle + training driver for character-LoRA runs on an
+#              Ostris ai-toolkit pod (Z-Image LoRAs; see
+#              packages/visual-generation/docs/character-lora-plan.md).
+#
+# This is the TRAINING pod controller. It is deliberately separate from `scripts/pod`
+# (the inference ComfyUI pod): different image, different mount path, different job.
+# Lifecycle is create/delete ONLY, same hard rules as `scripts/pod`:
+#   - NEVER call `runpodctl network-volume` (any subcommand).
+#   - NEVER call `pod start` or `pod stop`.
+#
+# The workflow this encodes (proven on the narrator run, 2026-07-01):
+#   1. `up` a pod from the ai-toolkit image with the network volume at /mnt.
+#   2. `dns` — RunPod DNS is often broken on boot; model downloads then fail with a
+#      misleading httpx "client has been closed". Fix resolv.conf first, always.
+#   3. `push` the curated dataset (png + txt sidecars) to the pod.
+#   4. Create the job in the ai-toolkit UI (the wizard emits a valid config; browse to
+#      the pod's :8675 proxy URL). The UI worker queue can WEDGE (job stuck "queued") —
+#      don't fight it: `config` pulls the job's YAML out of the UI's own API,
+#      re-points training_folder at /mnt/output (container disk is WIPED on pod
+#      cycle — we nearly lost the narrator checkpoints this way), and disables the
+#      UI logger.
+#   5. `train` — run it directly: nohup python run.py <yaml>. The UI queue row stays
+#      "queued"; ignore it, the CLI run is the real one. `log` tails progress,
+#      `samples` lists the periodic sample renders.
+#   6. `pull` the /mnt/output checkpoints to the Mac, then `down` the pod.
+#
+# Proven recipe (narrator, step-1500 checkpoint won): train on Z-Image-Base
+# (Tongyi-MAI/Z-Image), rank 8, LR 5e-5, batch 2, 3000-step cap, sample every 250,
+# descriptive captions with a rare trigger token (identity in the token, variables in
+# the caption). Configure those in the UI wizard; this script moves bytes and runs jobs,
+# it does not fabricate the ai-toolkit config schema.
+#
+# SSH: subcommands that reach into the pod need the DIRECT-TCP ssh endpoint
+# (root@<public-ip> -p <public-port>), NOT the ssh.runpod.io proxy (no SFTP subsystem,
+# so scp fails there). `ssh-info` tries to resolve it from the pod JSON; if RunPod's
+# CLI doesn't expose it, copy it from the console's Connect panel into POD_SSH.
+#
+# Defaults below reproduce the narrator run's pod exactly (settings recovered from the
+# machine-B console record, 2026-07-02): Ostris template 0fqzfjy6f3, RTX 5090, EU-RO-1,
+# the dedicated 60 GB training volume zimage-lora-factory (1r6sjkfwnl) at /mnt — a
+# SEPARATE volume from the inference pod's gen-usne1, so both pods can run at once.
+#
+# Env knobs (constants — all overridable):
+#   POD_NAME           Pod name to target.                     Default: zimage-lora-trainer
+#   POD_ID             Target a specific pod id.               Default: unset
+#   TEMPLATE_ID        RunPod template to deploy from (preferred — carries the
+#                      Ostris env/ports). Set empty to use IMAGE. Default: 0fqzfjy6f3
+#   IMAGE              Container image (fallback when TEMPLATE_ID is empty).
+#                                                              Default: ostris/aitoolkit:latest
+#   GPU_ID             GPU type.                               Default: NVIDIA GeForce RTX 5090
+#   CLOUD_TYPE         Cloud type.                             Default: SECURE
+#   DATACENTER         Data center id (must match the volume). Default: EU-RO-1
+#   NETWORK_VOLUME_ID  Training volume (zimage-lora-factory).  Default: 1r6sjkfwnl
+#   VOLUME_MOUNT_PATH  Mount path.                             Default: /mnt
+#   CONTAINER_DISK_GB  Container disk size in GB.              Default: 150
+#   PORTS              Exposed ports (UI + ssh).               Default: 8675/http,22/tcp
+#   POD_SSH            Direct ssh endpoint "root@IP:PORT" (overrides ssh-info).
+#   AI_TOOLKIT_AUTH    Bearer token / UI password for the ai-toolkit API. Default: password
+#   TOOLKIT_DIR        ai-toolkit checkout inside the pod.     Default: /app/ai-toolkit
+#   CREATE_RETRIES     Capacity-error retries on create.       Default: 3
+#   CREATE_RETRY_DELAY Seconds between create retries.         Default: 15
+#
+# External dependencies: runpodctl, jq, curl, ssh/scp.
+
+set -euo pipefail
+
+POD_NAME="${POD_NAME:-zimage-lora-trainer}"
+TEMPLATE_ID="${TEMPLATE_ID-0fqzfjy6f3}"
+IMAGE="${IMAGE:-ostris/aitoolkit:latest}"
+GPU_ID="${GPU_ID:-NVIDIA GeForce RTX 5090}"
+CLOUD_TYPE="${CLOUD_TYPE:-SECURE}"
+DATACENTER="${DATACENTER:-EU-RO-1}"
+NETWORK_VOLUME_ID="${NETWORK_VOLUME_ID:-1r6sjkfwnl}"
+VOLUME_MOUNT_PATH="${VOLUME_MOUNT_PATH:-/mnt}"
+CONTAINER_DISK_GB="${CONTAINER_DISK_GB:-150}"
+PORTS="${PORTS:-8675/http,22/tcp}"
+AI_TOOLKIT_AUTH="${AI_TOOLKIT_AUTH:-password}"
+TOOLKIT_DIR="${TOOLKIT_DIR:-/app/ai-toolkit}"
+CREATE_RETRIES="${CREATE_RETRIES:-3}"
+CREATE_RETRY_DELAY="${CREATE_RETRY_DELAY:-15}"
+
+log() {
+  printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*"
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: lora-train <up|down|status|ssh-info|dns|push|config|train|log|samples|pull>
+
+  up                    Ensure a running ai-toolkit training pod exists (create-fresh
+                        with the network volume at /mnt; reuse if already RUNNING).
+  down                  Delete ALL pods matching the target. Never touches the volume.
+  status                Print id/name/status/gpu/cost, plus the UI proxy URL.
+  ssh-info              Print the direct-TCP ssh endpoint (or tell you to set POD_SSH).
+  dns                   Fix the pod's broken-on-boot DNS (writes resolv.conf).
+  push <dataset-dir>    Copy a curated dataset dir (png+txt) to /mnt/datasets/<name>.
+  config <job-name> [dataset-path]
+                        Pull that job's YAML out of the UI API, point training_folder
+                        at /mnt/output (and folder_path at dataset-path if given),
+                        disable the UI logger; saves ./<job-name>.yaml locally AND
+                        uploads it to /mnt/configs/<job-name>.yaml.
+  train <job-name>      nohup python run.py /mnt/configs/<job-name>.yaml on the pod.
+  log [job-name]        Tail the training log (default: most recent).
+  samples <job-name>    List sample images under /mnt/output/<job-name>/samples.
+  pull <job-name> [dst] scp all /mnt/output/<job-name> checkpoints to dst
+                        (default ~/Downloads/<job-name>-lora/).
+
+Typical run:
+  lora-train up && lora-train dns
+  lora-train push ~/agent-data/visual-generation/lora/celeste/dataset
+  # create the job in the UI (http proxy URL from `status`), then:
+  lora-train config celeste-zimage && lora-train train celeste-zimage
+  lora-train log celeste-zimage        # watch loss; samples every 250 steps
+  lora-train pull celeste-zimage && lora-train down
+EOF
+  exit 2
+}
+
+preflight() {
+  local dep
+  for dep in runpodctl jq curl; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+      echo "error: $dep not found on PATH." >&2
+      exit 1
+    fi
+  done
+}
+
+resolve_pod() {
+  local list
+  list="$(runpodctl pod list --all -o json)"
+  if [[ -n "${POD_ID:-}" ]]; then
+    if jq -e --arg id "$POD_ID" 'any(.[]; .id == $id)' >/dev/null <<<"$list"; then
+      printf '%s\n' "$POD_ID"
+      return 0
+    fi
+    echo "error: POD_ID '$POD_ID' is set but no such pod exists in the account." >&2
+    exit 1
+  fi
+  jq -r --arg name "$POD_NAME" '.[] | select(.name == $name) | .id' <<<"$list"
+}
+
+pod_get() {
+  runpodctl pod get "$1" -o json
+}
+
+delete_pod() {
+  runpodctl pod delete "$1" >/dev/null
+  log "deleted pod $1."
+}
+
+is_capacity_error() {
+  grep -qiE 'not enough free gpus|not enough resources|no longer any instances|no instances available|host (is )?full|insufficient (capacity|resources)' <<<"$1"
+}
+
+# Resolve THE single matching pod id or die with guidance.
+require_one_pod() {
+  local ids count
+  ids="$(resolve_pod)"
+  count="$(grep -c . <<<"$ids" || true)"
+  if (( count == 0 )); then
+    echo "error: no pod matching '${POD_ID:-$POD_NAME}'. Run 'lora-train up' first." >&2
+    exit 1
+  fi
+  if (( count > 1 )); then
+    echo "error: $count pods match '$POD_NAME' — set POD_ID to disambiguate:" >&2
+    while IFS= read -r pid; do echo "       $pid" >&2; done <<<"$ids"
+    exit 1
+  fi
+  printf '%s\n' "$ids"
+}
+
+# Echo "IP PORT" for direct-TCP ssh. Sources, in order: POD_SSH override, then the
+# pod JSON's .ssh block (runpodctl injects its own key into the pod and reports
+# ip/port there). The ssh.runpod.io proxy is NEVER used (no SFTP).
+ssh_endpoint() {
+  if [[ -n "${POD_SSH:-}" ]]; then
+    # accept root@ip:port or ip:port
+    local stripped="${POD_SSH#root@}"
+    printf '%s %s\n' "${stripped%%:*}" "${stripped##*:}"
+    return 0
+  fi
+  local id json ip port
+  id="$(require_one_pod)"
+  json="$(pod_get "$id")"
+  ip="$(jq -r '.ssh.ip // empty' <<<"$json")"
+  port="$(jq -r '.ssh.port // empty' <<<"$json")"
+  if [[ -z "$ip" || -z "$port" ]]; then
+    echo "error: could not resolve the direct-TCP ssh endpoint from runpodctl output" >&2
+    echo "       (the pod may still be booting — retry in ~30s). Or copy it from the" >&2
+    echo "       RunPod console (Connect -> SSH over exposed TCP) and re-run with" >&2
+    echo "       POD_SSH=root@<ip>:<port>." >&2
+    exit 1
+  fi
+  printf '%s %s\n' "$ip" "$port"
+}
+
+SSH_KEY="${SSH_KEY:-$HOME/.runpod/ssh/runpodctl-ssh-key}"
+
+run_ssh() {
+  local ip port
+  read -r ip port < <(ssh_endpoint)
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -p "$port" "root@$ip" "$@"
+}
+
+ui_url() {
+  local id
+  id="$(require_one_pod)"
+  printf 'https://%s-8675.proxy.runpod.net\n' "$id"
+}
+
+create_pod() {
+  local attempt=1 out rc id json status gpu
+  while (( attempt <= CREATE_RETRIES )); do
+    local source_args=(--image "$IMAGE") source_desc="image $IMAGE"
+    if [[ -n "$TEMPLATE_ID" ]]; then
+      source_args=(--template-id "$TEMPLATE_ID")
+      source_desc="template $TEMPLATE_ID"
+    fi
+    log "creating pod '$POD_NAME' from $source_desc (attempt $attempt/$CREATE_RETRIES)..."
+    rc=0
+    out="$(runpodctl pod create \
+      --name "$POD_NAME" \
+      "${source_args[@]}" \
+      --gpu-id "$GPU_ID" \
+      --cloud-type "$CLOUD_TYPE" \
+      --data-center-ids "$DATACENTER" \
+      --network-volume-id "$NETWORK_VOLUME_ID" \
+      --volume-mount-path "$VOLUME_MOUNT_PATH" \
+      --container-disk-in-gb "$CONTAINER_DISK_GB" \
+      --ports "$PORTS" 2>&1)" || rc=$?
+
+    if (( rc != 0 )); then
+      if is_capacity_error "$out"; then
+        log "capacity error on create; retrying in ${CREATE_RETRY_DELAY}s..."
+        log "  (runpodctl: $(head -n1 <<<"$out"))"
+        sleep "$CREATE_RETRY_DELAY"
+        (( attempt++ ))
+        continue
+      fi
+      echo "error: pod create failed (non-capacity error):" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+    fi
+
+    id="$(grep -oE '[a-z0-9]{12,}' <<<"$out" | head -n1 || true)"
+    [[ -z "$id" ]] && id="$(resolve_pod | tail -n1)"
+    if [[ -z "$id" ]]; then
+      echo "error: pod create reported success but no pod id could be resolved:" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+    fi
+
+    json="$(pod_get "$id")"
+    status="$(jq -r '.desiredStatus' <<<"$json")"
+    gpu="$(jq -r '.gpuCount' <<<"$json")"
+    if [[ "$status" == "RUNNING" && "$gpu" -ge 1 ]]; then
+      log "pod $id RUNNING with $gpu GPU(s)."
+      log "ai-toolkit UI: https://${id}-8675.proxy.runpod.net  (password: \$AI_TOOLKIT_AUTH)"
+      log "next: lora-train dns   # RunPod DNS is usually broken on boot"
+      return 0
+    fi
+
+    log "pod $id came up with status=$status gpuCount=$gpu (no GPU — capacity). Deleting orphan and retrying."
+    delete_pod "$id" || true
+    sleep "$CREATE_RETRY_DELAY"
+    (( attempt++ ))
+  done
+
+  echo "" >&2
+  echo "!!! ERROR: could not create a pod with a GPU after $CREATE_RETRIES attempt(s) — '$GPU_ID' capacity in $DATACENTER is exhausted. Try again later, or override GPU_ID." >&2
+  exit 1
+}
+
+# --- subcommands -----------------------------------------------------------
+
+cmd_up() {
+  local ids id json status gpu
+  ids="$(resolve_pod)"
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    json="$(pod_get "$id")"
+    status="$(jq -r '.desiredStatus' <<<"$json")"
+    gpu="$(jq -r '.gpuCount' <<<"$json")"
+    if [[ "$status" == "RUNNING" && "$gpu" -ge 1 ]]; then
+      log "reusing pod $id (RUNNING with $gpu GPU(s))."
+      log "ai-toolkit UI: https://${id}-8675.proxy.runpod.net"
+      return 0
+    fi
+  done <<<"$ids"
+  create_pod
+}
+
+cmd_down() {
+  local ids id had=0
+  ids="$(resolve_pod)"
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    had=1
+    delete_pod "$id"
+  done <<<"$ids"
+  if (( had == 0 )); then
+    log "no pods matching '${POD_ID:-$POD_NAME}'; nothing to delete."
+  fi
+}
+
+cmd_status() {
+  local ids id json found=0
+  ids="$(resolve_pod)"
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    found=1
+    json="$(pod_get "$id")"
+    jq -r '"id:            \(.id)
+name:          \(.name)
+desiredStatus: \(.desiredStatus)
+gpuCount:      \(.gpuCount)
+costPerHr:     \(.costPerHr)"' <<<"$json"
+    printf 'ui:            https://%s-8675.proxy.runpod.net\n\n' "$id"
+  done <<<"$ids"
+  if (( found == 0 )); then
+    log "no pods matching '${POD_ID:-$POD_NAME}'."
+  fi
+}
+
+cmd_ssh_info() {
+  local ip port
+  read -r ip port < <(ssh_endpoint)
+  echo "ssh -p $port root@$ip"
+  echo "scp -P $port <src> root@$ip:<dst>   # -P capital; add -O if 'subsystem request failed'"
+}
+
+cmd_dns() {
+  run_ssh "printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf && echo dns-fixed && getent hosts huggingface.co | head -1"
+}
+
+cmd_push() {
+  local src="${1:-}"
+  [[ -z "$src" || ! -d "$src" ]] && { echo "error: push needs an existing dataset dir." >&2; exit 1; }
+  local name ip port
+  name="$(basename "$(cd "$src/.." && pwd)")"   # .../lora/<character>/dataset -> <character>
+  [[ "$name" == "lora" || -z "$name" ]] && name="$(basename "$src")"
+  read -r ip port < <(ssh_endpoint)
+  run_ssh "mkdir -p $VOLUME_MOUNT_PATH/datasets/$name"
+  scp -i "$SSH_KEY" -O -P "$port" "$src"/*.png "$src"/*.txt "root@$ip:$VOLUME_MOUNT_PATH/datasets/$name/"
+  log "dataset '$name' pushed to $VOLUME_MOUNT_PATH/datasets/$name ($(ls "$src"/*.png | wc -l | tr -d ' ') images)."
+  log "point the UI job's dataset folder there when you create the job."
+}
+
+cmd_config() {
+  local job="${1:-}"
+  [[ -z "$job" ]] && { echo "error: config needs the job name (as created in the UI)." >&2; exit 1; }
+  local url yaml ip port
+  url="$(ui_url)"
+  # The UI's own API is the source of truth for a valid config: GET /api/jobs, find the
+  # job by name, take .job_config verbatim, then apply the two hard-learned patches.
+  yaml="$(curl -sf -H "Authorization: Bearer $AI_TOOLKIT_AUTH" "$url/api/jobs" \
+    | jq -r --arg n "$job" '.jobs // . | .[] | select(.name == $n) | .job_config')"
+  [[ -z "$yaml" || "$yaml" == "null" ]] && { echo "error: no job named '$job' in the UI (create it there first)." >&2; exit 1; }
+
+  # Patch 1: outputs must land on the network volume — the container disk is wiped when
+  # the pod cycles. Patch 2: the UI logger blocks CLI runs; disable it.
+  yaml="$(printf '%s' "$yaml" | DATASET_PATH="${2:-}" python3 -c "
+import sys, re, os
+cfg = sys.stdin.read()
+cfg = re.sub(r'(training_folder:\s*).*', r'\1\"/mnt/output\"', cfg)
+ds = os.environ.get('DATASET_PATH')
+if ds:
+    cfg = re.sub(r'(folder_path:\s*).*', r'\1\"' + ds + r'\"', cfg, count=1)
+if 'use_ui_logger' in cfg:
+    cfg = re.sub(r'(use_ui_logger:\s*).*', r'\1false', cfg)
+else:
+    # insert under an existing logging: block, matching its children's indentation
+    m = re.search(r'^([ \t]*)logging:[ \t]*\n(([ \t]*)\S)?', cfg, re.M)
+    if m:
+        child = m.group(3) if m.group(3) and len(m.group(3)) > len(m.group(1)) else m.group(1) + '  '
+        cfg = cfg[:m.end(0) - len(m.group(2) or '')] + child + 'use_ui_logger: false\n' + cfg[m.end(0) - len(m.group(2) or ''):]
+    else:
+        sys.stderr.write('warning: no logging: block found; add use_ui_logger: false manually before train.\n')
+print(cfg)
+")"
+  printf '%s\n' "$yaml" > "$job.yaml"
+  read -r ip port < <(ssh_endpoint)
+  run_ssh "mkdir -p $VOLUME_MOUNT_PATH/configs"
+  scp -i "$SSH_KEY" -O -P "$port" "$job.yaml" "root@$ip:$VOLUME_MOUNT_PATH/configs/$job.yaml"
+  log "config saved locally ($job.yaml) and uploaded to $VOLUME_MOUNT_PATH/configs/$job.yaml."
+}
+
+cmd_train() {
+  local job="${1:-}"
+  [[ -z "$job" ]] && { echo "error: train needs the job name." >&2; exit 1; }
+  run_ssh "cd $TOOLKIT_DIR && nohup python run.py $VOLUME_MOUNT_PATH/configs/$job.yaml > $VOLUME_MOUNT_PATH/output/$job.log 2>&1 & echo started pid \$!"
+  log "training started. The UI Queue row may stay 'queued' forever — ignore it; the CLI run is real."
+  log "follow with: lora-train log $job"
+}
+
+cmd_log() {
+  local job="${1:-}"
+  if [[ -n "$job" ]]; then
+    run_ssh "tail -n 40 -f $VOLUME_MOUNT_PATH/output/$job.log"
+  else
+    run_ssh "ls -t $VOLUME_MOUNT_PATH/output/*.log 2>/dev/null | head -1 | xargs -r tail -n 40 -f"
+  fi
+}
+
+cmd_samples() {
+  local job="${1:-}"
+  [[ -z "$job" ]] && { echo "error: samples needs the job name." >&2; exit 1; }
+  run_ssh "ls -lt $VOLUME_MOUNT_PATH/output/$job/samples 2>/dev/null | head -20"
+  log "fetch one with: scp (see ssh-info) or the UI's Samples tab."
+}
+
+cmd_pull() {
+  local job="${1:-}" dst="${2:-$HOME/Downloads/${1:-job}-lora}"
+  [[ -z "$job" ]] && { echo "error: pull needs the job name." >&2; exit 1; }
+  local ip port
+  read -r ip port < <(ssh_endpoint)
+  mkdir -p "$dst"
+  scp -i "$SSH_KEY" -O -P "$port" "root@$ip:$VOLUME_MOUNT_PATH/output/$job/*.safetensors" "$dst/"
+  log "checkpoints pulled to $dst:"
+  ls -lh "$dst"/*.safetensors
+}
+
+# --- dispatch --------------------------------------------------------------
+
+main() {
+  preflight
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    up)       cmd_up ;;
+    down)     cmd_down ;;
+    status)   cmd_status ;;
+    ssh-info) cmd_ssh_info ;;
+    dns)      cmd_dns ;;
+    push)     cmd_push "$@" ;;
+    config)   cmd_config "$@" ;;
+    train)    cmd_train "$@" ;;
+    log)      cmd_log "$@" ;;
+    samples)  cmd_samples "$@" ;;
+    pull)     cmd_pull "$@" ;;
+    *)        usage ;;
+  esac
+}
+
+main "$@"

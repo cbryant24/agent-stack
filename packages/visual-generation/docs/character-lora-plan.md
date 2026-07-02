@@ -160,9 +160,35 @@ sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-
 - [x] Confirmed: bar + portrait renders at strength 2.0 + skin cue → on-model narrator in fresh scenes.
       Wardrobe (hoodie/jeans/AJ1s) is now **per-shot promptable**.
 
-### Phase 6 — repeat for Celeste  ◻ NEXT
-- [ ] Celeste bootstrap: she has ~no good reference — generate a consistent set first (lock via canon
-      text + fixed seeds), curate, then repeat Phases 2–5. **The whole pipeline below is now proven.**
+### Phase 6 — repeat for Celeste  ◧ IN PROGRESS 2026-07-02 (dataset staged, training NEXT)
+- [x] **Look locked (director-approved, 2026-07-01/02):** the `ed49b68c` bar-frame look — **large
+      glossy black four-hole button eyes**, **long straight loose black yarn hair just past the
+      shoulders** (explicitly NOT the twin-pigtail braids the first probe batch converged on), **no
+      blush**, **always long sleeves**. Canon locked text enriched accordingly + forbids
+      (`braid`, `pigtail`, `blush`, `rosy`, `short sleeve`, `short-sleeve`, `bare arms`, `sleeveless`,
+      `small button eyes`, `stitched eyelash`, `human eyes`).
+- [x] **Bootstrap set generated from canon text alone** (base `visual-workflow`, no LoRA, random
+      seeds — cross-seed identity held on canon text, fixed seeds never needed). 2 probe rounds
+      (pigtails → straight hair → no-blush) then 10 + 5 + 2 batch shots.
+- [x] **15-frame dataset staged** in `~/agent-data/visual-generation/lora/celeste/dataset/` (off-git),
+      `.txt` sidecars per narrator convention. Trigger token **`clstwtrss`**. 9 front (incl. close
+      portrait, tray, hands-on-hips, seated-with-controller) / 4 ¾+profile / 2 rear; wardrobe split
+      waitress vs casual. **Blush handling:** model's felt-doll prior re-adds faint blush under warm
+      light and Turbo has no negative slot → kept clean frames where possible and **captioned the
+      blush where visible** so it stays promptable instead of fusing into identity.
+- [x] Edits: couch frame cropped to Celeste-only (photobomb figure removed); rear-bar frame
+      pixel-patched (model stitched 2 buttons into the back of her hair).
+- **Staging lessons (save for future casts):** "seen from behind" prompts LOSE to the face-forward
+  prior (0/3) — rear views need **scene-motivated staging** ("standing at the window looking out",
+  "watching the wall TV from across the room": 2/2). Strict profiles come out ¾ but that's usable.
+  **Cool TV-glow rim light broke a button eye into a cartoon eye** — keep profiles warm-lit.
+  When the Anthropic API is unavailable, specs can be **hand-cloned in the batch file** (copy a
+  proven vg-spec JSON + prompt, new UUID) and `generate` runs fine — only `draft` needs the LLM.
+- [ ] **Train** (repeat Phase 3 recipe): Z-Image-Base, rank 8, LR 5e-5, batch 2, 3000-step cap,
+      sample ~every 250; expect the winner near step ~1500. RunPod 24 GB+; outputs → `/mnt/output`.
+- [ ] **Wire + pin** (repeat Phases 4–5): upload as `celeste-zimage.safetensors`, `model sync`,
+      manual `"identity_bearing": true`, strength-0-vs-1 sanity check, expect ~2.0 on Turbo, then
+      `canon edit … "Celeste" --lora celeste-zimage.safetensors:2.0` + trim her locked text.
 - [ ] **Two-LoRA interior shot:** narrator + Celeste in one frame can bleed identities — plan regional
       prompting / deliberate posing, test strengths together.
 
@@ -243,6 +269,14 @@ this doc. Train the weights once; both machines consume the one `.safetensors`.
 
 ## 8. Command quick-reference
 ```bash
+# Training run, end to end (scripts/lora-train encodes the §Operational gotchas):
+lora-train up && lora-train dns
+lora-train push ~/agent-data/visual-generation/lora/celeste/dataset
+# create the job in the ai-toolkit UI (URL from `lora-train status`), then:
+lora-train config celeste-zimage && lora-train train celeste-zimage
+lora-train log celeste-zimage
+lora-train pull celeste-zimage && lora-train down
+
 # Register the LoRA-capable template (after committing the graph JSON)
 agent visual-generation workflow register workflows/z-image-turbo-lora-api.json --name visual-workflow-lora
 
