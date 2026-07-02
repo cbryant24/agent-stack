@@ -204,13 +204,22 @@ sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-
       face, long straight black yarn hair hanging down just past her shoulders, large glossy black
       four-hole sewing-button eyes with visible thread holes, thin stitched black eyebrows, small
       round felt nose, bare felt face with no makeup".
-- [ ] Final cosmetic verification render (spec `571b47a0` drafted, awaiting a pod).
-- [ ] **Two-LoRA interior shot** — template UNBLOCKED 2026-07-02: single-slot `visual-workflow-lora`
-      silently drops the 2nd LoRA (advisory only); built + registered **`visual-workflow-lora2`**
-      (`workflows/z-image-turbo-lora2-api.json`, chained LoraLoaderModelOnly → `lora_0`+`lora_1`
-      slots; `slot_inference` maps multi-LoRA automatically, node-id order). First two-shot spec
-      `83b7e5e5` drafted (both LoRAs @2.0, spatial-separation prompt), awaiting a pod. Watch for
-      identity bleed; strengths may need lowering when stacked.
+- [x] Final cosmetic verification render **PASSED** (gen `ec179c50`): fresh tray-carrying staging,
+      on-model, blush suppressed by the canon cue.
+- [◧] **Two-LoRA interior shot** — template shipped + first test rendered 2026-07-02:
+      single-slot `visual-workflow-lora` silently drops the 2nd LoRA (advisory only); built +
+      registered **`visual-workflow-lora2`** (`workflows/z-image-turbo-lora2-api.json`, chained
+      LoraLoaderModelOnly → `lora_0`+`lora_1` slots; `slot_inference` maps multi-LoRA automatically,
+      node-id order). First two-shot (gen `625a2b5c`, both LoRAs @2.0, narrator-left/Celeste-right):
+      **core identities held** — no face swap, no skin contamination, clean separation. Residual
+      bleed: Celeste's hair texture drifted dread-ward; her sleeves went short (LLM didn't restate
+      them — forbid strips words, it can't add them). **Iterated same session:** v2 (`b23755c7`) —
+      per-shot restatement fixed the sleeves but NOT the hair texture; v3 (`8637ef7b`, hand-cloned
+      spec at **1.5/1.5**) — bleed reduced (straight at the crown), identities still strong at the
+      lower strength, residual twist in her lower lengths. **State: usable for real scenes;**
+      remaining escalations if the residual matters: masked inpaint of her hair on keeper frames
+      (pipeline supports it) or regional prompting. All four renders graded into taste memory
+      (`liked` / `liked_with_changes` + notes).
 
 ### Operational gotchas (RunPod / ai-toolkit) — learned 2026-07-01, save the next run
 - **Point outputs at the persistent volume.** ai-toolkit defaults to `/app/ai-toolkit/output` (container
