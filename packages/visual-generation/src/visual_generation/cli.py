@@ -59,6 +59,7 @@ from visual_generation.inspect import (
     render_pending,
     render_recall,
 )
+from visual_generation.lora_guard import strength_warnings
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
 from visual_generation.models import LoraRef, TechniqueLesson, VisualSource, WorkflowTemplate
@@ -73,6 +74,28 @@ def cli() -> None:
     # Register the delegate handlers this process uses (idempotent). Done at the
     # group callback so `research` can delegate to tutorial-research for real.
     register_delegate_handlers()
+
+
+def _echo_lora_strength_warnings(stack: list[LoraRef], *, indent: str = "") -> None:
+    """Print LoRA over-strength / over-stacked-identity advisories for a stack.
+
+    Warn-loudly-allow: surfaced at draft, redraft, and the generate cost gate so
+    the operator sees over-strength (which overrides the prompt + bleeds identity)
+    before spending GPU. Identity classification comes from the registry.
+    """
+    if not stack:
+        return
+    registry = ModelRegistry()
+
+    def _is_identity(name: str) -> bool:
+        asset = registry.get_model(name)
+        return asset is not None and asset.identity_bearing
+
+    warns = strength_warnings(stack, is_identity=_is_identity)
+    if warns:
+        click.echo(f"{indent}⚠ LoRA strength advisories:")
+        for w in warns:
+            click.echo(f"{indent}  • {w}")
 
 
 # ── model (registry sync from ComfyUI /object_info) ──────────────────────────
@@ -145,6 +168,31 @@ def model_list() -> None:
             flags.append("absent-from-last-sync")
         flag_str = f"  ({', '.join(flags)})" if flags else ""
         click.echo(f"  [{a.kind:10}] {a.name}  <{a.source}>{flag_str}")
+
+
+@model.command("rm")
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
+def model_rm(name: str, yes: bool) -> None:
+    """Unregister a model/LoRA by NAME (registry-only; the pod file is untouched).
+
+    Use this to retire scratch assets — e.g. alternate training checkpoints from a
+    bake-off — so `draft` stops surfacing and stacking them. Identity-bearing LoRAs
+    left in the registry get pulled into specs by the drafter; removing the entry is
+    the clean fix.
+    """
+    registry = ModelRegistry()
+    asset = registry.get_model(name)
+    if asset is None:
+        raise click.ClickException(
+            f"No registered asset named {name!r}. See: agent visual-generation model list"
+        )
+    flag = " [identity-bearing]" if asset.identity_bearing else ""
+    click.echo(f"Will unregister: [{asset.kind}] {name}{flag}")
+    if not yes:
+        click.confirm("Remove this entry from the registry?", abort=True)
+    registry.remove(name)
+    click.echo(f"Unregistered {name}. Registry now at {registry.path}")
 
 
 # ── workflow (template registration from an exported API graph) ──────────────
@@ -390,6 +438,7 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
         click.echo(f"Settings: {spec.settings}")
     if spec.lora_stack:
         click.echo("LoRAs:    " + ", ".join(f"{lr.name}@{lr.strength}" for lr in spec.lora_stack))
+    _echo_lora_strength_warnings(spec.lora_stack)
     if result.inert_inheritance:
         click.echo("\n⚠ Inherited but not applied (this template lacks the slots):")
         for w in result.inert_inheritance:
@@ -485,6 +534,7 @@ def redraft(gen_id: str, change: str, output: str | None, project: str | None,
         click.echo(f"Settings:  {spec.settings}")
     if spec.lora_stack:
         click.echo("LoRAs:     " + ", ".join(f"{lr.name}@{lr.strength}" for lr in spec.lora_stack))
+    _echo_lora_strength_warnings(spec.lora_stack)
     click.echo(f"\nPrompt:    {spec.prompt}")
     if spec.negative_prompt:
         click.echo(f"Negative:  {spec.negative_prompt}")
@@ -640,6 +690,8 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
         click.echo("  ⚠ Refinement advisories:")
         for w in plan_warnings:
             click.echo(f"      • {w}")
+    for sp in plan.plans:
+        _echo_lora_strength_warnings(sp.spec.lora_stack, indent="  ")
     if max_session_cost is not None:
         click.echo(f"  Hard ceiling:       ${max_session_cost:.2f} (--max-session-cost)")
         if est > max_session_cost:

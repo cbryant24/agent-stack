@@ -51,7 +51,7 @@ Model directories — all under the network volume, all persistent:
 ├── diffusion_models/   ← Wan 2.2 video models (t2v + i2v, high/low, fp8 scaled)
 ├── text_encoders/      ← umt5_xxl_fp8_e4m3fn_scaled (active WAN encoder) + qwen_3_4b (z-image)
 ├── vae/                ← wan_2.1_vae (WAN) + ae.safetensors (z-image)
-├── loras/              ← wan2.2 lightx2v 4-step LoRAs (t2v + i2v, high/low)
+├── loras/              ← wan2.2 lightx2v 4-step LoRAs (video) + character identity LoRAs (see below)
 ├── unet/               ← z_image_turbo_bf16.safetensors (z-image-turbo, text-to-image)
 └── checkpoints/, controlnet/, ...  (standard ComfyUI folders)
 ```
@@ -89,7 +89,43 @@ When downloading, set `COMFY=/workspace/runpod-slim/ComfyUI` and place files in 
     `wan2.2_i2v_lightx2v_4steps_lora_v1_{high,low}_noise` (the "fast mode" 4-step LoRAs the
     ComfyUI WAN templates ship with).
 
+- **Character identity LoRAs** (`models/loras/`, added after the 2026-07 Coraline pivot +
+  Turbo retrain). Per character (`narrator`, `celeste`), in the naming scheme
+  `<char>-zimage[-coraline[-turbo]].safetensors`:
+  - `*-zimage-coraline-turbo.safetensors` — **the pinned, in-use pair.** Trained **on
+    Z-Image Turbo** (Ostris de-distill adapter), so they apply at **strength ~1.0**. Canon
+    pins exactly these. See `docs/{narrator,celeste}-zimage-coraline-turbo.yaml`.
+  - `*-zimage-coraline.safetensors` — the earlier **Base-trained** Coraline LoRAs
+    (superseded; needed ~2.0 on Turbo, which caused prompt-override + identity bleed).
+  - `*-zimage.safetensors` — the **felt-era v1** LoRAs (the documented style comeback path).
+  - The bake-off **`*-turbo-2500.safetensors` alternates were unregistered** (`model rm`) once
+    the finals were pinned — the files may still sit on the volume, but the drafter no longer
+    sees them. Only ever pin **one** LoRA per character (canon owns identity).
+
 Captured ComfyUI graphs (API format) + recipes: `packages/visual-generation/workflows/`.
+
+---
+
+## Two pods, two jobs — do not confuse them
+
+There are **two separate RunPod pods on two separate volumes**, driven by two scripts. This
+document is primarily about the **inference** pod. Never cross the wires:
+
+| | **Inference** (this doc) | **Training** |
+|---|---|---|
+| Script | `scripts/pod` (`up`/`down`/`status`/`watch`) | `scripts/lora-train` |
+| Job | Run ComfyUI → generate images/video | Train character LoRAs (Ostris ai-toolkit) |
+| GPU | RTX PRO 6000 Blackwell 96 GB, **US-NE-1** | RTX 5090, **EU-RO-1** |
+| Image | `runpod/comfyui:1.3.0-cuda12.8` | `ostris/aitoolkit:latest` (template `0fqzfjy6f3`) |
+| Volume | `gen-usne1` (`3wqkq1t8bq`) at `/workspace` | `zimage-lora-factory` (`1r6sjkfwnl`) at `/mnt` |
+| Port | ComfyUI 8188 | ai-toolkit UI 8675 |
+
+Both volumes are datacenter-locked to different regions, so the two pods **can run at once**.
+The pod id (and thus the `https://<pod-id>-8188.proxy.runpod.net` endpoint) is **new every
+session** — read it from `pod status`, never hardcode it. **LoRA training recipe (proven):**
+train **on Z-Image Turbo** (`Tongyi-MAI/Z-Image-Turbo`) with the de-distill adapter
+`ostris/zimage_turbo_training_adapter_v2`, rank 8, LR 5e-5, batch 2, 3000-step cap, sampling
+every 250; the Turbo-trained result runs at ~1.0 (Base-trained needed ~2.0 → override/bleed).
 
 ---
 

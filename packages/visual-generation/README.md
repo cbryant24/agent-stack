@@ -220,6 +220,14 @@ Orientation for a newcomer operating this agent:
   plate), so registering a graph is no longer an open prerequisite for inpaint. Authoring
   *new* graphs (e.g. an img2img+LoRA template) remains a user task (see
   [workflow register](#workflow-register-exported-apijson---name-n)).
+- **Known bug — canon subject-detection matches *negated* mentions (open).** `canon._subject_present`
+  keys off the subject's name/aliases appearing in the prompt, so a phrase like **"no Celeste in
+  this shot"** still counts Celeste as present — her locked text and her pinned LoRA get injected
+  into what should be a solo shot. Two anti-patterns feed this: (a) it's bad Z-Image craft to name
+  an absent subject at all (a positive-only model can *summon* "no Celeste"), and (b) presence
+  detection should ignore negated/excluded contexts. **Workaround today:** don't name a subject you
+  want *out* of a shot — describe only who/what *is* there. **Fix (planned):** strip
+  `no/without/not <subject>` contexts before matching in `_subject_present`.
 - **Pod realities:** a new pod = a new proxy URL (update `$EP`) AND a fresh
   ComfyUI that does NOT carry over a workflow you built in the browser — so
   export ([API format](#save-workflow-format-vs-export-api-format)) +
@@ -458,6 +466,39 @@ registry `~/agent-data/visual-generation/models.json`. Run this after
 spinning up a pod and before registering workflows or drafting specs that
 reference specific models — otherwise `draft` may propose models that don't
 exist on the pod you're about to use.
+
+### `model rm <name> [--yes]`
+
+Unregisters a model/LoRA from the local registry **by name** (registry-only — the file on
+the pod volume is untouched). Prompts for confirmation unless `--yes` is passed. Use it to
+**retire scratch assets** so `draft` stops surfacing and stacking them — most importantly
+**alternate training checkpoints from a bake-off** (e.g. a `*-turbo-2500.safetensors` kept
+around while choosing a checkpoint). Any identity-bearing LoRA left in the registry gets
+pulled into specs by the drafter's retrieval; removing the entry is the clean fix. A later
+`model sync` re-adds a same-named file that is still on the pod as a **fresh, non-identity**
+entry (manual `identity_bearing` is only preserved for entries that still exist), so the
+drafter won't treat it as a character LoRA again.
+
+### LoRA-stack guardrails (automatic — `draft` / `redraft` / `generate`)
+
+Two model-agnostic guards protect every generation (see `lora_guard.py`). **Canon owns
+identity**, and these enforce it:
+
+- **Auto-prune (at `draft`).** When the LLM composes a `lora_stack`, any identity LoRA that
+  duplicates a canon-pinned character — the exact file *or* a checkpoint variant sharing its
+  stem in either direction (`narrator-…-turbo-2500` **or** the superseded `narrator-…-coraline`
+  vs the pinned `narrator-…-coraline-turbo`) — is dropped, with a note. So a spec can never
+  carry two files for one character. Different characters (a legit two-shot) and non-identity
+  adapters are untouched; a character canon does **not** pin is left alone (no authority to
+  override). `redraft` sidesteps the issue entirely by **inheriting the parent's clean stack**
+  rather than re-composing it.
+- **Strength advisory (at `draft`, `redraft`, and the `generate` cost gate).** A LoRA at/above
+  a universal ceiling (default **1.5**, env-overridable via `VG_LORA_STRENGTH_WARN`), or a set
+  of identity LoRAs whose combined strength is high, prints a **warning** (warn-loudly-allow —
+  never blocks) explaining that at that level the LoRA **overrides prompt adherence** (pose /
+  staging / background directions get ignored) and its **identity bleeds** onto other figures.
+  The message carries the fix: a character LoRA that only "takes" at ~2.0 is base-trained but
+  run on a distilled/Turbo model — retrain it on Turbo so it applies near **1.0**.
 
 ### `workflow register <exported-api.json> [--name N]`
 
@@ -731,6 +772,45 @@ studio's actual supply is Z-Image-Turbo — a "turbo" model (a *distilled* model
 trained to draw in far fewer steps) that wants roughly `cfg 1`, 8 steps,
 `res_multistep`, `simple`. Over-driving a turbo model scorches the image. → See
 [Troubleshooting: oversaturated / distorted output](#troubleshooting-oversaturated--distorted-output).
+
+**The ComfyUI endpoint returns `403 Forbidden` indefinitely on a pod that `pod status` said was
+`RUNNING` — and it never becomes ready.** The RunPod proxy returns an instant `403` (not a
+connection error) for `https://<pod-id>-8188.proxy.runpod.net` when the pod exists but nothing is
+serving port 8188 yet. Normally that clears in 1–3 minutes as ComfyUI binds. If it persists for
+10-15+ minutes, **suspect the RunPod account balance, not ComfyUI**: a pod can briefly show
+`RUNNING` and then be **reclaimed for insufficient funds**, so it never actually serves. Confirm by
+re-running `pod up` — a balance problem surfaces as `pod create failed … "Your account balance is
+too low to rent a pod"` — and `pod status`, which will then show **no matching pod** (RunPod already
+deleted it, so there's no idle GPU charge). **Fix:** add funds in the RunPod console
+(Billing → add credit / enable auto-pay), then `pod up` again and re-poll readiness. Because a
+reclaimed pod is gone (not stopped), the network volume and everything on it are untouched — nothing
+to re-download; the new pod re-attaches the volume and you get a fresh proxy URL. **Tell a
+balance-reclaim from a slow boot:** slow boot = pod still present in `pod status`; balance-reclaim =
+pod absent + the create-time balance error.
+
+**The requested changes aren't landing — pose/staging/background directions get ignored, and
+background extras look like the main character.** This is the classic **over-strength LoRA**
+signature: identity *bleed* (the character painted onto other figures) plus *prompt override*
+(the LoRA drowns out the prose). Root cause: a character LoRA **trained on Z-Image Base but run
+on Z-Image Turbo** only registers around strength **2.0+**, and that high is exactly the
+override/bleed zone. **Fix:** retrain the LoRA **on Turbo** (with the Ostris de-distill adapter)
+so it applies near **1.0**; then run each character LoRA at ~1.0 (a two-shot is 1.0 + 1.0). The
+agent now **warns** at draft/redraft and the generate cost gate when a strength is ≥ the ceiling
+(default 1.5) — heed it. Verify what a finished render actually used from the stored record
+(`lora_stack`/`model`/`settings` in `visual_generation_memory`, keyed by the gen id).
+
+**Two versions of the same character are stacked in one spec (muddy likeness).** The `draft` LLM
+tends to pile alternate checkpoints (e.g. `*-turbo-2500`) onto the pinned character LoRA. Since
+`draft` now **auto-prunes** duplicate identity LoRAs this shouldn't recur, but if you see it in an
+older/hand-edited batch: keep exactly one file per character at canon strength. Prevent it at the
+source by unregistering bake-off scratch (`model rm <name>`), and re-roll via `redraft` (which
+inherits the parent's clean stack) rather than a fresh `draft`.
+
+**A "solo" shot pulls in the other character's identity/LoRA.** Almost always the prompt *names*
+the absent character to exclude them ("no Celeste in this shot"); canon presence-detection matches
+the name and injects her anyway (see the negated-mention bug under "gaps worth closing"). **Fix:**
+reword to name only who *is* present, then re-roll. If it slipped into a spec, `batch rm` it and
+`redraft` with the absent character removed from the prose entirely.
 
 **Run ends instantly with "Generated: 0 / Skipped" and no error.** There are two
 different kinds of "skip", and they mean opposite things:

@@ -42,6 +42,7 @@ from visual_generation.constants import (
     RESEARCH_GAP_THRESHOLD,
 )
 from visual_generation.identity import derive_identity_bearing
+from visual_generation.lora_guard import prune_noncanon_identity
 from visual_generation.models import (
     DraftResult,
     LoraRef,
@@ -118,7 +119,8 @@ def _pin_canon_loras(spec: VisualSpec, project: str | None, store: Any) -> list[
     overrides it (canon is authoritative for identity), rather than being deduped away.
     Returns human-readable notes for `canon_applied`."""
     notes: list[str] = []
-    for lr in canon_loras_for(spec.prompt, project):
+    canon_loras = canon_loras_for(spec.prompt, project)
+    for lr in canon_loras:
         idx = next((i for i, e in enumerate(spec.lora_stack) if e.name == lr.name), None)
         if idx is None:
             spec.lora_stack.append(lr)
@@ -127,6 +129,20 @@ def _pin_canon_loras(spec: VisualSpec, project: str | None, store: Any) -> list[
             was = spec.lora_stack[idx].strength
             spec.lora_stack[idx] = lr  # canon strength wins over the LLM's guess
             notes.append(f"canon LoRA '{lr.name}' strength {was}→{lr.strength} (canon override)")
+
+    # Canon owns identity: drop identity LoRAs the LLM stacked that aren't canon
+    # pins (e.g. alternate training checkpoints like '*-2500') so a spec never
+    # carries two files for the same character — the over-stacking failure mode.
+
+    def _is_identity(name: str) -> bool:
+        asset = store.get_model(name)
+        return asset is not None and asset.identity_bearing
+
+    pins = {lr.name for lr in canon_loras}
+    spec.lora_stack, dropped = prune_noncanon_identity(
+        spec.lora_stack, pins, is_identity=_is_identity
+    )
+    notes += dropped
     spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
     return notes
 

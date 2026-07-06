@@ -50,6 +50,20 @@ class ModelRegistry:
         assets.append(asset)
         self._write(assets)
 
+    def remove(self, name: str) -> bool:
+        """Unregister the asset named `name`. Returns True if one was removed.
+
+        Registry-only: does not touch the file on any pod (the drafter selects
+        LoRAs from the registry, so removing the entry is what stops it being
+        stacked). A later `model sync` re-adds a same-named file present on the
+        pod as a fresh entry with default (non-identity) metadata."""
+        assets = self.list_models()
+        kept = [a for a in assets if a.name != name]
+        if len(kept) == len(assets):
+            return False
+        self._write(kept)
+        return True
+
     def replace(self, assets: list[ModelAsset]) -> None:
         """Overwrite the whole registry with `assets` (wholesale).
 

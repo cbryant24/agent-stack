@@ -76,3 +76,19 @@ def test_default_path_under_agent_data_dir() -> None:
     assert reg.path.name == "models.json"
     assert reg.path.parent.name == "visual-generation"
     assert "agent-data" in str(reg.path)
+
+
+def test_remove_deletes_by_name_and_reports(tmp_path: Path) -> None:
+    reg = ModelRegistry(path=tmp_path / "models.json")
+    reg.add(_asset("keep"))
+    reg.add(_asset("scratch-2500", kind="lora", identity_bearing=True))
+    assert reg.remove("scratch-2500") is True
+    assert {a.name for a in reg.list_models()} == {"keep"}
+    assert reg.get_model("scratch-2500") is None
+
+
+def test_remove_absent_name_is_false_and_noop(tmp_path: Path) -> None:
+    reg = ModelRegistry(path=tmp_path / "models.json")
+    reg.add(_asset("keep"))
+    assert reg.remove("not-there") is False
+    assert {a.name for a in reg.list_models()} == {"keep"}

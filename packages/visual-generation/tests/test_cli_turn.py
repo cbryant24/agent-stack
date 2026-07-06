@@ -125,7 +125,7 @@ def test_cli_draft_mask_without_source_is_a_usage_error(monkeypatch: pytest.Monk
 
 def _fake_plan() -> SimpleNamespace:
     return SimpleNamespace(
-        plans=[SimpleNamespace(warnings=[])],
+        plans=[SimpleNamespace(warnings=[], spec=VisualSpec(spec_id="spec-1", prompt="p"))],
         skipped=[],
         per_run_estimate_usd=0.05,
         estimate_source="default",
