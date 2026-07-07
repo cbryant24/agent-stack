@@ -231,3 +231,9 @@ ASSETS_SUBDIR = "assets"          # non-identity assets
 IDENTITY_SUBDIR = "identity"       # secured, isolated identity-bearing assets
 GPU_LEDGER_FILENAME = "gpu_ledger.json"
 DEFAULT_ASSET_EXT = "png"
+# Video/animation container extensions (leading dot). Used to (a) recognise a
+# SaveVideo output in a ComfyUI history record whatever key it lands under
+# (comfyui_client.videos_from_history) and (b) decide a generation's asset is a
+# clip, so it embeds text-only — voyage-multimodal-3 can't embed video
+# (store._generation_input). Kept as one list so both sites agree.
+VIDEO_ASSET_EXTS = (".mp4", ".webm", ".mkv", ".mov", ".m4v", ".gif")

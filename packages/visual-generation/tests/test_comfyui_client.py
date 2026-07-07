@@ -94,6 +94,58 @@ def test_images_from_history_extracts_descriptors() -> None:
     assert len(imgs) == 2
 
 
+# ── videos_from_history (union of SaveVideo output shapes) ─────────────────────
+
+
+def test_videos_from_history_native_videos_key() -> None:
+    record = {"outputs": {"108": {"videos": [
+        {"filename": "clip.mp4", "subfolder": "video", "type": "output"}
+    ]}}}
+    vids = ComfyUIClient.videos_from_history(record)
+    assert vids == [{"filename": "clip.mp4", "subfolder": "video", "type": "output"}]
+
+
+def test_videos_from_history_vhs_gifs_key() -> None:
+    # Third-party VHS VideoCombine reports under "gifs".
+    record = {"outputs": {"7": {"gifs": [{"filename": "clip.gif"}]}}}
+    vids = ComfyUIClient.videos_from_history(record)
+    assert vids == [{"filename": "clip.gif", "subfolder": "", "type": "output"}]
+
+
+def test_videos_from_history_images_key_with_video_extension() -> None:
+    # Some ComfyUI versions report SaveVideo under "images" with a video filename.
+    record = {"outputs": {"9": {"images": [
+        {"filename": "Wan2.2_i2v_00001.mp4", "subfolder": "video", "type": "output"}
+    ]}}}
+    vids = ComfyUIClient.videos_from_history(record)
+    assert vids == [
+        {"filename": "Wan2.2_i2v_00001.mp4", "subfolder": "video", "type": "output"}
+    ]
+
+
+def test_videos_from_history_unknown_key_extension_sweep() -> None:
+    # The native SaveVideo PreviewVideo key is unconfirmed; the extension sweep must
+    # catch a video descriptor under any list-valued key.
+    record = {"outputs": {"5": {"animated": [{"filename": "out.webm"}]}}}
+    vids = ComfyUIClient.videos_from_history(record)
+    assert vids == [{"filename": "out.webm", "subfolder": "", "type": "output"}]
+
+
+def test_videos_from_history_ignores_still_images() -> None:
+    record = {"outputs": {"9": {"images": [{"filename": "still.png"}]}}}
+    assert ComfyUIClient.videos_from_history(record) == []
+
+
+def test_videos_from_history_dedups_across_keys() -> None:
+    # Same file under both "videos" and the extension sweep of "images" → one descriptor.
+    record = {"outputs": {"108": {
+        "videos": [{"filename": "clip.mp4", "subfolder": "video", "type": "output"}],
+        "images": [{"filename": "clip.mp4", "subfolder": "video", "type": "output"}],
+    }}}
+    vids = ComfyUIClient.videos_from_history(record)
+    assert vids == [{"filename": "clip.mp4", "subfolder": "video", "type": "output"}]
+
+
 # ── view (/view) ─────────────────────────────────────────────────────────────
 
 

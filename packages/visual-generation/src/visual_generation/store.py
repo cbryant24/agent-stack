@@ -42,6 +42,7 @@ from visual_generation.constants import (
     MEMORY_TYPE_WORKFLOW_TEMPLATE,
     STATUS_COMPLETE,
     STATUS_PENDING,
+    VIDEO_ASSET_EXTS,
 )
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.models import (
@@ -57,8 +58,16 @@ def _memory_type_filter(memory_type: str) -> Filter:
 
 
 def _generation_input(gen: VisualGeneration) -> MultimodalInput:
-    """Build the multimodal embedding input for a generation: image + caption."""
-    image_path = Path(gen.asset_path) if gen.asset_path else None
+    """Build the multimodal embedding input for a generation.
+
+    Stills embed image + caption (voyage-multimodal-3). Video clips (`.mp4`/`.webm`/…)
+    embed **text-only** — the caption + motion prompt — because voyage-multimodal-3
+    cannot embed video; handing it an mp4 path would fail. (A later refinement could
+    embed a ffmpeg-extracted middle frame; not needed for v1.)
+    """
+    image_path: Path | None = None
+    if gen.asset_path and not gen.asset_path.lower().endswith(VIDEO_ASSET_EXTS):
+        image_path = Path(gen.asset_path)
     return MultimodalInput(text=gen.caption, image_path=image_path)
 
 

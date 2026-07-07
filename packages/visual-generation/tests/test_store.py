@@ -110,6 +110,25 @@ async def test_upsert_generation_embeds_multimodal_and_sets_memory_type(png_asse
 
 
 @pytest.mark.asyncio
+async def test_upsert_video_generation_embeds_text_only(tmp_path: Path) -> None:
+    # A clip asset (.mp4) can't go through voyage-multimodal-3's image path — embed
+    # the caption/motion prompt text-only (image_path is None).
+    store, mock_memory = _make_store()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    gen = _gen(clip, caption="narrator walks in from the left")
+    await store.upsert_generation(gen)
+
+    mock_memory.embedding_client.embed_multimodal.assert_awaited_once()
+    mm_input = mock_memory.embedding_client.embed_multimodal.call_args[0][0][0]
+    assert mm_input.text == "narrator walks in from the left"
+    assert mm_input.image_path is None
+    # The asset path is still recorded on the payload for retrieval/render.
+    point = mock_memory.upsert_raw_points.call_args[0][1][0]
+    assert point.payload["asset_path"] == str(clip)
+
+
+@pytest.mark.asyncio
 async def test_generation_round_trip_preserves_settings_and_lineage(png_asset: Path) -> None:
     store, mock_memory = _make_store()
     gen = _gen(png_asset, settings={"sampler": "euler", "steps": 28, "cfg": 3.5}, identity_bearing=True)

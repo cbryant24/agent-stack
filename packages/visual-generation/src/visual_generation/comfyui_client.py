@@ -23,6 +23,8 @@ from typing import Any
 
 import httpx
 
+from visual_generation.constants import VIDEO_ASSET_EXTS
+
 _DEFAULT_TIMEOUT = 30.0
 
 
@@ -123,6 +125,64 @@ class ComfyUIClient:
                     }
                 )
         return images
+
+    @staticmethod
+    def videos_from_history(record: dict[str, Any]) -> list[dict[str, str]]:
+        """Extract video output descriptors ({filename, subfolder, type}) from a
+        history record, unioning the shapes a SaveVideo node can produce.
+
+        The history key for a video output is version- and node-dependent and not
+        reliably documented: native `SaveVideo` serialises via
+        `ui.PreviewVideo`/`SavedResult` (the key is NOT guaranteed to be `"videos"`),
+        the third-party VHS `VideoCombine` node uses `"gifs"`, and some versions
+        report a video under `"images"` with a video filename. So we collect from the
+        explicit named keys AND sweep every list-of-descriptors output for a filename
+        with a known video extension (`VIDEO_ASSET_EXTS`) — the version-agnostic
+        backstop. Descriptors are deduped by (filename, subfolder, type); `view()`
+        fetches the bytes exactly as for images.
+
+        TODO(phase0): confirm the native SaveVideo serialized key against a live
+        `/history` dump and `comfy_api/latest/_ui.py` (PreviewVideo/SavedResult); the
+        extension sweep is the backstop until an exported Phase-0 graph pins it down.
+        """
+        videos: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+
+        def _add(item: Any) -> None:
+            if not isinstance(item, dict):
+                return
+            filename = item.get("filename", "")
+            if not filename:
+                return
+            desc = {
+                "filename": filename,
+                "subfolder": item.get("subfolder", ""),
+                "type": item.get("type", "output"),
+            }
+            key = (desc["filename"], desc["subfolder"], desc["type"])
+            if key not in seen:
+                seen.add(key)
+                videos.append(desc)
+
+        for node_output in (record.get("outputs") or {}).values():
+            if not isinstance(node_output, dict):
+                continue
+            # 1) explicit named keys: native "videos", third-party VHS "gifs".
+            for named in ("videos", "gifs"):
+                for item in node_output.get(named, []) or []:
+                    _add(item)
+            # 2) extension sweep: any list-of-dicts output whose filename ends in a
+            #    known video extension — catches SaveVideo-under-"images" and the
+            #    unconfirmed native PreviewVideo key without hardcoding it.
+            for value in node_output.values():
+                if not isinstance(value, list):
+                    continue
+                for item in value:
+                    if isinstance(item, dict):
+                        fn = item.get("filename", "")
+                        if isinstance(fn, str) and fn.lower().endswith(VIDEO_ASSET_EXTS):
+                            _add(item)
+        return videos
 
     async def view(
         self, filename: str, *, subfolder: str = "", type: str = "output"
