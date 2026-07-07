@@ -11,12 +11,13 @@ the dual Claude/GPU budgets, the three-memory-type collection, and the tutor rol
 (`explain` / `research`). Stills run on Z-Image-Turbo and Flux/SDXL; img2img + inpaint
 (edit-mode refinement) is wired.
 
-**Video (WAN 2.2) — setup done, agent integration is Phase 2 (not yet built).** WAN
-2.2 14B text-to-video and image-to-video have been stood up and verified **manually in
-ComfyUI** on the pod (models installed, graphs captured, recipes recorded). Driving WAN
-through the agent CLI — the `output` field, keyframe extraction, the cost/sanity-check
-additions — is the Phase 2 build. See "Video generation (WAN 2.2)" below and
-`docs/handoffs/visual-generation-video-phase1-handoff.md`.
+**Video (WAN 2.2) — FLF2V agent pipeline built; one manual graph-export step remains.**
+WAN 2.2 14B was first stood up and verified **manually in ComfyUI**; the agent now drives
+the **first-last-frame (FLF2V)** pipeline end-to-end (keyframe edit → sequence → render →
+scene manifest), with a keyframe-approval gate, multi-image sources, canon reference
+sheets, and per-template video cost. The one remaining step is exporting the two
+API-format graphs on a pod (Phase 0). See "Video generation (WAN 2.2)" below and
+`docs/video-generation-implementation-guide.md`.
 
 The data + retrieval foundation:
 
@@ -77,9 +78,65 @@ CLI generations" below).
 
 ## Video generation (WAN 2.2)
 
-**Status: manual ComfyUI workflow today; agent CLI integration is Phase 2 (not yet
-built).** The steps below are the *operational* path for producing WAN clips in ComfyUI
-on the pod, plus what was decided during setup. The agent does not yet drive WAN.
+**Status: the agent now drives WAN 2.2 FLF2V end-to-end (keyframe → sequence → render);
+the manual ComfyUI path below still works for ad-hoc T2V/I2V.** The FLF2V agent pipeline
+(Phases 1–5) is built and unit-tested; it is pending one manual step — exporting the two
+API-format graphs on a pod (Phase 0, see below) — before a live run.
+
+### FLF2V pipeline (agent-driven)
+
+The short film is assembled from Wan 2.2 **first-last-frame (FLF2V)** clips: each ~5s clip
+is bounded by two approved keyframe stills, and consecutive clips in a scene share the
+boundary frame, so identity/colour can't drift the way chained single-still I2V does. See
+the design docs — **[`docs/video-generation-implementation-guide.md`](docs/video-generation-implementation-guide.md)**
+(the phased build), **[`docs/video-generation-research.md`](docs/video-generation-research.md)**
+(why FLF2V + Qwen edit), and **[`docs/video-generation-doc-references.md`](docs/video-generation-doc-references.md)**
+(authoritative ComfyUI/Wan/Qwen/RunPod source links).
+
+The craft loop, per scene (one camera setup):
+
+1. **Keyframes** — the scene-opening still is a normal Z-Image/Qwen draft; each subsequent
+   keyframe is an **instruction edit** of the prior approved frame with Qwen-Image-Edit
+   2511: `draft --from <prior gen> --template qwen-edit-2511 "same shot: Celeste reaches
+   for the door" --project <slug>`. Canon auto-appends the subject's character/outfit
+   **reference sheets** (`canon set <proj> --alias … --ref <gen-or-path>`), so identity
+   travels as reference images, not just text. React/approve each one.
+2. **Sequence** — wire the approved keyframes into boundary-shared clips:
+   `sequence plan <scene> --keyframe <genA> --keyframe <genB> … --project <slug>`. This
+   writes `<scene>.sequence.md` (one clip per adjacent keyframe pair, `order` contiguous,
+   `clip[n].last_frame == clip[n+1].first_frame`). Edit the motion-prompt bodies.
+3. **Render** — `sequence render <scene>.sequence.md --endpoint <url>`: validates the
+   sequence structurally, **gates every clip on its keyframes being approved**
+   (loved/liked/liked-with-changes; `--allow-unapproved` overrides), spends the clips in
+   order (a shared boundary frame uploads once), and writes `<scene>.scene-manifest.json`
+   — the ordered handoff (clip paths, durations, boundary gen_ids) that `edit-brief`
+   discovers by `project_id`.
+
+New CLI surface: `draft --last-from/--last-image/--ref` (FLF2V frames + Qwen refs),
+`canon set/edit --ref` (reference sheets), `sequence plan`, `sequence render`,
+`generate --allow-unapproved`. Video runs get a per-template cost estimate and a longer
+poll timeout automatically (a clip costs ~10–30× a still).
+
+Three templates back this (register the Phase-0 exports with `workflow register`):
+`qwen-edit-2511` (keyframe edits, modality `edit`), `wan22-flf2v` (clips, modality
+`flf2v`), and the existing I2V graph (`i2v`).
+
+#### Phase 0 — the one manual step still needed
+
+The agent code is complete but two **API-format** graphs must be exported once on a pod
+and committed to `workflows/` before a live FLF2V run:
+`workflows/qwen-image-edit-2511-api.json` and `workflows/wan2.2-flf2v-14B-lightx2v-api.json`
+(load the native ComfyUI templates, run the bake-off beats, File → Export API). Slot
+inference already understands these graphs — node/input names (`start_image`/`end_image`,
+Qwen `prompt` + `image1..3`) are verified against ComfyUI master source — but the
+fixture-gated tests (`tests/test_slot_inference.py::test_real_*`) skip until the exports
+land, and `sequence render` needs the templates registered. See the implementation guide
+§Phase 0.
+
+---
+
+**Manual ComfyUI path (ad-hoc T2V/I2V).** The steps below are the *operational* path for
+producing WAN clips by hand in ComfyUI on the pod, plus what was decided during setup.
 
 **Model:** WAN 2.2 14B (open-weights, Apache-2.0 — the reason it runs self-hosted on
 RunPod; WAN 2.5/2.6 are closed APIs and were rejected). Two modes in scope: **T2V**
@@ -213,8 +270,9 @@ Orientation for a newcomer operating this agent:
   ControlNet / LoRA — plan for iteration, not a single perfect generation.
 - **Reference images map to technique by count and subject:** 1 → ControlNet
   structure; ~15+ → a LoRA; stylized character 20–40, photoreal person 70–80.
-  (A dedicated refinement/reference research doc will be cross-linked here if it
-  lands in the repo.)
+  For the video pipeline's model/API grounding see
+  [`docs/video-generation-doc-references.md`](docs/video-generation-doc-references.md)
+  (ComfyUI/Wan/Qwen/RunPod authoritative sources).
 - **Z-Image-Turbo does img2img, inpaint, ControlNet, and LoRA — but NOT
   IP-Adapter/InstantID** (one-photo zero-shot identity). That capability needs
   SDXL/Flux.
@@ -226,6 +284,13 @@ Orientation for a newcomer operating this agent:
   plate), so registering a graph is no longer an open prerequisite for inpaint. Authoring
   *new* graphs (e.g. an img2img+LoRA template) remains a user task (see
   [workflow register](#workflow-register-exported-apijson---name-n)).
+- **Video (WAN 2.2 FLF2V) is built; live run pending Phase-0 graph export.** The full
+  keyframe → sequence → render pipeline (multi-image sources, canon reference sheets,
+  approval gate, per-template cost, scene manifest) is implemented and unit-tested. What
+  remains before a real render: export + commit the two API graphs
+  (`workflows/qwen-image-edit-2511-api.json`, `workflows/wan2.2-flf2v-14B-lightx2v-api.json`)
+  and `workflow register` them. The video record embeds **text-only** (voyage-multimodal-3
+  can't embed video — a middle-frame thumbnail embed is a deliberate v1 non-goal).
 - **Known bug — canon subject-detection matches *negated* mentions (open).** `canon._subject_present`
   keys off the subject's name/aliases appearing in the prompt, so a phrase like **"no Celeste in
   this shot"** still counts Celeste as present — her locked text and her pinned LoRA get injected

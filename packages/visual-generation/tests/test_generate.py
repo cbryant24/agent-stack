@@ -495,8 +495,10 @@ def _edit_template() -> WorkflowTemplate:
 
 
 def test_flf2v_uploads_both_frames_and_records_boundary_lineage(tmp_path: Path) -> None:
-    first = tmp_path / "first.png"; first.write_bytes(b"F")
-    last = tmp_path / "last.png"; last.write_bytes(b"L")
+    first = tmp_path / "first.png"
+    first.write_bytes(b"F")
+    last = tmp_path / "last.png"
+    last.write_bytes(b"L")
     store = _store()
     fake = _FakeComfyUploadVideo()
     spec = _spec(
@@ -523,8 +525,10 @@ def test_flf2v_uploads_both_frames_and_records_boundary_lineage(tmp_path: Path) 
 
 
 def test_flf2v_from_generation_sets_both_parent_ids(tmp_path: Path) -> None:
-    a = tmp_path / "a.png"; a.write_bytes(b"A")
-    b = tmp_path / "b.png"; b.write_bytes(b"B")
+    a = tmp_path / "a.png"
+    a.write_bytes(b"A")
+    b = tmp_path / "b.png"
+    b.write_bytes(b"B")
     gen_a = VisualGeneration(entry_id="genA", caption="a", asset_path=str(a), chain_root_id="root")
     gen_b = VisualGeneration(entry_id="genB", caption="b", asset_path=str(b), chain_root_id="root")
     store = _store()
@@ -549,7 +553,8 @@ def test_flf2v_from_generation_sets_both_parent_ids(tmp_path: Path) -> None:
 
 
 def test_flf2v_missing_last_frame_skips(tmp_path: Path) -> None:
-    first = tmp_path / "first.png"; first.write_bytes(b"F")
+    first = tmp_path / "first.png"
+    first.write_bytes(b"F")
     store = _store()
     fake = _FakeComfyUploadVideo()
     spec = _spec(workflow_ref="wan22-flf2v", source=VisualSource(image_path=str(first)))
@@ -565,8 +570,10 @@ def test_flf2v_missing_last_frame_skips(tmp_path: Path) -> None:
 
 
 def test_edit_uploads_base_and_references_into_edit_slots(tmp_path: Path) -> None:
-    base = tmp_path / "base.png"; base.write_bytes(b"BASE")
-    ref = tmp_path / "sheet.png"; ref.write_bytes(b"SHEET")
+    base = tmp_path / "base.png"
+    base.write_bytes(b"BASE")
+    ref = tmp_path / "sheet.png"
+    ref.write_bytes(b"SHEET")
     store = _store()
     fake = _FakeComfyUpload()  # edit outputs a still image
     template = _edit_template()
@@ -641,8 +648,10 @@ def test_allow_unapproved_overrides_gate(tmp_path: Path) -> None:
 
 def test_gate_does_not_apply_to_external_image_source(tmp_path: Path) -> None:
     # An external image (no gen id) has no reaction to check → never gated.
-    ext = tmp_path / "first.png"; ext.write_bytes(b"F")
-    ext2 = tmp_path / "last.png"; ext2.write_bytes(b"L")
+    ext = tmp_path / "first.png"
+    ext.write_bytes(b"F")
+    ext2 = tmp_path / "last.png"
+    ext2.write_bytes(b"L")
     path = _gate_batch(tmp_path, image_path=str(ext), last_image_path=str(ext2))
     store = _gate_store(_flf2v_template(), {})
     plan = plan_generation_sync(path, all_sections=True, store=store, memory_store=MagicMock())
