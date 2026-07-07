@@ -507,7 +507,7 @@ named, embedded (via Voyage AI), semantically-searchable template, with an
 inferred slot map (see above). Requires a working `VOYAGE_API_KEY` — if
 `.env` stores it as a 1Password reference
 (`op://Personal/VOYAGE_API_KEY/credential`), prefix the command with
-`op run --env-file=/Users/chrisbryant/projects/agent-stack/.env --` so the
+`op run --env-file=~/projects/agent-stack/.env --` so the
 reference is resolved to a real key before the CLI runs.
 
 ### `generate <batch.md> --section <id>|--all --endpoint <url> [--max-session-cost N]`
@@ -977,7 +977,7 @@ port mapping with `bind: can't assign requested address`. *Cause:* the compose f
 the host side of `6333` to a specific IP that *this* machine doesn't currently own — e.g. a
 Tailscale IP copied from another host, or one that changed. The kernel can only bind an
 address the host actually holds. *Fix:* bind to an address this host owns. Either use this
-machine's own Tailscale IP (`tailscale ip -4` — this M1 = `100.79.253.62`) or, preferably,
+machine's own Tailscale IP (`tailscale ip -4` — this M1 = `<tailscale-ip>`) or, preferably,
 bind **all interfaces** with a plain `"6333:6333"` mapping, which serves both `localhost`
 *and* the Tailscale address at once. A pinned non-loopback IP loses `localhost`, so the
 local tests/CLI that hit `localhost:6333` can no longer reach Qdrant. *Recurrence:* a

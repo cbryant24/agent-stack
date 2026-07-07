@@ -23,7 +23,7 @@ Canon set for 'celeste-you-dangerous' (subject 'Celeste'):
   locked:  a felt-and-clay stop-motion puppet of a young woman, smooth matte felt skin, long black yarn hair falling just past her
   shoulders, bare felt face with no makeup, glossy black stitched sewing-button eyes
 
-Stored at: /Users/chrisbryant/agent-data/visual-generation/canon/celeste-you-dangerous.json
+Stored at: ~/agent-data/visual-generation/canon/celeste-you-dangerous.json
 ❯ agent visual-generation canon show celeste-you-dangerous
 ls ~/agent-projects/celeste-you-dangerous/
 Canon for 'celeste-you-dangerous' (2 subject(s)):
@@ -48,7 +48,7 @@ Canon set for 'celeste-you-dangerous' (subject 'the narrator'):
   mid-back
   forbid:  short hair, shoulder-length, buzz cut
 
-Stored at: /Users/chrisbryant/agent-data/visual-generation/canon/celeste-you-dangerous.json
+Stored at: ~/agent-data/visual-generation/canon/celeste-you-dangerous.json
 ❯ agent visual-generation canon show celeste-you-dangerous
 ls ~/agent-projects/celeste-you-dangerous/
 Canon for 'celeste-you-dangerous' (2 subject(s)):
@@ -62,11 +62,11 @@ Canon for 'celeste-you-dangerous' (2 subject(s)):
   mid-back
     forbid:  short hair, shoulder-length, buzz cut
 directed.md     refs            script.md       story.md        techniques.md   visual-batch.md workflows
-❯ agent visual-generation model sync --endpoint <https://zwmuqhg30p4rfv-8188.proxy.runpod.net/>
-Endpoint: <https://zwmuqhg30p4rfv-8188.proxy.runpod.net/>
+❯ agent visual-generation model sync --endpoint <https://<pod-id>-8188.proxy.runpod.net/>
+Endpoint: <https://<pod-id>-8188.proxy.runpod.net/>
 Sync plan: +0 new, ~14 refreshed, 0 kept-absent, -0 dropped.
 Write this registry? [y/N]: y
-Registry written: 14 asset(s) at /Users/chrisbryant/agent-data/visual-generation/models.json
+Registry written: 14 asset(s) at ~/agent-data/visual-generation/models.json
 ❯ agent visual-generation model list
 14 registered asset(s):
 
@@ -282,8 +282,8 @@ Rationale: Z-Image Turbo canonical settings: cfg 1.0, 8 steps, res_multistep/sim
   • Inpaint with a tight, region-only mask (e.g. a screen's glass, inset inside its bezel), never the surrounding frame/prop, so the model can't reinterpret the whole object; masked inpaint tolerates denoise ~0.8 because the rest of the frame is untouched.
   • Z-Image Turbo renders at cfg 1.0, 8 steps, sampler res_multistep, scheduler simple, and uses no negative prompt (its graph zeroes the negative via ConditioningZeroOut).
 
-Appended to: /Users/chrisbryant/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md
-Next: visual-generation generate /Users/chrisbryant/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section 044064a8-ca06-4380-8a23-50c4ac50e6d1 --endpoint <url>
+Appended to: ~/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md
+Next: visual-generation generate ~/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section 044064a8-ca06-4380-8a23-50c4ac50e6d1 --endpoint <url>
 ❯ agent visual-generation draft \
   "an empty neon rooftop, rain, no people" \
   --project celeste-you-dangerous
@@ -329,14 +329,14 @@ Rationale: Using Z-Image Turbo at cfg 1.0, 8 steps, res_multistep/simple per you
   • Inpaint with a tight, region-only mask (e.g. a screen's glass, inset inside its bezel), never the surrounding frame/prop, so the model can't reinterpret the whole object; masked inpaint tolerates denoise ~0.8 because the rest of the frame is untouched.
   • Z-Image Turbo renders at cfg 1.0, 8 steps, sampler res_multistep, scheduler simple, and uses no negative prompt (its graph zeroes the negative via ConditioningZeroOut).
 
-Appended to: /Users/chrisbryant/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md
-Next: visual-generation generate /Users/chrisbryant/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section cabc8e97-52c1-43f2-8a88-250c23f4ceeb --endpoint <url>
-❯ agent visual-generation generate /Users/chrisbryant/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section cabc8e97-52c1-43f2-8a88-250c23f4ceeb --endpoint <https://87gr5dnawqk2ez-8188.proxy.runpod.net/>
+Appended to: ~/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md
+Next: visual-generation generate ~/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section cabc8e97-52c1-43f2-8a88-250c23f4ceeb --endpoint <url>
+❯ agent visual-generation generate ~/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section cabc8e97-52c1-43f2-8a88-250c23f4ceeb --endpoint <https://<pod-id>-8188.proxy.runpod.net/>
 Usage: visual-generation generate [OPTIONS] BATCH
 Try 'visual-generation generate --help' for help.
 
 Error: Unknown section id 'cabc8e97-52c1-43f2-8a88-250c23f4ceeb'. Known specs: 044064a8-ca06-4380-8a23-50c4ac50e6d1
-❯ agent visual-generation generate /Users/chrisbryant/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section 044064a8-ca06-4380-8a23-50c4ac50e6d1 --endpoint <https://87gr5dnawqk2ez-8188.proxy.runpod.net/>
+❯ agent visual-generation generate ~/agent-data/visual-generation/batches/celeste-you-dangerous.batch.md --section 044064a8-ca06-4380-8a23-50c4ac50e6d1 --endpoint <https://<pod-id>-8188.proxy.runpod.net/>
 ── GPU cost gate (soft-inform — advises, never blocks) ──
   Specs to generate:  1
   Per-run estimate:   $0.0069  (learned)
@@ -350,7 +350,7 @@ Generated:    1 spec(s)
 Session cost: $0.0128  (GPU, agent-local)
 
 ── Generation 04c0fcbd-d43 (spec 044064a8-ca06-4380-8a23-50c4ac50e6d1) ──
-Asset:    /Users/chrisbryant/agent-data/visual-generation/assets/celeste-you-dangerous/04c0fcbd-d437-4282-a96e-d1c86c72cdb5.png
+Asset:    ~/agent-data/visual-generation/assets/celeste-you-dangerous/04c0fcbd-d437-4282-a96e-d1c86c72cdb5.png
 GPU cost: $0.0124  (running $0.0124)
 Recipe:   Z-Image Turbo canonical settings: cfg 1.0, 8 steps, res_multistep/simple, no negative prompt — per your verified USER FACT that the graph zeroes the negative via ConditioningZeroOut and your TECHNIQUE LESSON confirming 1024x1024 to avoid model stalls at 1152x896. The prompt leads with the Coraline stop-motion storybook visual identity established across your LIKED prior generations (felt panels, stitched seams, visible fabric weave on every surface, puppet-world physical depth), then places the narrator on a wide-angle rooftop at dusk with neon uplight from the Buenos Aires cityscape below — a new establishing shot that fits the film's theatrical chapter structure without restating locked character appearance.
 
@@ -360,7 +360,7 @@ Stop your pod now to stop GPU billing — the agent issues no RunPod stop.
 
 Review, then: visual-generation report <gen_id> --reaction <X>
 
-Report: /Users/chrisbryant/obsidian/agent-reports/visual-generation/2026-06-29 01KW8WK2VTH7.md
+Report: ~/obsidian/agent-reports/visual-generation/2026-06-29 01KW8WK2VTH7.md
 ❯ agent visual-generation report gen_id cabc8e97-52c1-43f2-8a88-250c23f4ceeb --reaction disliked --rating 2 --notes "hair is completely wrong, hair is not dreadlocks and the length is wrong character is also to tall and skinny" --context "arrival shot at the bar"
 Usage: visual-generation report [OPTIONS] GEN_ID
 Try 'visual-generation report --help' for help.
@@ -378,60 +378,60 @@ Error: generation '044064a8-ca06-4380-8a23-50c4ac50e6d1' not found.
 ❯ agent visual-generation report 04c0fcbd-d43 --reaction disliked --rating 2 --notes "hair is completely wrong, hair is not dreadlocks and the length is wrong character is also to tall and skinny" --context "arrival shot at the bar"
 Warning: --rating is unusual for 'disliked' (ratings are meaningful for positive reactions). Recording it anyway.
 Traceback (most recent call last):
-  File "/Users/chrisbryant/projects/agent-stack/.venv/bin/visual-generation", line 10, in <module>
+  File "~/projects/agent-stack/.venv/bin/visual-generation", line 10, in <module>
     sys.exit(cli())
              ^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1524, in **call**
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1524, in **call**
     return self.main(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1445, in main
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1445, in main
     rv = self.invoke(ctx)
          ^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1912, in invoke
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1912, in invoke
     return _process_result(sub_ctx.command.invoke(sub_ctx))
                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1308, in invoke
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 1308, in invoke
     return ctx.invoke(self.callback,**ctx.params)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 877, in invoke
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/click/core.py", line 877, in invoke
     return callback(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/packages/visual-generation/src/visual_generation/cli.py", line 681, in report
+  File "~/projects/agent-stack/packages/visual-generation/src/visual_generation/cli.py", line 681, in report
     gen = report_sync(gen_id, reaction, rating=rating, notes=notes, context=context)
           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/packages/visual-generation/src/visual_generation/report.py", line 45, in report_sync
+  File "~/projects/agent-stack/packages/visual-generation/src/visual_generation/report.py", line 45, in report_sync
     return asyncio.run(report(gen_id, reaction,**kwargs))
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/.pyenv/versions/3.12.1/lib/python3.12/asyncio/runners.py", line 194, in run
+  File "~/.pyenv/versions/3.12.1/lib/python3.12/asyncio/runners.py", line 194, in run
     return runner.run(main)
            ^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/.pyenv/versions/3.12.1/lib/python3.12/asyncio/runners.py", line 118, in run
+  File "~/.pyenv/versions/3.12.1/lib/python3.12/asyncio/runners.py", line 118, in run
     return self._loop.run_until_complete(task)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/.pyenv/versions/3.12.1/lib/python3.12/asyncio/base_events.py", line 684, in run_until_complete
+  File "~/.pyenv/versions/3.12.1/lib/python3.12/asyncio/base_events.py", line 684, in run_until_complete
     return future.result()
            ^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/packages/visual-generation/src/visual_generation/report.py", line 35, in report
+  File "~/projects/agent-stack/packages/visual-generation/src/visual_generation/report.py", line 35, in report
     gen = await store.get_generation(gen_id)
           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/packages/visual-generation/src/visual_generation/store.py", line 130, in get_generation
+  File "~/projects/agent-stack/packages/visual-generation/src/visual_generation/store.py", line 130, in get_generation
     records = await self._store.retrieve_points(self._collection, [entry_id])
               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/packages/agent-runtime/src/agent_runtime/memory/store.py", line 89, in retrieve_points
+  File "~/projects/agent-stack/packages/agent-runtime/src/agent_runtime/memory/store.py", line 89, in retrieve_points
     return await self._client.retrieve(
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/async_qdrant_client.py", line 1080, in retrieve
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/async_qdrant_client.py", line 1080, in retrieve
     return await self._client.retrieve(
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/async_qdrant_remote.py", line 1199, in retrieve
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/async_qdrant_remote.py", line 1199, in retrieve
     await self.openapi_client.points_api.get_points(
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/http/api/points_api.py", line 708, in get_points
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/http/api/points_api.py", line 708, in get_points
     return await self._build_for_get_points(
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py", line 184, in request
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py", line 184, in request
     return await self.send(request, type_)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/chrisbryant/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py", line 219, in send
+  File "~/projects/agent-stack/.venv/lib/python3.12/site-packages/qdrant_client/http/api_client.py", line 219, in send
     raise UnexpectedResponse.for_response(response)
 qdrant_client.http.exceptions.UnexpectedResponse: Unexpected Response: 400 (Bad Request)
 Raw response content:

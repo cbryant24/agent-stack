@@ -38,7 +38,8 @@
 #   GPU_ID             GPU type.   Default: NVIDIA RTX PRO 6000 Blackwell Server Edition
 #   CLOUD_TYPE         Cloud type.                               Default: SECURE
 #   DATACENTER         Data center id.                           Default: US-NE-1
-#   NETWORK_VOLUME_ID  Network volume to mount.                  Default: 3wqkq1t8bq
+#   IMAGE_NETWORK_VOLUME_ID  Network volume to mount (the inference/image volume). REQUIRED
+#                      (no default) — must be set in the environment; `up` fails fast if unset.
 #   VOLUME_MOUNT_PATH  Mount path for the volume.                Default: /workspace
 #   CONTAINER_DISK_GB  Container disk size in GB.                Default: 150
 #   PORTS              Exposed ports.                            Default: 8188/http,22/tcp
@@ -56,7 +57,7 @@ IMAGE="${IMAGE:-runpod/comfyui:1.3.0-cuda12.8}"
 GPU_ID="${GPU_ID:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
 CLOUD_TYPE="${CLOUD_TYPE:-SECURE}"
 DATACENTER="${DATACENTER:-US-NE-1}"
-NETWORK_VOLUME_ID="${NETWORK_VOLUME_ID:-3wqkq1t8bq}"
+IMAGE_NETWORK_VOLUME_ID="${IMAGE_NETWORK_VOLUME_ID:-}"
 VOLUME_MOUNT_PATH="${VOLUME_MOUNT_PATH:-/workspace}"
 CONTAINER_DISK_GB="${CONTAINER_DISK_GB:-150}"
 PORTS="${PORTS:-8188/http,22/tcp}"
@@ -162,7 +163,7 @@ create_pod() {
       --gpu-id "$GPU_ID" \
       --cloud-type "$CLOUD_TYPE" \
       --data-center-ids "$DATACENTER" \
-      --network-volume-id "$NETWORK_VOLUME_ID" \
+      --network-volume-id "$IMAGE_NETWORK_VOLUME_ID" \
       --volume-mount-path "$VOLUME_MOUNT_PATH" \
       --container-disk-in-gb "$CONTAINER_DISK_GB" \
       --ports "$PORTS" 2>&1)" || rc=$?
@@ -222,6 +223,13 @@ create_pod() {
 
 cmd_up() {
   local ids id json status gpu
+
+  if [[ -z "${IMAGE_NETWORK_VOLUME_ID:-}" ]]; then
+    echo "error: IMAGE_NETWORK_VOLUME_ID is unset. Set it to your RunPod network volume id, e.g.:" >&2
+    echo "    IMAGE_NETWORK_VOLUME_ID=<volume-id> pod up" >&2
+    exit 1
+  fi
+
   ids="$(resolve_pod)"
 
   # Reuse an existing RUNNING pod with a GPU if one is already up.

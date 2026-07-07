@@ -47,7 +47,7 @@ script.
 | `GPU_ID`             | `NVIDIA RTX PRO 6000 Blackwell Server Edition` | GPU type to request. |
 | `CLOUD_TYPE`         | `SECURE` | RunPod cloud type. |
 | `DATACENTER`         | `US-NE-1` | Datacenter id (must match the network volume's region). |
-| `NETWORK_VOLUME_ID`  | `3wqkq1t8bq` | Network volume to mount (the gen-usne1 volume). |
+| `IMAGE_NETWORK_VOLUME_ID` | *(required — no default)* | Inference/image network volume to mount; set to your RunPod network volume id. `up` fails fast if unset. |
 | `VOLUME_MOUNT_PATH`  | `/workspace` | Where the volume mounts inside the pod. |
 | `CONTAINER_DISK_GB`  | `150` | Container disk size, in GB. |
 | `PORTS`              | `8188/http,22/tcp` | Ports exposed on the pod (ComfyUI + SSH). |

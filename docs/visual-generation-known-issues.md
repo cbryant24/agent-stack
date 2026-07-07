@@ -112,7 +112,7 @@ candidate **Qwen-Image-Edit 2511**, alternative **FLUX.2 dev**.
 Verified feasible against this codebase: the pipeline is model-agnostic (slot inference is
 wiring-derived; `workflow register` is generic; LoRA application isn't text2img-gated), and a
 separate-pod-on-separate-volume eval is supported (`scripts/pod` honors `POD_NAME` /
-`NETWORK_VOLUME_ID`). **Biggest caveat:** the `--from`/`--image` path is **single-image
+`IMAGE_NETWORK_VOLUME_ID`). **Biggest caveat:** the `--from`/`--image` path is **single-image
 img2img/inpaint only** (`VisualSource` enforces one origin, `models.py`) — there is **no
 multi-reference input today**, so this is a real build, not a small extension. Migration is gated on
 a bounded 3-shot bake-off (Qwen vs FLUX.2 vs current) judged as a set.

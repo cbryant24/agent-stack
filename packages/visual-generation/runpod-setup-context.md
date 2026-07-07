@@ -19,7 +19,7 @@ are the real ones on this machine.
 
 ## Storage — two distinct areas, keep them straight
 
-1. **Network volume `gen-usne1`** (ID `3wqkq1t8bq`) — **200 GB** (resized up from 100 GB on
+1. **Network volume `gen-usne1`** (ID supplied via `IMAGE_NETWORK_VOLUME_ID`) — **200 GB** (resized up from 100 GB on
    2026-06-19), Standard tier, datacenter US-NE-1, mounted at **`/workspace`**.
    - **PERSISTENT.** Independent of the pod's lifecycle. Survives pod **stop AND terminate/delete**.
    - This is where everything I want to keep must live.
@@ -116,11 +116,14 @@ document is primarily about the **inference** pod. Never cross the wires:
 | Script | `scripts/pod` (`up`/`down`/`status`/`watch`) | `scripts/lora-train` |
 | Job | Run ComfyUI → generate images/video | Train character LoRAs (Ostris ai-toolkit) |
 | GPU | RTX PRO 6000 Blackwell 96 GB, **US-NE-1** | RTX 5090, **EU-RO-1** |
-| Image | `runpod/comfyui:1.3.0-cuda12.8` | `ostris/aitoolkit:latest` (template `0fqzfjy6f3`) |
-| Volume | `gen-usne1` (`3wqkq1t8bq`) at `/workspace` | `zimage-lora-factory` (`1r6sjkfwnl`) at `/mnt` |
+| Image | `runpod/comfyui:1.3.0-cuda12.8` | `ostris/aitoolkit:latest` (template `<template-id>`) |
+| Volume | `gen-usne1` at `/workspace` (id via `IMAGE_NETWORK_VOLUME_ID`) | `zimage-lora-factory` at `/mnt` (id via `LORAS_NETWORK_VOLUME_ID`) |
 | Port | ComfyUI 8188 | ai-toolkit UI 8675 |
 
 Both volumes are datacenter-locked to different regions, so the two pods **can run at once**.
+(A third volume — id via `QWEN_NETWORK_VOLUME_ID` — is reserved for the planned Qwen-Image-Edit
+migration; no pod/script consumes it yet. All three volume ids are account-specific and supplied
+via env, never hardcoded.)
 The pod id (and thus the `https://<pod-id>-8188.proxy.runpod.net` endpoint) is **new every
 session** — read it from `pod status`, never hardcode it. **LoRA training recipe (proven):**
 train **on Z-Image Turbo** (`Tongyi-MAI/Z-Image-Turbo`) with the de-distill adapter

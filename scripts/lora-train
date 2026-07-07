@@ -37,22 +37,25 @@
 # so scp fails there). `ssh-info` tries to resolve it from the pod JSON; if RunPod's
 # CLI doesn't expose it, copy it from the console's Connect panel into POD_SSH.
 #
-# Defaults below reproduce the narrator run's pod exactly (settings recovered from the
-# machine-B console record, 2026-07-02): Ostris template 0fqzfjy6f3, RTX 5090, EU-RO-1,
-# the dedicated 60 GB training volume zimage-lora-factory (1r6sjkfwnl) at /mnt — a
-# SEPARATE volume from the inference pod's gen-usne1, so both pods can run at once.
+# Defaults below reproduce the narrator run's pod (settings recovered from the machine-B
+# console record, 2026-07-02): a RunPod Ostris template, RTX 5090, EU-RO-1, a dedicated
+# 60 GB training volume zimage-lora-factory at /mnt — a SEPARATE volume from the inference
+# pod's gen-usne1, so both pods can run at once. The template id and network volume id are
+# account-specific and must be supplied via env (TEMPLATE_ID / LORAS_NETWORK_VOLUME_ID); with no
+# TEMPLATE_ID the script falls back to the public IMAGE.
 #
 # Env knobs (constants — all overridable):
 #   POD_NAME           Pod name to target.                     Default: zimage-lora-trainer
 #   POD_ID             Target a specific pod id.               Default: unset
 #   TEMPLATE_ID        RunPod template to deploy from (preferred — carries the
-#                      Ostris env/ports). Set empty to use IMAGE. Default: 0fqzfjy6f3
+#                      Ostris env/ports); account-specific. Empty (the default) uses IMAGE.
 #   IMAGE              Container image (fallback when TEMPLATE_ID is empty).
 #                                                              Default: ostris/aitoolkit:latest
 #   GPU_ID             GPU type.                               Default: NVIDIA GeForce RTX 5090
 #   CLOUD_TYPE         Cloud type.                             Default: SECURE
 #   DATACENTER         Data center id (must match the volume). Default: EU-RO-1
-#   NETWORK_VOLUME_ID  Training volume (zimage-lora-factory).  Default: 1r6sjkfwnl
+#   LORAS_NETWORK_VOLUME_ID  Training volume (zimage-lora-factory).  REQUIRED (no default) —
+#                      account-specific; `up` fails fast if unset.
 #   VOLUME_MOUNT_PATH  Mount path.                             Default: /mnt
 #   CONTAINER_DISK_GB  Container disk size in GB.              Default: 150
 #   PORTS              Exposed ports (UI + ssh).               Default: 8675/http,22/tcp
@@ -67,12 +70,12 @@
 set -euo pipefail
 
 POD_NAME="${POD_NAME:-zimage-lora-trainer}"
-TEMPLATE_ID="${TEMPLATE_ID-0fqzfjy6f3}"
+TEMPLATE_ID="${TEMPLATE_ID-}"
 IMAGE="${IMAGE:-ostris/aitoolkit:latest}"
 GPU_ID="${GPU_ID:-NVIDIA GeForce RTX 5090}"
 CLOUD_TYPE="${CLOUD_TYPE:-SECURE}"
 DATACENTER="${DATACENTER:-EU-RO-1}"
-NETWORK_VOLUME_ID="${NETWORK_VOLUME_ID:-1r6sjkfwnl}"
+LORAS_NETWORK_VOLUME_ID="${LORAS_NETWORK_VOLUME_ID:-}"
 VOLUME_MOUNT_PATH="${VOLUME_MOUNT_PATH:-/mnt}"
 CONTAINER_DISK_GB="${CONTAINER_DISK_GB:-150}"
 PORTS="${PORTS:-8675/http,22/tcp}"
@@ -227,7 +230,7 @@ create_pod() {
       --gpu-id "$GPU_ID" \
       --cloud-type "$CLOUD_TYPE" \
       --data-center-ids "$DATACENTER" \
-      --network-volume-id "$NETWORK_VOLUME_ID" \
+      --network-volume-id "$LORAS_NETWORK_VOLUME_ID" \
       --volume-mount-path "$VOLUME_MOUNT_PATH" \
       --container-disk-in-gb "$CONTAINER_DISK_GB" \
       --ports "$PORTS" 2>&1)" || rc=$?
@@ -278,6 +281,13 @@ create_pod() {
 
 cmd_up() {
   local ids id json status gpu
+
+  if [[ -z "${LORAS_NETWORK_VOLUME_ID:-}" ]]; then
+    echo "error: LORAS_NETWORK_VOLUME_ID is unset. Set it to your RunPod training volume id, e.g.:" >&2
+    echo "    LORAS_NETWORK_VOLUME_ID=<volume-id> lora-train up" >&2
+    exit 1
+  fi
+
   ids="$(resolve_pod)"
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
