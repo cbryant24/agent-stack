@@ -99,3 +99,24 @@ Workaround: pin the text2img template explicitly to bypass retrieval —
 
 Candidate fix (not committed): have `draft` default to a text2img template when no
 `--from`/`--image`/`--mask` is supplied.
+
+## Considered alternatives / future bake-off — reference/edit-based identity
+**Status: queued — bounded bake-off before any migration**
+
+The identity model (one trained LoRA per character, applied at a blunt strength) is the root of
+several recurring costs: a full retrain per style/wardrobe pivot, bleed/fade at strength extremes,
+and weak adherence on complex staging. A reviewed proposal argues for carrying identity as
+**reference images** and generating each shot as an instruction-driven **edit/compose** — primary
+candidate **Qwen-Image-Edit 2511**, alternative **FLUX.2 dev**.
+
+Verified feasible against this codebase: the pipeline is model-agnostic (slot inference is
+wiring-derived; `workflow register` is generic; LoRA application isn't text2img-gated), and a
+separate-pod-on-separate-volume eval is supported (`scripts/pod` honors `POD_NAME` /
+`NETWORK_VOLUME_ID`). **Biggest caveat:** the `--from`/`--image` path is **single-image
+img2img/inpaint only** (`VisualSource` enforces one origin, `models.py`) — there is **no
+multi-reference input today**, so this is a real build, not a small extension. Migration is gated on
+a bounded 3-shot bake-off (Qwen vs FLUX.2 vs current) judged as a set.
+
+Decision record (proposal verbatim + full verification/corrections):
+`~/obsidian/obsidian-vault-personal/production-agents/visual-generation/visual-generation-model-alternatives.md`.
+Execution plan: `~/.claude/plans/review-this-alternative-lucky-codd.md`.
