@@ -191,6 +191,10 @@ DELEGATE_TARGET_TUTORIAL_RESEARCH = "tutorial-research"
 DEFAULT_GPU_RATE_USD_PER_HR = 0.69
 # Cold-start per-run estimate (no recorded history yet): minutes × rate.
 DEFAULT_PER_RUN_MINUTES = 1.0
+# Video (Wan I2V/FLF2V) runs are 10–30× an image run — a per-modality cold-start so a
+# 12–18-clip scene shows an honest session estimate before the first submit. At the
+# ~$2.09/hr pod rate this is ≈ $0.35/clip vs the image default's cents.
+DEFAULT_PER_RUN_MINUTES_VIDEO = 10.0
 # How many recent recorded per-run costs feed the learned per-run estimate.
 RECENT_COST_SAMPLE = 20
 
@@ -205,6 +209,9 @@ RESEARCH_GAP_THRESHOLD = 0.35
 # ── History poll loop (bounded; interval/timeout injectable for tests) ────────
 DEFAULT_POLL_INTERVAL_SEC = 2.0
 DEFAULT_POLL_TIMEOUT_SEC = 600.0
+# Video runs take minutes, not seconds — a longer per-modality poll ceiling so a slow
+# FLF2V clip isn't abandoned mid-render. A spec's settings may override via "poll_timeout".
+DEFAULT_POLL_TIMEOUT_SEC_VIDEO = 1800.0
 
 # ── Refinement (img2img / inpaint) denoise ────────────────────────────────────
 # A source spec with no explicit `denoise` defaults to this at runtime only (the

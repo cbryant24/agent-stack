@@ -311,6 +311,41 @@ class GenerationBatch(BaseModel):
     specs: list[VisualSpec] = Field(default_factory=list)
 
 
+class ClipSpec(BaseModel):
+    """One FLF2V clip in a scene sequence: a first→last approved-keyframe pair plus the
+    motion prompt describing the action between them. `order` positions it in the scene;
+    consecutive clips share a boundary (`clip[n].last_frame == clip[n+1].first_frame`).
+    The `motion_prompt` is the human-readable body of the sequence-file section; the rest
+    rides the per-clip HTML-comment JSON (mirrors VisualSpec in a batch file)."""
+
+    clip_id: str = Field(default_factory=_new_id)
+    heading: str = ""  # human label for the section (not load-bearing)
+    motion_prompt: str = ""  # the body: action between the two frames
+    first_frame: str = ""  # gen_id of the start keyframe boundary
+    last_frame: str = ""  # gen_id of the end keyframe boundary
+    workflow_ref: str | None = None  # the FLF2V WorkflowTemplate name
+    settings: dict[str, Any] = Field(default_factory=dict)  # length/fps/… ride here
+    seed: int | None = None
+    seed_strategy: Literal["fixed", "random"] = "fixed"
+    order: int = 0  # 1-based position within the scene
+
+
+class Sequence(BaseModel):
+    """A per-scene, ordered set of boundary-sharing FLF2V clips (a `.sequence.md` file).
+
+    `fps`/`clip_frames` are scene-level defaults (each clip's `settings` may override).
+    Structural validity (contiguous order, shared boundaries) is checked by
+    `sequence.validate_sequence`, not here, so a hand-edited file degrades gracefully."""
+
+    project: str | None = None
+    scene: str | None = None
+    fps: int = 16
+    clip_frames: int = 81  # 81 = 4n+1, ~5s @ 16fps (Wan 2.2 native clip length)
+    created_at: str = Field(default_factory=_now_iso)
+    source_path: str | None = None
+    clips: list[ClipSpec] = Field(default_factory=list)
+
+
 class VisualResult(BaseModel):
     """The on-screen result of generating one spec (Q11): where the asset landed,
     the resolved recipe, the tutor rationale, and the GPU cost."""

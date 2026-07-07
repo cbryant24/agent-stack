@@ -581,6 +581,100 @@ def test_edit_uploads_base_and_references_into_edit_slots(tmp_path: Path) -> Non
     assert fake.submitted[0]["2"]["inputs"]["image"] == f"input/{names[1]}"
 
 
+# ── approval gate + per-template cost + poll timeout (Phase 4) ───────────────
+
+
+def _gate_batch(tmp_path: Path, **source_kwargs) -> Path:
+    from visual_generation.batch_file import write_batch
+    from visual_generation.models import GenerationBatch
+    spec = _spec(
+        heading="clip 1", workflow_ref="wan22-flf2v",
+        source=VisualSource(**source_kwargs), settings={"length": 81, "fps": 16},
+    )
+    path = tmp_path / "s.batch.md"
+    write_batch(GenerationBatch(project="short-film", specs=[spec]), path)
+    return path
+
+
+def _gate_store(template, reactions: dict[str, str], costs=None) -> MagicMock:
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_template_by_name = AsyncMock(return_value=template)
+    store.recent_generation_costs = AsyncMock(return_value=costs or [])
+    gens = {gid: VisualGeneration(entry_id=gid, caption=gid, reaction=rx)
+            for gid, rx in reactions.items()}
+    store.get_generation = AsyncMock(side_effect=lambda gid: gens.get(gid))
+    return store
+
+
+def test_approval_gate_skips_unapproved_boundary(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, from_generation="genA", last_from_generation="genB")
+    store = _gate_store(_flf2v_template(), {"genA": "loved", "genB": "pending"})  # B unapproved
+    plan = plan_generation_sync(path, all_sections=True, store=store, memory_store=MagicMock())
+    assert plan.plans == []
+    assert any("not approved" in r and "genB" in r for r in plan.skip_reasons)
+
+
+def test_approval_gate_passes_when_both_boundaries_approved(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, from_generation="genA", last_from_generation="genB")
+    store = _gate_store(_flf2v_template(), {"genA": "loved", "genB": "liked_with_changes"})
+    plan = plan_generation_sync(path, all_sections=True, store=store, memory_store=MagicMock())
+    assert len(plan.plans) == 1
+    assert plan.skipped == []
+
+
+def test_allow_unapproved_overrides_gate(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, from_generation="genA", last_from_generation="genB")
+    store = _gate_store(_flf2v_template(), {"genA": "pending", "genB": "pending"})
+    plan = plan_generation_sync(
+        path, all_sections=True, allow_unapproved=True, store=store, memory_store=MagicMock()
+    )
+    assert len(plan.plans) == 1
+
+
+def test_gate_does_not_apply_to_external_image_source(tmp_path: Path) -> None:
+    # An external image (no gen id) has no reaction to check → never gated.
+    ext = tmp_path / "first.png"; ext.write_bytes(b"F")
+    ext2 = tmp_path / "last.png"; ext2.write_bytes(b"L")
+    path = _gate_batch(tmp_path, image_path=str(ext), last_image_path=str(ext2))
+    store = _gate_store(_flf2v_template(), {})
+    plan = plan_generation_sync(path, all_sections=True, store=store, memory_store=MagicMock())
+    assert len(plan.plans) == 1
+
+
+def test_plan_video_cost_uses_video_default_and_filters_by_template(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, image_path="x")  # external → no gate; just exercising cost
+    store = _gate_store(_flf2v_template(), {})
+    plan = plan_generation_sync(path, all_sections=True, gpu_rate=2.09,
+                                store=store, memory_store=MagicMock())
+    # Cost history was queried filtered to the video template only.
+    store.recent_generation_costs.assert_awaited_once()
+    assert store.recent_generation_costs.await_args.kwargs["workflow_ref"] == "wan22-flf2v"
+    # Cold-start used the per-modality VIDEO default (≈$0.35/clip at $2.09/hr), not cents.
+    assert plan.per_run_estimate_usd == pytest.approx(10.0 / 60.0 * 2.09)
+    assert plan.estimate_source == "default"
+
+
+def test_poll_timeout_for_video_template_uses_video_ceiling() -> None:
+    from visual_generation.constants import DEFAULT_POLL_TIMEOUT_SEC_VIDEO
+    from visual_generation.generate import _poll_timeout_for
+
+    spec = _spec(workflow_ref="wan22-flf2v", source=VisualSource(image_path="a", last_image_path="b"),
+                 settings={"length": 81, "fps": 16})
+    sp = _source_plan(_flf2v_template(), spec).plans[0]
+    assert _poll_timeout_for(sp, 600.0) == DEFAULT_POLL_TIMEOUT_SEC_VIDEO
+    # An explicit per-spec override wins.
+    spec.settings["poll_timeout"] = 42.0
+    assert _poll_timeout_for(sp, 600.0) == 42.0
+
+
+def test_poll_timeout_for_image_template_uses_session_default() -> None:
+    from visual_generation.generate import _poll_timeout_for
+    sp = _plan(_img2img_template(with_mask=False), _spec(workflow_ref="z-img2img",
+              source=VisualSource(image_path="a"))).plans[0]
+    assert _poll_timeout_for(sp, 600.0) == 600.0
+
+
 # ── plan-phase: runtime denoise default + coherence warning ──────────────────
 
 

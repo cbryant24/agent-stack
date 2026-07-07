@@ -105,6 +105,18 @@ def test_videos_from_history_native_videos_key() -> None:
     assert vids == [{"filename": "clip.mp4", "subfolder": "video", "type": "output"}]
 
 
+def test_videos_from_history_native_previewvideo_animated_flag() -> None:
+    # Confirmed native shape: PreviewVideo serialises as images[] + animated:(True,).
+    record = {"outputs": {"108": {
+        "images": [{"filename": "Wan2.2_flf2v_00001.mp4", "subfolder": "video", "type": "output"}],
+        "animated": [True],
+    }}}
+    vids = ComfyUIClient.videos_from_history(record)
+    assert vids == [
+        {"filename": "Wan2.2_flf2v_00001.mp4", "subfolder": "video", "type": "output"}
+    ]
+
+
 def test_videos_from_history_vhs_gifs_key() -> None:
     # Third-party VHS VideoCombine reports under "gifs".
     record = {"outputs": {"7": {"gifs": [{"filename": "clip.gif"}]}}}

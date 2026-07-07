@@ -26,21 +26,21 @@ _LATENT_CLASSES = {"EmptyLatentImage", "EmptySD3LatentImage", "EmptyLatentImageA
 
 # ── Video / edit topology (Wan 2.2 FLF2V / I2V, Qwen-Image-Edit 2511) ─────────
 # The Wan video-latent nodes emit conditioning on outputs 0/1 and a latent on 2, so
-# the sampler's positive/negative trace THROUGH them (see _resolve_cond). FLF2V adds a
-# second image input (end_image) over I2V's single start_image.
-# TODO(phase0): confirm these exact class names + input keys against the exported
-# Phase-0 graphs (wan2.2-flf2v-14B-lightx2v-api.json, qwen-image-edit-2511-api.json);
-# the I2V graph (committed) already exercises WanImageToVideo + the dual-sampler path.
+# the sampler's positive/negative trace THROUGH them (see _resolve_cond). Class names +
+# input keys below are confirmed against ComfyUI master (comfy_extras/nodes_wan.py,
+# nodes_qwen.py): WanImageToVideo has one image input `start_image`; WanFirstLastFrameToVideo
+# adds `end_image`; both output (positive, negative, latent). Still diff a committed
+# Phase-0 export before production in case the pinned pod's ComfyUI version differs.
 _VIDEO_LATENT_CLASSES = {
     "WanImageToVideo",
     "WanFirstLastFrameToVideo",
-    "WanFirstLastFrameToVideoLatent",
+    "WanFirstLastFrameToVideoLatent",  # 5B variant name (defensive; not in master extras)
 }
 _EDIT_ENCODE_CLASSES = {"TextEncodeQwenImageEditPlus", "TextEncodeQwenImageEditPlusAdvance"}
 _CREATE_VIDEO_CLASSES = {"CreateVideo"}
 
-# Per-encoder input key holding the prompt text. CLIPTextEncode uses "text"; the Qwen
-# edit encoders use "prompt". TODO(phase0): verify the Qwen key against the exported JSON.
+# Per-encoder input key holding the prompt text. Confirmed against source: CLIPTextEncode
+# uses "text"; TextEncodeQwenImageEditPlus uses "prompt" (with image ports image1/image2/image3).
 _TEXT_INPUT_KEYS = {
     "CLIPTextEncode": "text",
     "TextEncodeQwenImageEditPlus": "prompt",

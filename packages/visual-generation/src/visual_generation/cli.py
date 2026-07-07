@@ -64,7 +64,22 @@ from visual_generation.inspect import (
 from visual_generation.lora_guard import strength_warnings
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
-from visual_generation.models import LoraRef, TechniqueLesson, VisualSource, WorkflowTemplate
+from visual_generation.models import (
+    GenerationBatch,
+    LoraRef,
+    TechniqueLesson,
+    VisualSource,
+    WorkflowTemplate,
+)
+from visual_generation.sequence import (
+    build_scene_manifest,
+    read_sequence,
+    scaffold_sequence,
+    sequence_to_specs,
+    validate_sequence,
+    write_scene_manifest,
+    write_sequence,
+)
 from visual_generation.report import report_sync
 from visual_generation.research import register_delegate_handlers, render_research, research_sync
 from visual_generation.slot_inference import infer_slots
@@ -672,9 +687,14 @@ def _run_batch(project: str, output: str | None, model: str | None, provider: st
               help=f"GPU $/hr for cost tracking (default: {DEFAULT_GPU_RATE_USD_PER_HR}).")
 @click.option("--max-session-cost", type=float, default=None,
               help="Optional HARD ceiling (USD) — stop draining before it's breached.")
+@click.option("--allow-unapproved", is_flag=True, default=False,
+              help="Override the approval gate: generate video/edit specs even when a "
+                   "source keyframe isn't approved (loved/liked). Use with care — it's "
+                   "what keeps every FLF2V boundary an approved still.")
 @click.option("--yes", "-y", is_flag=True, default=False, help="Skip the soft-inform gate.")
 def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: str,
-             gpu_rate: float | None, max_session_cost: float | None, yes: bool) -> None:
+             gpu_rate: float | None, max_session_cost: float | None,
+             allow_unapproved: bool, yes: bool) -> None:
     """Generate asset(s) for spec(s) of a BATCH file against a ComfyUI pod. Spends GPU.
 
     Advisory spin-up (Q4): you spin up the pod and pass its ComfyUI --endpoint; the
@@ -686,15 +706,16 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
 
     try:
         plan = plan_generation_sync(
-            batch, section_id=section_id, all_sections=all_sections, gpu_rate=rate
+            batch, section_id=section_id, all_sections=all_sections, gpu_rate=rate,
+            allow_unapproved=allow_unapproved,
         )
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
 
     if not plan.plans:
         click.echo("Nothing to generate.", err=True)
-        if plan.skipped:
-            click.echo(f"Skipped (no resolvable workflow template): {', '.join(plan.skipped)}", err=True)
+        for reason in plan.skip_reasons:
+            click.echo(f"  • {reason}", err=True)
         raise SystemExit(1)
 
     ledger = GpuLedger()
@@ -763,6 +784,150 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
     click.echo("\nReview each asset, then run its `React:` command above (the gen id is filled in).")
     if result.report_path:
         click.echo(f"\nReport: {result.report_path}")
+
+
+# ── sequence (FLF2V scene: plan clips → render → manifest) ───────────────────
+
+
+@cli.group()
+def sequence() -> None:
+    """Plan and render a scene of FLF2V clips from approved keyframes."""
+
+
+@sequence.command("plan")
+@click.argument("scene")
+@click.option("--keyframe", "keyframes", multiple=True, required=True,
+              help="An approved keyframe gen_id (repeatable, IN ORDER). N keyframes → "
+                   "N-1 boundary-shared clips.")
+@click.option("--motion", "motions", multiple=True,
+              help="Motion prompt for a clip (repeatable, in clip order). Optional — "
+                   "leave blank to fill the bodies by hand after.")
+@click.option("--project", default=None, help="Project slug (recorded in the sequence header).")
+@click.option("--output", "-o", "output", type=click.Path(dir_okay=False), default=None,
+              help="Sequence file to write (default: <scene>.sequence.md under agent-data).")
+@click.option("--fps", type=int, default=16, help="Frames per second (default 16 — Wan native).")
+@click.option("--clip-frames", type=int, default=81,
+              help="Frames per clip (default 81 = 4n+1, ~5s @16fps).")
+@click.option("--template", "workflow_ref", default=FLF2V_TEMPLATE_NAME,
+              help=f"FLF2V workflow template name (default {FLF2V_TEMPLATE_NAME!r}).")
+def sequence_plan(scene: str, keyframes: tuple[str, ...], motions: tuple[str, ...],
+                  project: str | None, output: str | None, fps: int, clip_frames: int,
+                  workflow_ref: str) -> None:
+    """Scaffold a SCENE's clip sequence from ordered approved keyframes. Free.
+
+    Wires consecutive keyframes into boundary-shared FLF2V clips
+    (clip[n].last_frame == clip[n+1].first_frame) and writes a `.sequence.md` you can
+    edit (fill motion prompts) before `sequence render`. Approve every keyframe first —
+    `sequence render` gates on it.
+    """
+    from agent_runtime import get_config
+
+    try:
+        seq = scaffold_sequence(
+            list(keyframes), project=project, scene=scene, fps=fps,
+            clip_frames=clip_frames, workflow_ref=workflow_ref,
+            motion_prompts=list(motions) or None,
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
+    if output is None:
+        base = get_config().agent_data_dir / "visual-generation" / "sequences"
+        output = str(base / f"{scene}.sequence.md")
+    out_path = Path(output)
+    seq.source_path = str(out_path)
+    write_sequence(seq, out_path)
+
+    click.echo(f"Scene:   {scene}")
+    click.echo(f"Clips:   {len(seq.clips)}  ({len(keyframes)} keyframes, boundaries shared)")
+    for c in seq.clips:
+        body = f"  {c.motion_prompt[:50]}" if c.motion_prompt else "  (write a motion prompt)"
+        click.echo(f"  {c.order}. {c.first_frame} → {c.last_frame}{body}")
+    click.echo(f"\nWrote: {out_path}")
+    click.echo(f"Edit motion prompts, then: agent visual-generation sequence render {out_path} "
+               "--endpoint <url>")
+
+
+@sequence.command("render")
+@click.argument("sequence_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--endpoint", required=True, help="ComfyUI endpoint URL (the pod you spun up).")
+@click.option("--gpu-rate", type=float, default=None,
+              help=f"GPU $/hr for cost tracking (default: {DEFAULT_GPU_RATE_USD_PER_HR}).")
+@click.option("--max-session-cost", type=float, default=None,
+              help="Optional HARD ceiling (USD) — stop draining before it's breached.")
+@click.option("--allow-unapproved", is_flag=True, default=False,
+              help="Override the approval gate (render clips off unapproved keyframes).")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the soft-inform gate.")
+def sequence_render(sequence_file: str, endpoint: str, gpu_rate: float | None,
+                    max_session_cost: float | None, allow_unapproved: bool, yes: bool) -> None:
+    """Render a SCENE's clips in order → clip assets + a scene-manifest.json. Spends GPU.
+
+    Validates the sequence structurally (contiguous order, shared boundaries), gates each
+    clip on its keyframes being approved, spends them against the pod (a shared boundary
+    frame uploads once), then writes `<scene>.scene-manifest.json` — the ordered handoff
+    edit-brief discovers by project_id.
+    """
+    rate = gpu_rate if gpu_rate is not None else DEFAULT_GPU_RATE_USD_PER_HR
+    seq_path = Path(sequence_file)
+    seq = read_sequence(seq_path)
+
+    errors = validate_sequence(seq)
+    if errors:
+        click.echo("Sequence is structurally invalid — fix these before rendering:", err=True)
+        for e in errors:
+            click.echo(f"  • {e}", err=True)
+        raise SystemExit(1)
+
+    # Materialise the clips as an FLF2V batch, then reuse the plan → gate → spend path.
+    batch = GenerationBatch(project=seq.project, specs=sequence_to_specs(seq))
+    batch_path = seq_path.with_suffix(".batch.md")
+    write_batch(batch, batch_path)
+
+    try:
+        plan = plan_generation_sync(
+            batch_path, all_sections=True, gpu_rate=rate, allow_unapproved=allow_unapproved
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
+    if not plan.plans:
+        click.echo("Nothing to render.", err=True)
+        for reason in plan.skip_reasons:
+            click.echo(f"  • {reason}", err=True)
+        raise SystemExit(1)
+
+    est = plan.estimated_session_cost_usd
+    click.echo("── FLF2V render gate (soft-inform) ──")
+    click.echo(f"  Scene:              {seq.scene}")
+    click.echo(f"  Clips to render:    {len(plan.plans)} of {len(seq.clips)}")
+    click.echo(f"  Per-clip estimate:  ${plan.per_run_estimate_usd:.4f}  ({plan.estimate_source})")
+    click.echo(f"  Est. session cost:  ${est:.4f}  @ ${rate:.2f}/hr")
+    for reason in plan.skip_reasons:
+        click.echo(f"  ⚠ {reason}")
+    if not yes:
+        click.confirm(f"Spend ~${est:.4f} rendering {len(plan.plans)} clip(s)?", abort=True)
+
+    result = spend_generation_sync(
+        plan, endpoint=endpoint, gpu_rate=rate, max_session_cost=max_session_cost
+    )
+
+    results_by_clip = {r.spec_id: r for r in result.results}
+    manifest = build_scene_manifest(seq, results_by_clip)
+    manifest_path = seq_path.with_name(f"{seq.scene or seq_path.stem}.scene-manifest.json")
+    write_scene_manifest(manifest, manifest_path)
+
+    click.echo(f"\nStatus:       {result.status}")
+    click.echo(f"Rendered:     {result.items_processed} clip(s)")
+    click.echo(f"Session cost: ${result.session_cost_usd:.4f}  (GPU, agent-local)")
+    for r in result.results:
+        click.echo(f"  • {r.spec_id}: {r.asset_path}")
+    if result.skip_reasons:
+        click.echo("\nSkipped:")
+        for reason in result.skip_reasons:
+            click.echo(f"  • {reason}")
+    click.echo(f"\nManifest: {manifest_path}")
+    if result.drained:
+        click.echo("Stop your pod now to stop GPU billing — the agent issues no RunPod stop.")
 
 
 # ── report (React) ───────────────────────────────────────────────────────────

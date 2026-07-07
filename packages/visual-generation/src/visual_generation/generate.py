@@ -51,10 +51,12 @@ from visual_generation.constants import (
     DEFAULT_GPU_RATE_USD_PER_HR,
     DEFAULT_POLL_INTERVAL_SEC,
     DEFAULT_POLL_TIMEOUT_SEC,
+    DEFAULT_POLL_TIMEOUT_SEC_VIDEO,
     DENOISE_COHERENCE_WARN,
     GENERATE_BUDGET,
     GPU_COST_SPAN_ATTR,
     GPU_SECONDS_SPAN_ATTR,
+    POSITIVE_REACTIONS,
     SESSION_COST_SPAN_ATTR,
 )
 from visual_generation.graph_build import apply_source_filenames, build_prompt_graph, write_slot
@@ -104,7 +106,8 @@ class SourceProvision:
 class GenerationPlan:
     project: str | None
     plans: list[SpecPlan] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)  # spec ids skipped (no template, etc.)
+    skipped: list[str] = field(default_factory=list)  # spec ids skipped (no template, gate, etc.)
+    skip_reasons: list[str] = field(default_factory=list)  # plain reason per plan-time skip
     per_run_estimate_usd: float = 0.0
     estimate_source: str = "default"
     gpu_rate_usd_per_hr: float = DEFAULT_GPU_RATE_USD_PER_HR
@@ -415,6 +418,74 @@ async def _provision_sources(
     )
 
 
+async def _approval_skip_reason(
+    spec: VisualSpec,
+    template: WorkflowTemplate,
+    store: VisualGenerationStore,
+    *,
+    allow_unapproved: bool,
+) -> str | None:
+    """The approval gate (G6): a video/edit spec may only build on APPROVED keyframes.
+
+    For every `from_generation` source ref (first frame, FLF2V last frame, Qwen
+    references), the referenced generation's reaction must be in POSITIVE_REACTIONS —
+    otherwise the spec is skipped (unless `allow_unapproved`). This is the single guard
+    that makes FLF2V's "every boundary is an approved still" promise real: it stops a
+    clip from being generated against an unapproved (or drifted) keyframe. External
+    image sources (no gen id) are not gated — there's no reaction to check. Returns a
+    skip reason, or None to proceed."""
+    if allow_unapproved or spec.source is None:
+        return None
+    slots = template.slot_map
+    if not ("first_frame" in slots or "edit_image_1" in slots):  # only flf2v/i2v/edit
+        return None
+    src = spec.source
+    refs: list[tuple[str, str]] = []
+    if src.from_generation:
+        refs.append(("first frame", src.from_generation))
+    if src.last_from_generation:
+        refs.append(("last frame", src.last_from_generation))
+    for i, r in enumerate(src.references, start=1):
+        if r.from_generation:
+            refs.append((f"reference {i}", r.from_generation))
+    for label, gid in refs:
+        gen = await store.get_generation(gid)
+        if gen is None:
+            return (
+                f"Skipped {spec.spec_id}: {label} {gid} not found — can't verify "
+                "approval (pass --allow-unapproved to override)."
+            )
+        if gen.reaction not in POSITIVE_REACTIONS:
+            return (
+                f"Skipped {spec.spec_id}: {label} {gid} is not approved "
+                f"(reaction={gen.reaction!r}) — approve it, or pass --allow-unapproved."
+            )
+    return None
+
+
+def _primary_workflow_ref(plans: list[SpecPlan]) -> str | None:
+    """The most common workflow_ref among planned specs — the template the session's
+    cost estimate should be learned from (a sequence render is all one template)."""
+    counts: dict[str, int] = {}
+    for p in plans:
+        ref = p.spec.workflow_ref
+        if ref:
+            counts[ref] = counts.get(ref, 0) + 1
+    return max(counts, key=lambda k: counts[k]) if counts else None
+
+
+def _poll_timeout_for(sp: SpecPlan, session_timeout: float) -> float:
+    """Per-spec poll ceiling: an explicit `settings["poll_timeout"]` wins; else video
+    templates get the longer video ceiling (max with the session value); else the
+    session default. Video runs are minutes, not seconds."""
+    override = sp.spec.settings.get("poll_timeout")
+    if isinstance(override, (int, float)) and override > 0:
+        return float(override)
+    if _is_video_template(sp.template.slot_map):
+        return max(DEFAULT_POLL_TIMEOUT_SEC_VIDEO, session_timeout)
+    return session_timeout
+
+
 def _record_gpu(per_run_seconds: float, per_run_cost: float, session_cost: float) -> None:
     span = trace.get_current_span()
     span.set_attribute(GPU_SECONDS_SPAN_ATTR, per_run_seconds)
@@ -431,10 +502,17 @@ async def plan_generation(
     section_id: str | None = None,
     all_sections: bool = False,
     gpu_rate: float = DEFAULT_GPU_RATE_USD_PER_HR,
+    allow_unapproved: bool = False,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
 ) -> GenerationPlan:
-    """Resolve target specs to concrete graphs and compute the gate estimate."""
+    """Resolve target specs to concrete graphs and compute the gate estimate.
+
+    The approval gate (G6) runs here: a video/edit spec building on an unapproved
+    source keyframe is skipped with a reason unless `allow_unapproved`. The per-run
+    cost estimate is per-template (learned from prior runs of the batch's dominant
+    workflow_ref; cold-start is per-modality) so a video session shows an honest total.
+    """
     memory_store = memory_store or get_memory_store()
     store = store or VisualGenerationStore(memory_store)
     await store.ensure_collection()
@@ -444,12 +522,25 @@ async def plan_generation(
 
     plans: list[SpecPlan] = []
     skipped: list[str] = []
+    skip_reasons: list[str] = []
     for spec in targets:
         template = (
             await store.get_template_by_name(spec.workflow_ref) if spec.workflow_ref else None
         )
         if template is None:
             skipped.append(spec.spec_id)
+            skip_reasons.append(
+                f"Skipped {spec.spec_id}: no resolvable workflow template (set "
+                "workflow_ref to a registered template)"
+            )
+            continue
+        # Approval gate: don't build a clip/keyframe on an unapproved source keyframe.
+        gate = await _approval_skip_reason(
+            spec, template, store, allow_unapproved=allow_unapproved
+        )
+        if gate is not None:
+            skipped.append(spec.spec_id)
+            skip_reasons.append(gate)
             continue
         graph, unmapped = build_prompt_graph(spec, template)
         warnings: list[str] = []
@@ -466,13 +557,23 @@ async def plan_generation(
             )
         )
 
-    prior_costs = await store.recent_generation_costs()
-    per_run, source = estimate_per_run_cost(prior_costs, gpu_rate)
+    # Per-template cost estimate: learn only from the dominant template's prior runs
+    # (a video estimate must not be diluted by cheap image runs), with a per-modality
+    # cold-start default when there's no history yet.
+    primary_ref = _primary_workflow_ref(plans)
+    is_video = any(
+        _is_video_template(p.template.slot_map)
+        for p in plans
+        if p.spec.workflow_ref == primary_ref
+    )
+    prior_costs = await store.recent_generation_costs(workflow_ref=primary_ref)
+    per_run, source = estimate_per_run_cost(prior_costs, gpu_rate, is_video=is_video)
 
     return GenerationPlan(
         project=batch.project,
         plans=plans,
         skipped=skipped,
+        skip_reasons=skip_reasons,
         per_run_estimate_usd=per_run,
         estimate_source=source,
         gpu_rate_usd_per_hr=gpu_rate,
@@ -515,11 +616,8 @@ async def spend_generation(
     wall_time_sec = 0.0
     results: list[VisualResult] = []
     skipped = list(plan.skipped)
-    skip_reasons: list[str] = [
-        f"Skipped {sid}: no resolvable workflow template (set workflow_ref to a "
-        "registered template)"
-        for sid in plan.skipped
-    ]
+    # Plan-time skips (no template, approval gate) already carry their reasons.
+    skip_reasons: list[str] = list(plan.skip_reasons)
     tracker_ref: BudgetTracker | None = None
 
     try:
@@ -555,7 +653,7 @@ async def spend_generation(
 
                     prompt_id = await client.submit(sp.graph)
                     record = await _poll_history(
-                        client, prompt_id, poll_interval, poll_timeout, clock
+                        client, prompt_id, poll_interval, _poll_timeout_for(sp, poll_timeout), clock
                     )
                     is_video = _is_video_template(sp.template.slot_map)
                     outputs = (
@@ -705,17 +803,20 @@ async def generate(
     endpoint: str,
     gpu_rate: float = DEFAULT_GPU_RATE_USD_PER_HR,
     max_session_cost: float | None = None,
+    allow_unapproved: bool = False,
     store: VisualGenerationStore | None = None,
     memory_store: MemoryStore | None = None,
     client: ComfyUIClient | None = None,
     **spend_kwargs: Any,
 ) -> GenerationResult:
-    """Plan then spend in one call (no gate — the soft-inform gate is the CLI's job)."""
+    """Plan then spend in one call (no soft-inform cost gate — that's the CLI's job; the
+    approval gate DOES run, inside plan_generation)."""
     plan = await plan_generation(
         batch_path,
         section_id=section_id,
         all_sections=all_sections,
         gpu_rate=gpu_rate,
+        allow_unapproved=allow_unapproved,
         store=store,
         memory_store=memory_store,
     )

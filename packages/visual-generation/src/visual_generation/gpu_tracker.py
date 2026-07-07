@@ -26,22 +26,29 @@ from agent_runtime import get_config
 from visual_generation.constants import (
     AGENT_SUBDIR,
     DEFAULT_PER_RUN_MINUTES,
+    DEFAULT_PER_RUN_MINUTES_VIDEO,
     GPU_LEDGER_FILENAME,
     RECENT_COST_SAMPLE,
 )
 
 
-def estimate_per_run_cost(prior_costs: list[float], rate: float) -> tuple[float, str]:
+def estimate_per_run_cost(
+    prior_costs: list[float], rate: float, *, is_video: bool = False
+) -> tuple[float, str]:
     """Seed the per-run cost estimate. Returns (usd, source).
 
-    `learned` — mean of the most recent recorded non-zero per-run costs.
-    `default` — cold-start: DEFAULT_PER_RUN_MINUTES × rate (always produces a value).
+    `learned` — mean of the most recent recorded non-zero per-run costs. The caller
+    filters `prior_costs` by `workflow_ref` so a video template's estimate is learned
+    from prior video runs only, never contaminated by cheap image runs.
+    `default` — cold-start: (video ? DEFAULT_PER_RUN_MINUTES_VIDEO : DEFAULT_PER_RUN_MINUTES)
+    × rate. Video runs cost 10–30× an image run, so the cold-start is per-modality.
     """
     nonzero = [c for c in prior_costs if c and c > 0]
     if nonzero:
         sample = nonzero[-RECENT_COST_SAMPLE:]
         return sum(sample) / len(sample), "learned"
-    return DEFAULT_PER_RUN_MINUTES / 60.0 * rate, "default"
+    minutes = DEFAULT_PER_RUN_MINUTES_VIDEO if is_video else DEFAULT_PER_RUN_MINUTES
+    return minutes / 60.0 * rate, "default"
 
 
 class GpuLedger:

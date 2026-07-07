@@ -131,19 +131,16 @@ class ComfyUIClient:
         """Extract video output descriptors ({filename, subfolder, type}) from a
         history record, unioning the shapes a SaveVideo node can produce.
 
-        The history key for a video output is version- and node-dependent and not
-        reliably documented: native `SaveVideo` serialises via
-        `ui.PreviewVideo`/`SavedResult` (the key is NOT guaranteed to be `"videos"`),
-        the third-party VHS `VideoCombine` node uses `"gifs"`, and some versions
-        report a video under `"images"` with a video filename. So we collect from the
-        explicit named keys AND sweep every list-of-descriptors output for a filename
-        with a known video extension (`VIDEO_ASSET_EXTS`) — the version-agnostic
-        backstop. Descriptors are deduped by (filename, subfolder, type); `view()`
-        fetches the bytes exactly as for images.
-
-        TODO(phase0): confirm the native SaveVideo serialized key against a live
-        `/history` dump and `comfy_api/latest/_ui.py` (PreviewVideo/SavedResult); the
-        extension sweep is the backstop until an exported Phase-0 graph pins it down.
+        The history key for a video output varies by node. Confirmed against ComfyUI
+        master source: native `SaveVideo` returns `ui.PreviewVideo(...)`, which
+        serialises as `{"images": [...], "animated": (True,)}` (comfy_api/latest/_ui.py
+        `PreviewVideo.as_dict`) — i.e. video descriptors land under **"images"** with an
+        `"animated"` flag, NOT a `"videos"` key. The third-party VHS `VideoCombine` node
+        uses `"gifs"`. So we collect, in order of authority: (1) an `animated`-flagged
+        node's `images`; (2) explicit `videos`/`gifs` keys; (3) a filename-extension
+        sweep (`VIDEO_ASSET_EXTS`) over every list output as a version-agnostic backstop.
+        Descriptors are deduped by (filename, subfolder, type); `view()` fetches the
+        bytes exactly as for images.
         """
         videos: list[dict[str, str]] = []
         seen: set[tuple[str, str, str]] = set()
@@ -167,13 +164,17 @@ class ComfyUIClient:
         for node_output in (record.get("outputs") or {}).values():
             if not isinstance(node_output, dict):
                 continue
-            # 1) explicit named keys: native "videos", third-party VHS "gifs".
+            # 1) native SaveVideo: PreviewVideo → images[] + a truthy "animated" flag.
+            if node_output.get("animated"):
+                for item in node_output.get("images", []) or []:
+                    _add(item)
+            # 2) explicit named keys: some builds use "videos"; VHS VideoCombine "gifs".
             for named in ("videos", "gifs"):
                 for item in node_output.get(named, []) or []:
                     _add(item)
-            # 2) extension sweep: any list-of-dicts output whose filename ends in a
-            #    known video extension — catches SaveVideo-under-"images" and the
-            #    unconfirmed native PreviewVideo key without hardcoding it.
+            # 3) extension sweep: any list-of-dicts output whose filename ends in a known
+            #    video extension — the version-agnostic backstop (also catches an mp4
+            #    under "images" if a build omits the animated flag).
             for value in node_output.values():
                 if not isinstance(value, list):
                     continue

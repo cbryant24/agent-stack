@@ -458,14 +458,23 @@ class VisualGenerationStore:
 
     # ── Generation cost history (seeds the per-run GPU estimate) ──────────────
 
-    async def recent_generation_costs(self, limit: int = 20) -> list[float]:
+    async def recent_generation_costs(
+        self, limit: int = 20, *, workflow_ref: str | None = None
+    ) -> list[float]:
         """Recent non-zero per-run `cost_usd` across generations, oldest→newest.
 
         Feeds `gpu_tracker.estimate_per_run_cost`'s learned branch; an empty list
-        (cold start) makes it fall back to the config default.
+        (cold start) makes it fall back to the per-modality config default. When
+        `workflow_ref` is given, only generations from that template are counted — so a
+        video template's estimate is learned from prior video runs, never contaminated
+        by cheap image runs (a 5s FLF2V clip and a Z-Image still can't share an estimate).
         """
-        filters = _memory_type_filter(MEMORY_TYPE_GENERATION)
-        gens = await self._scroll_generations(filters)
+        conditions = [FieldCondition(key="memory_type", match=MatchValue(value=MEMORY_TYPE_GENERATION))]
+        if workflow_ref is not None:
+            conditions.append(
+                FieldCondition(key="workflow_ref", match=MatchValue(value=workflow_ref))
+            )
+        gens = await self._scroll_generations(Filter(must=conditions))
         gens.sort(key=lambda g: g.created_at)
         costs = [g.cost_usd for g in gens if g.cost_usd and g.cost_usd > 0]
         return costs[-limit:]
