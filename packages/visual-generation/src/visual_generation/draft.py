@@ -91,11 +91,19 @@ async def _resolve_template(
 
 
 def _template_modality(template: WorkflowTemplate | None) -> str | None:
-    """The graph's modality, read from its slots: inpaint (init_image + mask),
-    img2img (init_image), else text2img. None when no template resolved."""
+    """The graph's modality, read from its slots (highest-precedence first):
+    edit (edit_image_1 — Qwen keyframe edit), flf2v (first_frame + last_frame — Wan
+    first-last-frame video), i2v (first_frame only — Wan image-to-video), inpaint
+    (init_image + mask), img2img (init_image), else text2img. None when no template."""
     if template is None:
         return None
     slots = template.slot_map
+    if "edit_image_1" in slots:
+        return "edit"
+    if "first_frame" in slots and "last_frame" in slots:
+        return "flf2v"
+    if "first_frame" in slots:
+        return "i2v"
     if "init_image" in slots and "mask" in slots:
         return "inpaint"
     if "init_image" in slots:

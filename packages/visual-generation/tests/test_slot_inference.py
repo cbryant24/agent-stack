@@ -1,6 +1,21 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
+
+from visual_generation.draft import _template_modality
+from visual_generation.models import WorkflowTemplate
 from visual_generation.slot_inference import infer_slots
+
+_WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _template_from(graph: dict) -> WorkflowTemplate:
+    inferred = infer_slots(graph)
+    return WorkflowTemplate(name="t", descriptor="d", graph=graph, slot_map=inferred.slot_map)
 
 
 # ── Flux txt2img (the fixture) ───────────────────────────────────────────────
@@ -170,3 +185,164 @@ def test_txt2img_graph_has_no_image_slots(flux_graph: dict) -> None:
     sm = infer_slots(flux_graph).slot_map
     assert "init_image" not in sm
     assert "mask" not in sm
+
+
+# ── Wan 2.2 I2V (committed graph): dual-sampler seed + video conditioning ─────
+
+
+def _i2v_graph() -> dict:
+    return json.loads((_WORKFLOWS_DIR / "wan2.2-i2v-14B-lightx2v-api.json").read_text())
+
+
+def test_i2v_seed_is_the_noise_adding_sampler() -> None:
+    # Dual high/low-noise samplers: 129:86 adds noise (seed carrier), 129:85 doesn't.
+    inferred = infer_slots(_i2v_graph())
+    assert inferred.slot_map["seed"] == {"node_id": "129:86", "input_key": "noise_seed"}
+
+
+def test_i2v_positive_negative_trace_through_wan_node() -> None:
+    # The sampler's positive/negative point at WanImageToVideo outputs 0/1, not directly
+    # at a CLIPTextEncode — the trace must walk THROUGH the Wan node.
+    sm = infer_slots(_i2v_graph()).slot_map
+    assert sm["positive"] == {"node_id": "129:93", "input_key": "text"}
+    assert sm["negative"] == {"node_id": "129:89", "input_key": "text"}
+
+
+def test_i2v_frame_length_fps_slots() -> None:
+    sm = infer_slots(_i2v_graph()).slot_map
+    assert sm["first_frame"] == {"node_id": "97", "input_key": "image"}
+    assert "last_frame" not in sm  # single-image I2V
+    assert sm["length"] == {"node_id": "129:98", "input_key": "length"}
+    assert sm["fps"] == {"node_id": "129:94", "input_key": "fps"}
+    assert sm["width"] == {"node_id": "129:98", "input_key": "width"}
+    assert sm["height"] == {"node_id": "129:98", "input_key": "height"}
+
+
+def test_i2v_switch_fed_steps_cfg_unmapped_and_noted() -> None:
+    inferred = infer_slots(_i2v_graph())
+    # steps/cfg are links to ComfySwitchNode → NOT slot-mapped (no switch resolver).
+    assert "steps" not in inferred.slot_map
+    assert "cfg" not in inferred.slot_map
+    # Literal sampler_name/scheduler on the sampler ARE mapped.
+    assert inferred.slot_map["sampler"] == {"node_id": "129:86", "input_key": "sampler_name"}
+    assert any("ComfySwitchNode" in n or "not slot-mapped" in n for n in inferred.notes)
+
+
+def test_i2v_modality_is_i2v() -> None:
+    assert _template_modality(_template_from(_i2v_graph())) == "i2v"
+
+
+# ── Wan 2.2 FLF2V (inline synthetic — logic test until Phase-0 export lands) ──
+
+
+def _flf2v_graph() -> dict:
+    # Mirrors the I2V topology but with WanFirstLastFrameToVideo + a second frame.
+    # Input key names (end_image, etc.) are TODO(phase0)-verified against the export.
+    return {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "first.png"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "last.png"}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "walks in", "clip": ["4", 0]}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5.safetensors", "type": "wan"}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry", "clip": ["4", 0]}},
+        "6": {"class_type": "WanFirstLastFrameToVideo", "inputs": {
+            "width": 832, "height": 480, "length": 81,
+            "positive": ["3", 0], "negative": ["5", 0], "vae": ["7", 0],
+            "start_image": ["1", 0], "end_image": ["2", 0]}},
+        "7": {"class_type": "VAELoader", "inputs": {"vae_name": "wan_2.1_vae.safetensors"}},
+        "8": {"class_type": "KSamplerAdvanced", "inputs": {
+            "add_noise": "enable", "noise_seed": 42, "steps": 4, "cfg": 1.0,
+            "sampler_name": "euler", "scheduler": "simple",
+            "model": ["9", 0], "positive": ["6", 0], "negative": ["6", 1],
+            "latent_image": ["6", 2]}},
+        "9": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan_high.safetensors"}},
+        "10": {"class_type": "CreateVideo", "inputs": {"fps": 16, "images": ["11", 0]}},
+        "11": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["7", 0]}},
+        "12": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0]}},
+    }
+
+
+def test_flf2v_infers_both_frames() -> None:
+    sm = infer_slots(_flf2v_graph()).slot_map
+    assert sm["first_frame"] == {"node_id": "1", "input_key": "image"}
+    assert sm["last_frame"] == {"node_id": "2", "input_key": "image"}
+    assert sm["length"] == {"node_id": "6", "input_key": "length"}
+    assert sm["fps"] == {"node_id": "10", "input_key": "fps"}
+
+
+def test_flf2v_positive_negative_trace_through_wan_node() -> None:
+    sm = infer_slots(_flf2v_graph()).slot_map
+    assert sm["positive"] == {"node_id": "3", "input_key": "text"}
+    assert sm["negative"] == {"node_id": "5", "input_key": "text"}
+
+
+def test_flf2v_modality() -> None:
+    assert _template_modality(_template_from(_flf2v_graph())) == "flf2v"
+
+
+# ── Qwen-Image-Edit 2511 (inline synthetic — logic test) ─────────────────────
+
+
+def _qwen_edit_graph() -> dict:
+    # TextEncodeQwenImageEditPlus prompt key + ordered image inputs are
+    # TODO(phase0)-verified against the export.
+    return {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "base.png"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "ref.png"}},
+        "3": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
+            "prompt": "same shot, Celeste reaches for the door", "clip": ["4", 0],
+            "vae": ["5", 0], "image1": ["1", 0], "image2": ["2", 0]}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b.safetensors"}},
+        "5": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+        "6": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
+            "prompt": "", "clip": ["4", 0], "vae": ["5", 0], "image1": ["1", 0]}},
+        "7": {"class_type": "EmptySD3LatentImage",
+              "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "8": {"class_type": "KSampler", "inputs": {
+            "seed": 7, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
+            "denoise": 1.0, "model": ["9", 0], "positive": ["3", 0], "negative": ["6", 0],
+            "latent_image": ["7", 0]}},
+        "9": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_2511.safetensors"}},
+    }
+
+
+def test_qwen_edit_positive_uses_prompt_key() -> None:
+    # The Qwen edit-encode's text lives under "prompt", not "text".
+    sm = infer_slots(_qwen_edit_graph()).slot_map
+    assert sm["positive"] == {"node_id": "3", "input_key": "prompt"}
+
+
+def test_qwen_edit_infers_ordered_edit_images() -> None:
+    sm = infer_slots(_qwen_edit_graph()).slot_map
+    assert sm["edit_image_1"] == {"node_id": "1", "input_key": "image"}
+    assert sm["edit_image_2"] == {"node_id": "2", "input_key": "image"}
+
+
+def test_qwen_edit_modality() -> None:
+    assert _template_modality(_template_from(_qwen_edit_graph())) == "edit"
+
+
+# ── Phase-0 real exports (fixture-gated; skip until the API JSONs are committed) ──
+
+_FLF2V_FIXTURE = _FIXTURES_DIR / "wan2.2-flf2v-14B-lightx2v-api.json"
+_QWEN_FIXTURE = _FIXTURES_DIR / "qwen-image-edit-2511-api.json"
+
+
+@pytest.mark.skipif(
+    not _FLF2V_FIXTURE.exists(), reason="Phase-0 FLF2V API JSON not yet exported/committed"
+)
+def test_real_flf2v_export_infers_frames() -> None:
+    sm = infer_slots(json.loads(_FLF2V_FIXTURE.read_text())).slot_map
+    assert "first_frame" in sm and "last_frame" in sm
+    assert "length" in sm and "fps" in sm
+    assert _template_modality(WorkflowTemplate(
+        name="flf2v", descriptor="d", graph={}, slot_map=sm)) == "flf2v"
+
+
+@pytest.mark.skipif(
+    not _QWEN_FIXTURE.exists(), reason="Phase-0 Qwen-edit API JSON not yet exported/committed"
+)
+def test_real_qwen_edit_export_infers_edit_images() -> None:
+    sm = infer_slots(json.loads(_QWEN_FIXTURE.read_text())).slot_map
+    assert "edit_image_1" in sm
+    assert _template_modality(WorkflowTemplate(
+        name="edit", descriptor="d", graph={}, slot_map=sm)) == "edit"
