@@ -225,6 +225,12 @@ IMG2IMG_TEMPLATE_NAME = "visual-workflow-img2img"
 # draft with a `--mask` defaults its template to this when no --template is given.
 INPAINT_TEMPLATE_NAME = "visual-workflow-inpaint"
 
+# Canonical video/edit template names (the graphs registered from the Phase-0 exports).
+# A `draft` with FLF2V frames / Qwen refs and no --template defaults to these, mirroring
+# the img2img/inpaint defaults above.
+FLF2V_TEMPLATE_NAME = "wan22-flf2v"
+QWEN_EDIT_TEMPLATE_NAME = "qwen-edit-2511"
+
 # ── Asset write paths + Q8 opsec (under agent_data_dir / AGENT_SUBDIR) ────────
 AGENT_SUBDIR = "visual-generation"
 ASSETS_SUBDIR = "assets"          # non-identity assets

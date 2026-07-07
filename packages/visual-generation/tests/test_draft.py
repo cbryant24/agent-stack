@@ -747,3 +747,69 @@ async def test_craft_spec_txt2img_keeps_invented_recipe() -> None:
 
     assert spec["settings"] == {"steps": 25, "cfg": 3.5, "sampler": "euler"}
     assert spec["model"] == "wrong-model.safetensors"
+
+
+# ── canon reference-sheet pinning for Qwen edit specs (Phase 3) ──────────────
+
+
+def _edit_template_with_slots(n: int) -> "WorkflowTemplate":
+    from visual_generation.models import WorkflowTemplate
+    slot_map = {
+        f"edit_image_{i}": {"node_id": str(i), "input_key": "image"} for i in range(1, n + 1)
+    }
+    return WorkflowTemplate(name="qwen-edit-2511", descriptor="edit", graph={}, slot_map=slot_map)
+
+
+def test_pin_canon_references_appends_present_subject_sheets() -> None:
+    from visual_generation.canon import ProjectCanon
+    from visual_generation.draft import _pin_canon_references
+    from visual_generation.models import VisualSource, VisualSpec
+
+    ProjectCanon("celeste").set_subject(
+        aliases=["the narrator", "narrator"], locked="loc",
+        reference_sheet=["idSheet", "outfit.png"],
+    )
+    spec = VisualSpec(
+        prompt="the narrator reaches for the door",
+        source=VisualSource(from_generation="base"),
+    )
+    notes = _pin_canon_references(spec, _edit_template_with_slots(3), "celeste")
+    keys = [r.from_generation or r.image_path for r in spec.source.references]
+    assert keys == ["idSheet", "outfit.png"]
+    assert any("pinned" in n for n in notes)
+
+
+def test_pin_canon_references_caps_at_edit_slots_and_warns() -> None:
+    from visual_generation.canon import ProjectCanon
+    from visual_generation.draft import _pin_canon_references
+    from visual_generation.models import VisualSource, VisualSpec
+
+    ProjectCanon("celeste").set_subject(
+        aliases=["the narrator", "narrator"], locked="loc",
+        reference_sheet=["idSheet", "outfit.png"],
+    )
+    spec = VisualSpec(
+        prompt="the narrator reaches for the door",
+        source=VisualSource(from_generation="base"),
+    )
+    # Only 2 edit slots: base takes edit_image_1, so just ONE reference fits.
+    notes = _pin_canon_references(spec, _edit_template_with_slots(2), "celeste")
+    assert len(spec.source.references) == 1
+    assert any("exceed" in n for n in notes)
+
+
+def test_pin_canon_references_noop_off_edit_modality() -> None:
+    from visual_generation.canon import ProjectCanon
+    from visual_generation.draft import _pin_canon_references
+    from visual_generation.models import VisualSource, VisualSpec, WorkflowTemplate
+
+    ProjectCanon("celeste").set_subject(
+        aliases=["the narrator"], locked="loc", reference_sheet=["idSheet"],
+    )
+    spec = VisualSpec(prompt="the narrator", source=VisualSource(from_generation="base"))
+    img2img = WorkflowTemplate(
+        name="img2img", descriptor="i", graph={},
+        slot_map={"init_image": {"node_id": "1", "input_key": "image"}},
+    )
+    assert _pin_canon_references(spec, img2img, "celeste") == []
+    assert spec.source.references == []

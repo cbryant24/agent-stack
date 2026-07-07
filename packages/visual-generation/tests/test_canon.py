@@ -7,7 +7,9 @@ from pathlib import Path
 from visual_generation.canon import (
     ProjectCanon,
     canon_loras_for,
+    canon_references_for,
     enforce_canon,
+    ref_image_from_str,
     scene_cast,
     subjects_matching,
 )
@@ -45,6 +47,44 @@ def test_store_round_trip(tmp_path: Path) -> None:
     assert store.remove("the narrator") is True
     assert store.load() == []
     assert store.remove("the narrator") is False
+
+
+# ── reference sheets (Qwen edit identity) ───────────────────────────────────────
+
+
+def test_reference_sheet_round_trip_and_edit(tmp_path: Path) -> None:
+    store = ProjectCanon("celeste", base_dir=tmp_path)
+    store.set_subject(
+        aliases=["the narrator", "narrator"],
+        locked=_NARRATOR,
+        reference_sheet=["genID-identity", "sheets/outfit.png"],
+    )
+    assert store.load()[0].reference_sheet == ["genID-identity", "sheets/outfit.png"]
+
+    # Surgical edit adds/removes references without restating the rest.
+    store.update_subject("narrator", add_references=["genID-extra"], remove_references=["genID-identity"])
+    refs = store.load()[0].reference_sheet
+    assert refs == ["sheets/outfit.png", "genID-extra"]
+    assert store.load()[0].locked == _NARRATOR  # untouched
+
+
+def test_ref_image_from_str_disambiguates_path_vs_gen_id() -> None:
+    assert ref_image_from_str("sheets/outfit.png").image_path == "sheets/outfit.png"
+    assert ref_image_from_str("outfit.jpg").image_path == "outfit.jpg"
+    assert ref_image_from_str("abc-123-gen").from_generation == "abc-123-gen"
+
+
+def test_canon_references_for_present_subject(tmp_path: Path) -> None:
+    store = ProjectCanon("celeste", base_dir=tmp_path)
+    store.set_subject(
+        aliases=["the narrator", "narrator"], locked=_NARRATOR,
+        reference_sheet=["genID-identity", "sheets/outfit.png"],
+    )
+    # Present subject → its sheets come back as ordered RefImages.
+    refs = canon_references_for(f"{_NARRATOR} reaches for the door", "celeste", base_dir=tmp_path)
+    assert [r.from_generation or r.image_path for r in refs] == ["genID-identity", "sheets/outfit.png"]
+    # Absent subject → nothing.
+    assert canon_references_for("an empty rooftop", "celeste", base_dir=tmp_path) == []
 
 
 # ── enforce_canon ────────────────────────────────────────────────────────────────

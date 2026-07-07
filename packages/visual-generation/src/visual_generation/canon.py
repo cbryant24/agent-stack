@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from agent_runtime import get_config
 
-from visual_generation.models import LoraRef
+from visual_generation.models import LoraRef, RefImage
 
 
 class CanonSubject(BaseModel):
@@ -44,6 +44,11 @@ class CanonSubject(BaseModel):
     locked: str
     forbid: list[str] = Field(default_factory=list)
     lora: LoraRef | None = None
+    # Ordered reference sheets (paths or gen_ids: identity sheet first, outfit second)
+    # that carry this subject's identity into a Qwen keyframe EDIT — the reference-set
+    # analog of `lora`. When the subject is present in an edit-modality spec, these are
+    # appended to `source.references` so identity travels as reference images.
+    reference_sheet: list[str] = Field(default_factory=list)
 
 
 def _default_canon_dir() -> Path:
@@ -86,13 +91,20 @@ class ProjectCanon:
         locked: str,
         forbid: list[str] | None = None,
         lora: LoraRef | None = None,
+        reference_sheet: list[str] | None = None,
     ) -> CanonSubject:
         """Upsert a subject (keyed by its primary alias, case-insensitively)."""
         if not aliases:
             raise ValueError("a canon subject needs at least one alias")
         key = aliases[0].lower()
         subjects = [s for s in self.load() if not (s.aliases and s.aliases[0].lower() == key)]
-        subject = CanonSubject(aliases=aliases, locked=locked, forbid=forbid or [], lora=lora)
+        subject = CanonSubject(
+            aliases=aliases,
+            locked=locked,
+            forbid=forbid or [],
+            lora=lora,
+            reference_sheet=reference_sheet or [],
+        )
         subjects.append(subject)
         self._write(subjects)
         return subject
@@ -118,6 +130,8 @@ class ProjectCanon:
         locked: str | None = None,
         lora: LoraRef | None = None,
         clear_lora: bool = False,
+        add_references: list[str] | None = None,
+        remove_references: list[str] | None = None,
     ) -> CanonSubject:
         """Edit ONE field-set of an existing subject in place — without restating the rest.
 
@@ -158,12 +172,21 @@ class ProjectCanon:
             dropf = set(remove_forbid)
             forbid = [f for f in forbid if f not in dropf]
 
+        references = list(s.reference_sheet)
+        for r in add_references or []:
+            if r not in references:
+                references.append(r)
+        if remove_references:
+            dropr = set(remove_references)
+            references = [r for r in references if r not in dropr]
+
         new_lora = None if clear_lora else (lora if lora is not None else s.lora)
         updated = CanonSubject(
             aliases=aliases,
             locked=locked if locked is not None else s.locked,
             forbid=forbid,
             lora=new_lora,
+            reference_sheet=references,
         )
         # Guard against the new primary alias colliding with a different subject's key.
         new_key = aliases[0].lower()
@@ -356,3 +379,32 @@ def canon_loras_for(
         if subj.lora is not None and _subject_present(prompt, subj):
             loras.append(subj.lora)
     return loras
+
+
+def ref_image_from_str(value: str) -> RefImage:
+    """Interpret a reference entry as a path (has a separator or an image suffix) or else
+    a generation id (a bare token) — so a canon sheet or a `--ref` CLI value can ride
+    `source.references`. Shared by canon pinning and the draft CLI."""
+    looks_pathy = (
+        "/" in value
+        or "\\" in value
+        or value.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+    )
+    return RefImage(image_path=value) if looks_pathy else RefImage(from_generation=value)
+
+
+def canon_references_for(
+    prompt: str, project: str | None, *, base_dir: Path | None = None
+) -> list[RefImage]:
+    """The canon reference sheets for every subject present in `prompt`, as ordered
+    RefImages — the reference-set analog of `canon_loras_for`. Append these to a Qwen
+    edit spec's `source.references` so a subject's identity/outfit travel as reference
+    images at edit time (identity sheet first, outfit second). Empty for no project /
+    no canon / subjects without reference sheets."""
+    if not project:
+        return []
+    refs: list[RefImage] = []
+    for subj in ProjectCanon(project, base_dir=base_dir).load():
+        if subj.reference_sheet and _subject_present(prompt, subj):
+            refs.extend(ref_image_from_str(s) for s in subj.reference_sheet)
+    return refs

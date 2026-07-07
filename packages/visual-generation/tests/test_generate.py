@@ -18,6 +18,7 @@ from visual_generation.gpu_tracker import GpuLedger
 from visual_generation.models import (
     LoraRef,
     ModelAsset,
+    RefImage,
     VisualGeneration,
     VisualSource,
     VisualSpec,
@@ -298,12 +299,12 @@ def test_from_generation_resolves_uploads_and_sets_parent_lineage(tmp_path: Path
         ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
     )
 
-    # The parent's frame was uploaded with a collision-proof (spec-id-prefixed) name.
+    # The parent's frame uploaded once with a collision-proof (source-identity) name.
     assert len(fake.uploads) == 1
-    assert fake.uploads[0][0] == f"{spec.spec_id}_parentframe.png"
+    assert fake.uploads[0][0].endswith("_parentframe.png")
     assert fake.uploads[0][1] == b"\x89PNGparent"
     # The returned pod-side filename landed in the LoadImage init_image slot.
-    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{spec.spec_id}_parentframe.png"
+    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{fake.uploads[0][0]}"
     # Lineage: parent_id set, chain_root_id INHERITED from the parent.
     gen = store.upsert_generation.call_args[0][0]
     assert gen.parent_id == "gen-parent"
@@ -348,10 +349,12 @@ def test_inpaint_uploads_init_and_mask(tmp_path: Path, flux_template) -> None:
     )
 
     names = [n for n, _ in fake.uploads]
-    assert names == [f"{spec.spec_id}_init.png", f"{spec.spec_id}_mask_mask.png"]
+    assert len(names) == 2
+    assert names[0].endswith("_init.png")
+    assert names[1].endswith("_mask.png")
     # Both slots written into the graph.
-    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{spec.spec_id}_init.png"
-    assert fake.submitted[0]["12"]["inputs"]["image"] == f"input/{spec.spec_id}_mask_mask.png"
+    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{names[0]}"
+    assert fake.submitted[0]["12"]["inputs"]["image"] == f"input/{names[1]}"
     gen = store.upsert_generation.call_args[0][0]
     assert gen.source_mask_path == str(mask)
 
@@ -372,7 +375,7 @@ def test_source_against_txt2img_template_skips_with_reason(tmp_path: Path, flux_
 
     store.upsert_generation.assert_not_called()
     assert spec.spec_id in result.skipped
-    assert any("no init_image slot" in r for r in result.skip_reasons)
+    assert any("no image slot" in r for r in result.skip_reasons)
 
 
 def test_missing_parent_generation_skips_with_reason_no_upload(tmp_path: Path, flux_template) -> None:
@@ -419,6 +422,163 @@ def test_sourceless_spend_uploads_nothing(tmp_path: Path, flux_template) -> None
         client=fake, ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
     )
     assert fake.uploads == []  # text-to-image path never uploads
+
+
+# ── FLF2V + Qwen edit: multi-image provisioning (Phase 3) ────────────────────
+
+
+class _FakeComfyUploadVideo(_FakeComfyUpload):
+    """Upload-recording fake whose history reports an mp4 output (FLF2V clips)."""
+
+    async def history(self, prompt_id: str) -> dict:
+        return {"outputs": {"108": {"videos": [
+            {"filename": "clip.mp4", "subfolder": "video", "type": "output"}
+        ]}}}
+
+    videos_from_history = staticmethod(ComfyUIClient.videos_from_history)
+
+
+def _flf2v_template() -> WorkflowTemplate:
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 0]}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5.safetensors", "type": "wan"}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "bad", "clip": ["4", 0]}},
+        "6": {"class_type": "WanFirstLastFrameToVideo", "inputs": {
+            "width": 832, "height": 480, "length": 81, "positive": ["3", 0],
+            "negative": ["5", 0], "vae": ["7", 0], "start_image": ["1", 0], "end_image": ["2", 0]}},
+        "7": {"class_type": "VAELoader", "inputs": {"vae_name": "wan_2.1_vae.safetensors"}},
+        "8": {"class_type": "KSamplerAdvanced", "inputs": {
+            "add_noise": "enable", "noise_seed": 42, "steps": 4, "cfg": 1.0,
+            "sampler_name": "euler", "scheduler": "simple", "model": ["9", 0],
+            "positive": ["6", 0], "negative": ["6", 1], "latent_image": ["6", 2]}},
+        "9": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan_high.safetensors"}},
+        "10": {"class_type": "CreateVideo", "inputs": {"fps": 16, "images": ["11", 0]}},
+        "11": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["7", 0]}},
+        "108": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0]}},
+    }
+    inferred = infer_slots(graph)
+    return WorkflowTemplate(name="wan22-flf2v", descriptor="flf2v", graph=graph,
+                            slot_map=inferred.slot_map, required_models=inferred.required_models)
+
+
+def _edit_template() -> WorkflowTemplate:
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "3": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
+            "prompt": "", "clip": ["4", 0], "vae": ["5", 0], "image1": ["1", 0], "image2": ["2", 0]}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_vl.safetensors"}},
+        "5": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_vae.safetensors"}},
+        "6": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
+            "prompt": "", "clip": ["4", 0], "vae": ["5", 0], "image1": ["1", 0]}},
+        "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "8": {"class_type": "KSampler", "inputs": {
+            "seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
+            "denoise": 1.0, "model": ["9", 0], "positive": ["3", 0], "negative": ["6", 0],
+            "latent_image": ["7", 0]}},
+        "9": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_edit.safetensors"}},
+        "8b": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["5", 0]}},
+        "9b": {"class_type": "SaveImage", "inputs": {"images": ["8b", 0]}},
+    }
+    inferred = infer_slots(graph)
+    return WorkflowTemplate(name="qwen-edit-2511", descriptor="edit", graph=graph,
+                            slot_map=inferred.slot_map, required_models=inferred.required_models)
+
+
+def test_flf2v_uploads_both_frames_and_records_boundary_lineage(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"; first.write_bytes(b"F")
+    last = tmp_path / "last.png"; last.write_bytes(b"L")
+    store = _store()
+    fake = _FakeComfyUploadVideo()
+    spec = _spec(
+        workflow_ref="wan22-flf2v",
+        source=VisualSource(image_path=str(first), last_image_path=str(last)),
+        settings={"length": 81, "fps": 16},
+    )
+
+    spend_generation_sync(
+        _source_plan(_flf2v_template(), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    names = [n for n, _ in fake.uploads]
+    assert len(names) == 2  # first + last
+    assert any(n.endswith("_first.png") for n in names)
+    assert any(n.endswith("_last.png") for n in names)
+    gen = store.upsert_generation.call_args[0][0]
+    # External-image frames carry no generation lineage; the clip asset is an .mp4.
+    # (Boundary gen-id lineage is covered by the from_generation test below.)
+    assert gen.parent_last_id is None
+    assert gen.asset_path.endswith(".mp4")
+
+
+def test_flf2v_from_generation_sets_both_parent_ids(tmp_path: Path) -> None:
+    a = tmp_path / "a.png"; a.write_bytes(b"A")
+    b = tmp_path / "b.png"; b.write_bytes(b"B")
+    gen_a = VisualGeneration(entry_id="genA", caption="a", asset_path=str(a), chain_root_id="root")
+    gen_b = VisualGeneration(entry_id="genB", caption="b", asset_path=str(b), chain_root_id="root")
+    store = _store()
+    store.get_generation = AsyncMock(side_effect=lambda gid: {"genA": gen_a, "genB": gen_b}.get(gid))
+    fake = _FakeComfyUploadVideo()
+    spec = _spec(
+        workflow_ref="wan22-flf2v",
+        source=VisualSource(from_generation="genA", last_from_generation="genB"),
+        settings={"length": 81, "fps": 16},
+    )
+
+    spend_generation_sync(
+        _source_plan(_flf2v_template(), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    gen = store.upsert_generation.call_args[0][0]
+    assert gen.parent_id == "genA"
+    assert gen.parent_last_id == "genB"
+    assert gen.chain_root_id == "root"
+
+
+def test_flf2v_missing_last_frame_skips(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"; first.write_bytes(b"F")
+    store = _store()
+    fake = _FakeComfyUploadVideo()
+    spec = _spec(workflow_ref="wan22-flf2v", source=VisualSource(image_path=str(first)))
+
+    result = spend_generation_sync(
+        _source_plan(_flf2v_template(), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    store.upsert_generation.assert_not_called()
+    assert any("needs a last frame" in r for r in result.skip_reasons)
+
+
+def test_edit_uploads_base_and_references_into_edit_slots(tmp_path: Path) -> None:
+    base = tmp_path / "base.png"; base.write_bytes(b"BASE")
+    ref = tmp_path / "sheet.png"; ref.write_bytes(b"SHEET")
+    store = _store()
+    fake = _FakeComfyUpload()  # edit outputs a still image
+    template = _edit_template()
+    spec = _spec(
+        workflow_ref="qwen-edit-2511",
+        source=VisualSource(image_path=str(base), references=[RefImage(image_path=str(ref))]),
+    )
+
+    spend_generation_sync(
+        _source_plan(template, spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    names = [n for n, _ in fake.uploads]
+    assert len(names) == 2  # base (edit_image_1) + one reference (edit_image_2)
+    # Base landed in edit_image_1's LoadImage (node 1), ref in edit_image_2's (node 2).
+    assert fake.submitted[0]["1"]["inputs"]["image"] == f"input/{names[0]}"
+    assert fake.submitted[0]["2"]["inputs"]["image"] == f"input/{names[1]}"
 
 
 # ── plan-phase: runtime denoise default + coherence warning ──────────────────
