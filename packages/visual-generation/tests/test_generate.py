@@ -15,7 +15,9 @@ from visual_generation.generate import (
 )
 from visual_generation.graph_build import build_prompt_graph
 from visual_generation.gpu_tracker import GpuLedger
+from visual_generation.batch_file import write_batch
 from visual_generation.models import (
+    GenerationBatch,
     LoraRef,
     ModelAsset,
     RefImage,
@@ -23,6 +25,11 @@ from visual_generation.models import (
     VisualSource,
     VisualSpec,
     WorkflowTemplate,
+)
+from visual_generation.sequence import (
+    build_scene_manifest,
+    scaffold_sequence,
+    sequence_to_specs,
 )
 from visual_generation.slot_inference import infer_slots
 
@@ -673,6 +680,67 @@ def test_poll_timeout_for_image_template_uses_session_default() -> None:
     sp = _plan(_img2img_template(with_mask=False), _spec(workflow_ref="z-img2img",
               source=VisualSource(image_path="a"))).plans[0]
     assert _poll_timeout_for(sp, 600.0) == 600.0
+
+
+# ── Phase 5: full sequence render (mocked ComfyUI) — the integration test ────
+
+
+def _render_store(template, gens_by_id: dict) -> MagicMock:
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_template_by_name = AsyncMock(return_value=template)
+    store.recent_generation_costs = AsyncMock(return_value=[])
+    store.get_generation = AsyncMock(side_effect=lambda gid: gens_by_id.get(gid))
+    store.upsert_generation = AsyncMock()
+    store.get_model = lambda name: None
+    return store
+
+
+def test_sequence_render_shares_boundary_upload_lineage_and_manifest(tmp_path: Path) -> None:
+    # 3 approved keyframes on disk → 2 boundary-shared FLF2V clips (A→B, B→C).
+    gens: dict[str, VisualGeneration] = {}
+    for k in ("A", "B", "C"):
+        f = tmp_path / f"{k.lower()}.png"
+        f.write_bytes(k.encode())
+        gens[f"gen{k}"] = VisualGeneration(
+            entry_id=f"gen{k}", caption=k, asset_path=str(f),
+            reaction="loved", chain_root_id="root",
+        )
+
+    seq = scaffold_sequence(
+        ["genA", "genB", "genC"], project="short-film", scene="bar", fps=16, clip_frames=81
+    )
+    batch = GenerationBatch(project="short-film", specs=sequence_to_specs(seq))
+    bpath = tmp_path / "bar.batch.md"
+    write_batch(batch, bpath)
+
+    store = _render_store(_flf2v_template(), gens)
+    plan = plan_generation_sync(bpath, all_sections=True, store=store, memory_store=MagicMock())
+    assert len(plan.plans) == 2  # both clips passed the approval gate
+
+    fake = _FakeComfyUploadVideo()
+    result = spend_generation_sync(
+        plan, endpoint="x", gpu_rate=2.09, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "l.json"), clock=_clock(),
+    )
+
+    # The shared boundary frame (genB) uploaded ONCE: 3 uploads for A,B,C, not 4.
+    assert len(fake.uploads) == 3
+
+    # Lineage: each clip records BOTH boundaries; both share the scene chain root.
+    upserted = [c.args[0] for c in store.upsert_generation.call_args_list]
+    g1 = next(g for g in upserted if g.parent_id == "genA")
+    g2 = next(g for g in upserted if g.parent_id == "genB")
+    assert g1.parent_last_id == "genB"          # clip 1: A → B
+    assert g2.parent_last_id == "genC"          # clip 2: B → C  (shares B with clip 1)
+    assert g1.chain_root_id == g2.chain_root_id == "root"
+
+    # Manifest: ordered clips, the shared boundary surfaced, mp4 assets, right duration.
+    manifest = build_scene_manifest(seq, {r.spec_id: r for r in result.results})
+    assert [c["order"] for c in manifest["clips"]] == [1, 2]
+    assert manifest["boundaries"] == ["genB"]
+    assert all(c["asset_path"].endswith(".mp4") for c in manifest["clips"])
+    assert manifest["clips"][0]["duration_sec"] == pytest.approx(81 / 16)
 
 
 # ── plan-phase: runtime denoise default + coherence warning ──────────────────
