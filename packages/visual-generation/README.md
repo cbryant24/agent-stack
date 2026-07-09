@@ -45,9 +45,15 @@ The data + retrieval foundation:
 End-to-end, producing one image involves five distinct steps, each touching a
 different system. It's easy to lose track of which step you're on:
 
-1. **Spin up a RunPod pod** running the ComfyUI template (manual, in the
-   RunPod web UI). This is the only step that starts GPU billing — billing
-   starts here, not when the agent connects.
+1. **Spin up a RunPod pod** deploying the **`agent-stack` ComfyUI template** —
+   either `TEMPLATE_ID=<agent-stack-template-id> IMAGE_NETWORK_VOLUME_ID=<vol> ./scripts/pod up`
+   or manually in the RunPod web UI (Templates → `agent-stack` → Deploy). **Deploy the
+   template, not a bare image:** the template carries the start command that launches ComfyUI
+   on :8188 from the volume's `/workspace/runpod-slim/ComfyUI`; a bare `--image` pod schedules
+   with a GPU but nothing binds :8188 (404 on every path). `scripts/pod up` falls back to the
+   bare `IMAGE` when `TEMPLATE_ID` is unset, so **set `TEMPLATE_ID`** (grab the id from the
+   RunPod console → Templates → `agent-stack`; it's account-specific and not committed). This
+   is the only step that starts GPU billing — billing starts here, not when the agent connects.
 2. **`model sync --endpoint <url>`** — the CLI queries the pod's ComfyUI
    `/object_info` endpoint and writes/updates `~/agent-data/visual-generation/models.json`,
    the local registry of checkpoints/LoRAs/VAEs available on that pod.
@@ -787,6 +793,20 @@ reclaimed pod is gone (not stopped), the network volume and everything on it are
 to re-download; the new pod re-attaches the volume and you get a fresh proxy URL. **Tell a
 balance-reclaim from a slow boot:** slow boot = pod still present in `pod status`; balance-reclaim =
 pod absent + the create-time balance error.
+
+**The pod shows `RUNNING` with a GPU, but `/object_info` returns 404 (or empty) on every path and
+never becomes ready — `runtime`/`portMappings` stay null, SSH (22) never exposes a host port.** This
+is **not** a slow boot or a balance reclaim — it's a **bare-image pod that never started ComfyUI**.
+`scripts/pod` creates from `--image` when `TEMPLATE_ID` is unset, and the bare
+`runpod/comfyui:1.3.0-cuda12.8` image does not reliably auto-start ComfyUI on :8188 (the launch
+command lives in the **`agent-stack` template**, which serves ComfyUI from the volume's
+`/workspace/runpod-slim/ComfyUI`). Two fresh hosts behaving identically confirms it's the create
+recipe, not a bad host. **Fix:** deploy the template — set
+`TEMPLATE_ID=<agent-stack-template-id> ./scripts/pod up` (id from RunPod console → Templates →
+`agent-stack`), or deploy it manually in the web UI. With the template, ComfyUI binds in ~1–3 min
+(a brief `403`, then a JSON `200` on `/object_info`). Distinguishing tell vs. the two symptoms
+above: bare-image = `404`/empty (nothing listening); slow-boot/reclaim = `403` (proxy up, app not
+bound yet).
 
 **The requested changes aren't landing — pose/staging/background directions get ignored, and
 background extras look like the main character.** This is the classic **over-strength LoRA**

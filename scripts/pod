@@ -34,7 +34,15 @@
 # Env knobs (constants — all overridable):
 #   POD_NAME           Pod name to target.                       Default: visual-generation
 #   POD_ID             Target a specific pod id instead of name. Default: unset.
-#   IMAGE              Container image.        Default: runpod/comfyui:1.3.0-cuda12.8
+#   TEMPLATE_ID        RunPod template to deploy from (preferred — the `agent-stack`
+#                      template carries the start command that launches ComfyUI on :8188
+#                      from the volume's /workspace/runpod-slim/ComfyUI). Empty (the default)
+#                      falls back to IMAGE, but a BARE image does NOT reliably auto-start
+#                      ComfyUI (pod schedules with a GPU yet nothing binds :8188 — 404 on
+#                      every path). Set this to the agent-stack template id for a pod that
+#                      actually serves. Default: unset.
+#   IMAGE              Container image (fallback when TEMPLATE_ID is empty).
+#                                              Default: runpod/comfyui:1.3.0-cuda12.8
 #   GPU_ID             GPU type.   Default: NVIDIA RTX PRO 6000 Blackwell Server Edition
 #   CLOUD_TYPE         Cloud type.                               Default: SECURE
 #   DATACENTER         Data center id.                           Default: US-NE-1
@@ -53,6 +61,7 @@
 set -euo pipefail
 
 POD_NAME="${POD_NAME:-visual-generation}"
+TEMPLATE_ID="${TEMPLATE_ID-}"
 IMAGE="${IMAGE:-runpod/comfyui:1.3.0-cuda12.8}"
 GPU_ID="${GPU_ID:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
 CLOUD_TYPE="${CLOUD_TYPE:-SECURE}"
@@ -154,12 +163,17 @@ is_capacity_error() {
 create_pod() {
   local attempt=1 out rc id json status gpu
   while (( attempt <= CREATE_RETRIES )); do
-    log "creating pod '$POD_NAME' (attempt $attempt/$CREATE_RETRIES)..."
+    local source_args=(--image "$IMAGE") source_desc="image $IMAGE"
+    if [[ -n "$TEMPLATE_ID" ]]; then
+      source_args=(--template-id "$TEMPLATE_ID")
+      source_desc="template $TEMPLATE_ID"
+    fi
+    log "creating pod '$POD_NAME' from $source_desc (attempt $attempt/$CREATE_RETRIES)..."
 
     rc=0
     out="$(runpodctl pod create \
       --name "$POD_NAME" \
-      --image "$IMAGE" \
+      "${source_args[@]}" \
       --gpu-id "$GPU_ID" \
       --cloud-type "$CLOUD_TYPE" \
       --data-center-ids "$DATACENTER" \
