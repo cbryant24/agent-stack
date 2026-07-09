@@ -13,6 +13,7 @@ Consult these when generating or refining image/video prompts, choosing techniqu
 
 ### Agent stack (visual-generation)
 
+- [`packages/visual-generation/docs/video-generation-primer.md`](../packages/visual-generation/docs/video-generation-primer.md) — **start here for the video pipeline**: plain-language concepts, glossary, the models + technologies (and why each was chosen over alternatives), the FLF2V flow, and the design decisions. Living doc — keep it updated as the agent grows.
 - [`packages/visual-generation/README.md`](../packages/visual-generation/README.md) — pipeline overview ("How a generation actually happens": pod → `model sync` → `workflow register` → `draft` → `generate` → `report`), memory model, and CLI commands.
 - [`packages/visual-generation/docs/z-image-turbo-craft.md`](../packages/visual-generation/docs/z-image-turbo-craft.md) — living Z-Image craft guide: recommended settings presets (cfg/steps/sampler recipe) and prompt craft.
 - [`packages/visual-generation/docs/production-testing-playbook.md`](../packages/visual-generation/docs/production-testing-playbook.md) — end-to-end harness exercising every generation path in production.
