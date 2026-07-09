@@ -12,7 +12,14 @@ are the real ones on this machine.
 - **System:** 251 GB RAM, 16 vCPU.
 - **On-demand price:** ≈ $2.09/hr for the GPU, billed per-second while the pod is running.
 - **Datacenter / region:** US-NE-1.
-- **Template:** `agent-stack` — container image `runpod/comfyui:1.3.0-cuda12.8`.
+- **Template:** `agent-stack` (id **`cnne9dp3rt`**) — container image `runpod/comfyui:1.3.0-cuda12.8`.
+  **Deploy this template, NOT the bare image.** The template carries the start command that
+  launches ComfyUI on :8188 from `/workspace/runpod-slim/ComfyUI`; a bare-`--image` pod boots
+  with a GPU attached but **never binds :8188** (every path returns 404, `runtime`/`portMappings`
+  stay null, SSH exposes no host port). `scripts/pod` deploys the template when `TEMPLATE_ID` is
+  set (`TEMPLATE_ID=cnne9dp3rt ./scripts/pod up`) and falls back to the bare image otherwise.
+  The id is account-specific (not a secret — inert without the API key); prefer setting it in
+  `.env` as `TEMPLATE_ID`.
 - **Access:** SSH terminal enabled; ComfyUI served on HTTP port 8188.
 
 ---
@@ -116,7 +123,7 @@ document is primarily about the **inference** pod. Never cross the wires:
 | Script | `scripts/pod` (`up`/`down`/`status`/`watch`) | `scripts/lora-train` |
 | Job | Run ComfyUI → generate images/video | Train character LoRAs (Ostris ai-toolkit) |
 | GPU | RTX PRO 6000 Blackwell 96 GB, **US-NE-1** | RTX 5090, **EU-RO-1** |
-| Image | `runpod/comfyui:1.3.0-cuda12.8` | `ostris/aitoolkit:latest` (template `<template-id>`) |
+| Image | `runpod/comfyui:1.3.0-cuda12.8` via template `agent-stack`/`cnne9dp3rt` (set `TEMPLATE_ID`) | `ostris/aitoolkit:latest` (template `<template-id>`) |
 | Volume | `gen-usne1` at `/workspace` (id via `IMAGE_NETWORK_VOLUME_ID`) | `zimage-lora-factory` at `/mnt` (id via `LORAS_NETWORK_VOLUME_ID`) |
 | Port | ComfyUI 8188 | ai-toolkit UI 8675 |
 
