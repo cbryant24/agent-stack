@@ -15,23 +15,41 @@ graphs run manually in ComfyUI today. Driving them through the agent CLI is **Ph
 |---|---|---|---|
 | `wan2.2-t2v-14B-lightx2v-api.json` | WAN 2.2 14B **text-to-video** | 2026-06-19 | 0.17.2 |
 | `wan2.2-i2v-14B-lightx2v-api.json` | WAN 2.2 14B **image-to-video** | 2026-06-19 | 0.17.2 |
+| `wan2.2-flf2v-14B-lightx2v-api.json` | WAN 2.2 14B **first-last-frame** video | 2026-07-09 (derived) | — |
+
+### `wan2.2-flf2v-14B-lightx2v-api.json` — provenance + status
+
+**Constructed, not browser-exported.** Derived deterministically from the committed
+`wan2.2-i2v-14B-lightx2v-api.json` by the single change the native FLF2V template makes over
+I2V: swap `WanImageToVideo` → **`WanFirstLastFrameToVideo`** and add a second `LoadImage`
+feeding its **`end_image`** input (I2V's `start_image` is kept as the first frame). Everything
+else — the two i2v 14B high/low UNETs, the i2v lightx2v 4-step LoRAs, `umt5_xxl`, `wan_2.1_vae`,
+the dual `KSamplerAdvanced` passes, `CreateVideo` (fps 16), `SaveVideo` — is identical, which
+matches the guide's Phase-0 note that native FLF2V "runs on the same weights with a
+`WanFirstLastFrameToVideo` node." Node/input names are verified against ComfyUI master source
+(`comfy_extras/nodes_wan.py`); slot inference produces the exact expected map (see
+`tests/test_slot_inference.py::test_real_flf2v_export_infers_frames`, now active).
+
+**⚠ Live-validation PENDING.** Not yet run on a pod — the eval pods spun on 2026-07-09
+(`3wqkq1t8bq` volume) never served ComfyUI on :8188 (nothing listening; `runtime` stayed null
+on two fresh hosts), so an end-to-end render couldn't be confirmed. A ready validation harness
+lives at `packages/visual-generation/scripts/validate_flf2v.py` — uploads two frames, submits,
+confirms a video output; run `uv run python packages/visual-generation/scripts/validate_flf2v.py
+<endpoint>` once ComfyUI is actually serving. **Before production, re-diff the node/input names
+against a real browser export from the pinned pod's ComfyUI version.**
 
 ### Expected (Phase-0 export — not yet committed)
 
-The FLF2V agent pipeline is built but needs these two **API-format** graphs exported once
-on a pod and committed here, then `workflow register`ed:
-
 | File | Purpose | Key nodes (verified vs ComfyUI master source) |
 |---|---|---|
-| `wan2.2-flf2v-14B-lightx2v-api.json` | WAN 2.2 14B **first-last-frame** video | `WanFirstLastFrameToVideo` (`start_image` + `end_image` → first/last frame; outputs positive/negative/latent), `CreateVideo` (`fps`), `SaveVideo` |
-| `qwen-image-edit-2511-api.json` | Qwen-Image-Edit 2511 **keyframe edit** | `TextEncodeQwenImageEditPlus` (`prompt` text; ordered `image1`/`image2`/`image3` refs) |
+| `qwen-image-edit-2511-api.json` | Qwen-Image-Edit 2511 **keyframe edit** | `TextEncodeQwenImageEditPlus` (`prompt` text; ordered `image1`/`image2`/`image3` refs), and — in the native template — `FluxKontextImageScale`, `FluxKontextMultiReferenceLatentMethod`, `ModelSamplingAuraFlow` (shift 3.1), `CFGNorm`, a `VAEEncode` latent (not empty), and a turbo-toggle switch |
 
-Slot inference already understands both topologies (see `slot_inference.py` and the
-fixture-gated `tests/test_slot_inference.py::test_real_*`, which skip until these land).
-Export via ComfyUI **File → Export (API Format)** from the native Wan 2.2 FLF2V and
-Qwen-Image-Edit-2511 templates; commit with the "Captured"/ComfyUI-version provenance
-above. **Diff the exported node/input names against the table** before registering — the
-pinned pod's ComfyUI version may differ from what was verified against master.
+The Qwen native template is a **subgraph** with FluxKontext helper nodes (see the official
+template `Comfy-Org/workflow_templates/.../image_qwen_image_edit_2511.json`) — materially more
+complex than a one-node swap, so it needs a real **File → Export (API Format)** rather than a
+hand-build. Its fixture-gated test (`test_real_qwen_edit_export_infers_edit_images`) skips until
+committed. Note: its image ports route through `FluxKontextImageScale` before the encoder, so
+edit-image slot inference may need to trace through that passthrough — verify against the export.
 
 Captured from the ComfyUI default WAN 2.2 14B templates on the RunPod pod
 (RTX PRO 6000 Blackwell, 96 GB, US-NE-1), exported in **API format**.
