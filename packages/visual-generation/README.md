@@ -87,8 +87,10 @@ API-format graphs on a pod (Phase 0, see below) — before a live run.
 
 The short film is assembled from Wan 2.2 **first-last-frame (FLF2V)** clips: each ~5s clip
 is bounded by two approved keyframe stills, and consecutive clips in a scene share the
-boundary frame, so identity/colour can't drift the way chained single-still I2V does. See
-the design docs — **[`docs/video-generation-implementation-guide.md`](docs/video-generation-implementation-guide.md)**
+boundary frame, so identity/colour can't drift the way chained single-still I2V does.
+**New to this? Start with the plain-language [`docs/video-generation-primer.md`](docs/video-generation-primer.md)**
+— concepts, glossary, and the technologies + why we chose them. Then the design docs —
+**[`docs/video-generation-implementation-guide.md`](docs/video-generation-implementation-guide.md)**
 (the phased build), **[`docs/video-generation-research.md`](docs/video-generation-research.md)**
 (why FLF2V + Qwen edit), and **[`docs/video-generation-doc-references.md`](docs/video-generation-doc-references.md)**
 (authoritative ComfyUI/Wan/Qwen/RunPod source links).
