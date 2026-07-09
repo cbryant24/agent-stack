@@ -15,7 +15,7 @@ graphs run manually in ComfyUI today. Driving them through the agent CLI is **Ph
 |---|---|---|---|
 | `wan2.2-t2v-14B-lightx2v-api.json` | WAN 2.2 14B **text-to-video** | 2026-06-19 | 0.17.2 |
 | `wan2.2-i2v-14B-lightx2v-api.json` | WAN 2.2 14B **image-to-video** | 2026-06-19 | 0.17.2 |
-| `wan2.2-flf2v-14B-lightx2v-api.json` | WAN 2.2 14B **first-last-frame** video | 2026-07-09 (derived) | — |
+| `wan2.2-flf2v-14B-lightx2v-api.json` | WAN 2.2 14B **first-last-frame** video | 2026-07-09 (derived, validated) | 0.17.2 |
 
 ### `wan2.2-flf2v-14B-lightx2v-api.json` — provenance + status
 
@@ -30,13 +30,14 @@ matches the guide's Phase-0 note that native FLF2V "runs on the same weights wit
 (`comfy_extras/nodes_wan.py`); slot inference produces the exact expected map (see
 `tests/test_slot_inference.py::test_real_flf2v_export_infers_frames`, now active).
 
-**⚠ Live-validation PENDING.** Not yet run on a pod — the eval pods spun on 2026-07-09
-(`3wqkq1t8bq` volume) never served ComfyUI on :8188 (nothing listening; `runtime` stayed null
-on two fresh hosts), so an end-to-end render couldn't be confirmed. A ready validation harness
-lives at `packages/visual-generation/scripts/validate_flf2v.py` — uploads two frames, submits,
-confirms a video output; run `uv run python packages/visual-generation/scripts/validate_flf2v.py
-<endpoint>` once ComfyUI is actually serving. **Before production, re-diff the node/input names
-against a real browser export from the pinned pod's ComfyUI version.**
+**✅ Live-validated 2026-07-09** on a `video-eval` pod (agent-stack template `cnne9dp3rt`,
+volume `3wqkq1t8bq`, ComfyUI 0.17.2): submitted an 81→33-frame clip from two uploaded frames
+and got `status=success` with a real 335 KB `Wan2.2_flf2v_00001_.mp4` (fetched via `view()`).
+This also live-confirmed the client's video-history parsing — native `SaveVideo` reports the mp4
+under the **`images`** key (PreviewVideo shape), and `videos_from_history` extracts it correctly.
+The node inputs were verified against this pod's live `/object_info` (`WanFirstLastFrameToVideo`
+optional `start_image`/`end_image`), matching the graph exactly. Harness:
+`packages/visual-generation/scripts/validate_flf2v.py <endpoint>`.
 
 ### Expected (Phase-0 export — not yet committed)
 
