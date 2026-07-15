@@ -291,3 +291,49 @@ def test_parse_lora_rejects_empty_name_and_bad_strength() -> None:
         _parse_lora(":0.8")
     with pytest.raises(click.BadParameter):
         _parse_lora("char.safetensors:loud")
+
+
+# ── canon CLI (asset-reference subjects) ─────────────────────────────────────────
+
+
+def test_canon_set_edit_show_asset_fields_round_trip(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("visual_generation.canon._default_canon_dir", lambda: tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(cli, [
+        "canon", "set", "proj", "--alias", "the narrator",
+        "--id", "narrator_v1", "--wardrobe", "narrator_wardrobe_v1",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "narrator_v1" in result.output
+
+    result = runner.invoke(cli, ["canon", "show", "proj"])
+    assert result.exit_code == 0, result.output
+    assert "narrator_v1" in result.output
+    assert "narrator_wardrobe_v1" in result.output
+
+    # Empty string clears the field.
+    result = runner.invoke(cli, ["canon", "edit", "proj", "the narrator", "--wardrobe", ""])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(cli, ["canon", "show", "proj"])
+    assert "narrator_wardrobe_v1" not in result.output
+
+
+def test_canon_show_flags_legacy_locked_forbid(monkeypatch, tmp_path) -> None:
+    import json
+
+    monkeypatch.setattr("visual_generation.canon._default_canon_dir", lambda: tmp_path)
+    (tmp_path / "proj.json").write_text(json.dumps({
+        "subjects": [{
+            "aliases": ["the narrator"],
+            "locked": "a young Black man, deep caramel-brown felt skin",
+            "forbid": ["short hair"],
+            "lora": None,
+        }]
+    }), encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["canon", "show", "proj"])
+    assert result.exit_code == 0, result.output
+    assert "legacy locked/forbid present" in result.output
+    # The legacy prose is not rendered as an active field.
+    assert "caramel-brown" not in result.output

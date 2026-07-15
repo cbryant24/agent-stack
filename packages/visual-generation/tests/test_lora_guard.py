@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from visual_generation.lora_guard import (
-    DEFAULT_IDENTITY_SUM_WARN,
     DEFAULT_STRENGTH_WARN,
     prune_noncanon_identity,
     strength_warnings,
@@ -48,36 +47,36 @@ def test_custom_ceiling_can_tighten_for_a_model() -> None:
     assert strength_warnings(stack, ceiling=1.1)  # tightened for this model
 
 
-def test_combined_identity_sum_warns_even_when_each_is_under_ceiling() -> None:
-    stack = [
-        LoraRef(name="narrator.safetensors", strength=1.4),
-        LoraRef(name="celeste.safetensors", strength=1.4),
-    ]
-    warns = strength_warnings(stack, is_identity=_ident("narrator.safetensors", "celeste.safetensors"))
-    # Neither hits the per-entry ceiling (1.5) but 2.8 ≥ 2.5 sum ceiling.
-    assert any("combined identity-LoRA strength" in w for w in warns)
-
-
-def test_sum_ignores_non_identity_loras() -> None:
-    stack = [
-        LoraRef(name="narrator.safetensors", strength=1.4),
-        LoraRef(name="detail.safetensors", strength=1.4),  # not identity
-    ]
-    warns = strength_warnings(stack, is_identity=_ident("narrator.safetensors"))
-    assert not any("combined identity-LoRA strength" in w for w in warns)
-
-
-def test_two_clean_identities_at_1_0_do_not_warn() -> None:
+def test_two_identity_loras_always_draw_stacking_advisory() -> None:
+    # Even a "clean" 1.0 + 1.0 pair warns: dual-identity stacking is deprecated
+    # outright (audit §6) — no strength pair isolates identities in a single pass.
     stack = [
         LoraRef(name="narrator.safetensors", strength=1.0),
         LoraRef(name="celeste.safetensors", strength=1.0),
     ]
-    assert strength_warnings(stack, is_identity=_ident("narrator.safetensors", "celeste.safetensors")) == []
+    warns = strength_warnings(stack, is_identity=_ident("narrator.safetensors", "celeste.safetensors"))
+    assert len(warns) == 1
+    assert "deprecated" in warns[0]
+    assert "sequential masked" in warns[0]
 
 
-def test_default_sum_ceiling_constant_is_reasonable() -> None:
-    # Guardrail on the guardrail: 1.0 + 1.0 two-shot must stay under the sum ceiling.
-    assert DEFAULT_IDENTITY_SUM_WARN > 2.0
+def test_stacking_advisory_ignores_non_identity() -> None:
+    stack = [
+        LoraRef(name="narrator.safetensors", strength=1.0),
+        LoraRef(name="detail.safetensors", strength=1.0),  # not identity
+    ]
+    warns = strength_warnings(stack, is_identity=_ident("narrator.safetensors"))
+    assert warns == []
+
+
+def test_no_stacking_advisory_without_identity_predicate() -> None:
+    # With no is_identity predicate the stacking check is skipped entirely —
+    # otherwise every 2-LoRA stack (character + detail) would misfire.
+    stack = [
+        LoraRef(name="a.safetensors", strength=1.0),
+        LoraRef(name="b.safetensors", strength=1.0),
+    ]
+    assert strength_warnings(stack) == []
 
 
 # ── prune_noncanon_identity ───────────────────────────────────────────────────

@@ -30,7 +30,6 @@ from agent_runtime import (
 from visual_generation.batch_file import append_spec
 from visual_generation.canon import (
     canon_loras_for,
-    enforce_canon,
     scene_cast,
     subjects_matching,
 )
@@ -108,18 +107,19 @@ def _default_batch_path(project: str | None) -> Path:
     return get_config().agent_data_dir / "visual-generation" / "batches" / f"{stem}.batch.md"
 
 
-def _pin_canon_loras(spec: VisualSpec, project: str | None, store: Any) -> list[str]:
-    """Pin each present subject's character LoRA into `spec.lora_stack`, then re-derive
-    identity_bearing now that canon may have added an identity asset.
+def _pin_canon_loras(
+    spec: VisualSpec, project: str | None, store: Any, forced: list[str] | None = None
+) -> list[str]:
+    """Pin each present (or forced) subject's character LoRA into `spec.lora_stack`,
+    then re-derive identity_bearing now that canon may have added an identity asset.
 
-    The model-level half of canon enforcement: locked text reaching the prompt is the
-    textual identity; this is the same identity at the model level, guaranteed on every
-    scene the subject appears in. **Canon owns the pinned character LoRA's strength** — if
-    the LLM already put the same LoRA in the stack at a guessed strength, the canon value
-    overrides it (canon is authoritative for identity), rather than being deduped away.
-    Returns human-readable notes for `canon_applied`."""
+    The one deterministic canon channel: a subject the prompt names by alias — or one
+    the director forced via `--canon` — brings its registered character LoRA. Canon is
+    authoritative for the pinned LoRA's strength value: if the LLM already put the same
+    LoRA in the stack at a guessed strength, the canon value overrides it rather than
+    being deduped away. Returns human-readable notes for `canon_applied`."""
     notes: list[str] = []
-    canon_loras = canon_loras_for(spec.prompt, project)
+    canon_loras = canon_loras_for(spec.prompt, project, force=forced or ())
     for lr in canon_loras:
         idx = next((i for i, e in enumerate(spec.lora_stack) if e.name == lr.name), None)
         if idx is None:
@@ -130,9 +130,9 @@ def _pin_canon_loras(spec: VisualSpec, project: str | None, store: Any) -> list[
             spec.lora_stack[idx] = lr  # canon strength wins over the LLM's guess
             notes.append(f"canon LoRA '{lr.name}' strength {was}→{lr.strength} (canon override)")
 
-    # Canon owns identity: drop identity LoRAs the LLM stacked that aren't canon
-    # pins (e.g. alternate training checkpoints like '*-2500') so a spec never
-    # carries two files for the same character — the over-stacking failure mode.
+    # Avoid two files carrying the same character: drop identity LoRAs the LLM
+    # stacked that duplicate a canon pin (e.g. alternate training checkpoints
+    # like '*-2500') — the same-character duplication failure mode.
 
     def _is_identity(name: str) -> bool:
         asset = store.get_model(name)
@@ -215,10 +215,10 @@ async def draft(
     canon_applied: list[str] = []
     canon_absent: list[str] = []
     # Canon characters this scene names (from the scene body, not the whole brief) — fed
-    # into composition so the LLM renders them, and checked again after enforce so a
+    # into composition so the LLM renders them, and checked again after craft so a
     # silently-dropped lead is surfaced rather than ignored. Subjects the director FORCED
-    # via --canon are merged in (deduped) so they're composed in too, and are enforced
-    # post-hoc regardless of whether the prompt names them.
+    # via --canon are merged in (deduped) so they're composed in too, and their character
+    # LoRAs are pinned regardless of whether the prompt names them.
     forced = list(force_canon or [])
     cast = scene_cast(compiled.focus, project)
     for subj in subjects_matching(forced, project):
@@ -278,13 +278,11 @@ async def draft(
                 # derivation generate re-runs authoritatively at spend time).
                 spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
 
-                # Deterministically enforce locked project canon (e.g. the narrator's
-                # hair) — the one channel that doesn't depend on LLM discretion. Forced
-                # subjects are injected even if the composed prompt never names them.
-                spec.prompt, canon_applied = enforce_canon(spec.prompt, project, force=forced)
-                # Pin the present subject's character LoRA too (model-level continuity);
-                # re-derives identity_bearing inside, superseding the pre-fill above.
-                canon_applied += _pin_canon_loras(spec, project, store)
+                # Deterministic canon: pin each present (or --canon forced) subject's
+                # character LoRA — the one canon channel that doesn't depend on LLM
+                # discretion. Re-derives identity_bearing inside, superseding the
+                # pre-fill above.
+                canon_applied = _pin_canon_loras(spec, project, store, forced=forced)
 
                 # Did every scene-named canon character actually land in the prompt? A lead
                 # the scene features but the shot omitted is surfaced as an advisory (never
@@ -561,12 +559,11 @@ async def redraft(
                 # Honest pre-fill from the registry (re-derived authoritatively at generate).
                 spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
 
-                # Enforce locked canon on the revised prompt too (continuity can't drift
-                # away from canon across a redraft) — text and character LoRA both.
-                spec.prompt, canon_applied = enforce_canon(
-                    spec.prompt, project or parent.project, force=list(force_canon or [])
+                # Model-level canon continuity across a redraft: pin the present (or
+                # --canon forced) subjects' character LoRAs onto the revised spec.
+                canon_applied = _pin_canon_loras(
+                    spec, project or parent.project, store, forced=list(force_canon or [])
                 )
-                canon_applied += _pin_canon_loras(spec, project or parent.project, store)
 
                 overall_reasoning = crafted["rationale"]
                 tutor_notes = [le.statement for _, le in ctx.technique_lessons]

@@ -1,15 +1,19 @@
-"""Deterministic per-project canon — the one place advisory isn't enough.
+"""Per-project canon — a deterministic subject registry.
 
-Locked identity descriptors (e.g. the narrator's hair) must reach the rendered
-prompt regardless of LLM discretion. Retrieval surfaces canon as *advisory* context
-(`[PROJECT CANON]`); this module *guarantees* it: `enforce_canon` rewrites the
-crafted prompt in code — expanding `@alias` tokens, injecting the locked descriptor
-wherever a subject is named, and stripping phrasings the canon forbids.
+A canon subject is the set of aliases that name it, an optional pinned
+character LoRA (model-level identity — part of the deprecated single-LoRA
+ideation path), and asset-reference fields aligned with the shared shot schema
+(docs/shared-shot-schema.md): ``id``, ``reference_pack``, ``wardrobe``,
+``hair``, ``region``. Canon surfaces the scene's cast into composition and
+pins character LoRAs deterministically at draft/redraft; it does NOT rewrite
+prompt text. (The locked-descriptor injection and forbid-stripping that once
+lived here were removed per the consolidated Coraline audit §5/§11 — text
+canon was a prompt macro, not an identity authority.)
 
-The canon for a project is a plain JSON file (looked up by exact `project` slug,
-never embedded or semantically searched) — the `ModelRegistry` pattern. Enforcement
-is always advisory in spirit (it shapes the prompt text; it never blocks a render)
-and a no-op when a project has no canon file.
+The canon for a project is a plain JSON file (looked up by exact `project`
+slug, never embedded or semantically searched) — the `ModelRegistry` pattern.
+Legacy files carrying ``locked``/``forbid`` fields load without error and
+round-trip those fields untouched; nothing reads them.
 """
 
 from __future__ import annotations
@@ -17,9 +21,10 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
 
 from agent_runtime import get_config
 
@@ -27,23 +32,30 @@ from visual_generation.models import LoraRef
 
 
 class CanonSubject(BaseModel):
-    """One locked subject: the aliases that name it, the canonical descriptor that
-    must appear, and phrasings that contradict canon and must be stripped.
-
-    An alias beginning with ``@`` is a *token* that expands in place to the locked
-    descriptor; a plain alias (e.g. "the narrator") triggers injection of the locked
-    descriptor when it's named but the canonical text isn't already present.
+    """One canon subject: the aliases that name it, an optional pinned character
+    LoRA, and versioned asset references.
 
     `lora` is the optional *character LoRA* that carries this subject's identity at
-    the model level (a registered, usually `identity_bearing` asset). When the subject
-    is present in a scene, the locked text reaches the prompt *and* this LoRA is pinned
-    into the stack — so textual and model-level identity travel together, on every
-    scene, regardless of LLM discretion."""
+    the model level (a registered, usually `identity_bearing` asset) — the
+    deprecated single-LoRA ideation path. When the subject is present in a scene
+    (named by alias), this LoRA is pinned into the stack deterministically.
+
+    The asset-reference fields point at versioned production assets per the shared
+    shot schema (`id` e.g. ``celeste_v1``, `reference_pack`, `wardrobe`, `hair`,
+    `region`). They are pipeline metadata — never prompt prose.
+
+    Legacy ``locked``/``forbid`` keys from older canon files are tolerated as
+    pydantic extras and round-trip through load/save unread (``extra="allow"``)."""
+
+    model_config = ConfigDict(extra="allow")
 
     aliases: list[str]
-    locked: str
-    forbid: list[str] = Field(default_factory=list)
     lora: LoraRef | None = None
+    id: str | None = None
+    reference_pack: str | None = None
+    wardrobe: str | None = None
+    hair: str | None = None
+    region: str | None = None
 
 
 def _default_canon_dir() -> Path:
@@ -83,16 +95,32 @@ class ProjectCanon:
     def set_subject(
         self,
         aliases: list[str],
-        locked: str,
-        forbid: list[str] | None = None,
+        *,
         lora: LoraRef | None = None,
+        id: str | None = None,
+        reference_pack: str | None = None,
+        wardrobe: str | None = None,
+        hair: str | None = None,
+        region: str | None = None,
     ) -> CanonSubject:
-        """Upsert a subject (keyed by its primary alias, case-insensitively)."""
+        """Upsert a subject (keyed by its primary alias, case-insensitively).
+
+        REPLACES the whole subject — legacy ``locked``/``forbid`` extras on a
+        replaced subject are dropped. Use `update_subject` for surgical edits
+        that preserve them."""
         if not aliases:
             raise ValueError("a canon subject needs at least one alias")
         key = aliases[0].lower()
         subjects = [s for s in self.load() if not (s.aliases and s.aliases[0].lower() == key)]
-        subject = CanonSubject(aliases=aliases, locked=locked, forbid=forbid or [], lora=lora)
+        subject = CanonSubject(
+            aliases=aliases,
+            lora=lora,
+            id=id,
+            reference_pack=reference_pack,
+            wardrobe=wardrobe,
+            hair=hair,
+            region=region,
+        )
         subjects.append(subject)
         self._write(subjects)
         return subject
@@ -113,21 +141,25 @@ class ProjectCanon:
         *,
         add_aliases: list[str] | None = None,
         remove_aliases: list[str] | None = None,
-        add_forbid: list[str] | None = None,
-        remove_forbid: list[str] | None = None,
-        locked: str | None = None,
         lora: LoraRef | None = None,
         clear_lora: bool = False,
+        id: str | None = None,
+        reference_pack: str | None = None,
+        wardrobe: str | None = None,
+        hair: str | None = None,
+        region: str | None = None,
     ) -> CanonSubject:
         """Edit ONE field-set of an existing subject in place — without restating the rest.
 
-        `selector` matches the subject by ANY of its aliases (case-insensitive). Only the
-        named edits apply; everything else (the locked descriptor you don't touch, the
-        LoRA, untouched aliases/forbids) is preserved. `lora` sets/replaces the pinned
-        character LoRA; `clear_lora` removes it (mutually exclusive with `lora`). The
-        complement to `set_subject`, which replaces a whole subject — this is the surgical
-        edit. Raises ValueError if no subject matches, or if an edit would leave the subject
-        with zero aliases."""
+        `selector` matches the subject by ANY of its aliases (case-insensitive). Only
+        the named edits apply; everything else — including legacy ``locked``/``forbid``
+        extras — is preserved (the update is a ``model_copy``). For the string asset
+        fields (`id`, `reference_pack`, `wardrobe`, `hair`, `region`), ``None`` leaves
+        the field untouched and an empty string clears it. `lora` sets/replaces the
+        pinned character LoRA; `clear_lora` removes it (mutually exclusive with
+        `lora`). The complement to `set_subject`, which replaces a whole subject —
+        this is the surgical edit. Raises ValueError if no subject matches, or if an
+        edit would leave the subject with zero aliases."""
         if lora is not None and clear_lora:
             raise ValueError("pass either a new lora or clear_lora, not both")
         subjects = self.load()
@@ -150,21 +182,23 @@ class ProjectCanon:
         if not aliases:
             raise ValueError("a subject must keep at least one alias")
 
-        forbid = list(s.forbid)
-        for f in add_forbid or []:
-            if f not in forbid:
-                forbid.append(f)
-        if remove_forbid:
-            dropf = set(remove_forbid)
-            forbid = [f for f in forbid if f not in dropf]
+        updates: dict[str, object] = {"aliases": aliases}
+        if clear_lora:
+            updates["lora"] = None
+        elif lora is not None:
+            updates["lora"] = lora
+        for field, value in (
+            ("id", id),
+            ("reference_pack", reference_pack),
+            ("wardrobe", wardrobe),
+            ("hair", hair),
+            ("region", region),
+        ):
+            if value is not None:
+                updates[field] = value or None  # empty string clears the field
 
-        new_lora = None if clear_lora else (lora if lora is not None else s.lora)
-        updated = CanonSubject(
-            aliases=aliases,
-            locked=locked if locked is not None else s.locked,
-            forbid=forbid,
-            lora=new_lora,
-        )
+        # model_copy preserves pydantic extras (legacy locked/forbid) untouched.
+        updated = s.model_copy(update=updates)
         # Guard against the new primary alias colliding with a different subject's key.
         new_key = aliases[0].lower()
         for j, other in enumerate(subjects):
@@ -177,122 +211,17 @@ class ProjectCanon:
         return updated
 
 
-def _tidy(prompt: str) -> str:
-    """Clean up doubled spaces/commas left by stripping forbidden phrases."""
-    prompt = re.sub(r"\s{2,}", " ", prompt)
-    prompt = re.sub(r"\s+([,.])", r"\1", prompt)
-    prompt = re.sub(r"(,\s*){2,}", ", ", prompt)
-    return prompt.strip().strip(",").strip()
-
-
 def _alias_set(subj: CanonSubject) -> set[str]:
     """A subject's aliases lower-cased, with and without a leading ``@`` (so a selector
-    like ``narrator`` matches the token alias ``@narrator``)."""
+    like ``narrator`` matches the legacy token alias ``@narrator``)."""
     return {a.lower() for a in subj.aliases} | {a.lower().lstrip("@") for a in subj.aliases}
-
-
-def _dedupe_locked(prompt: str, locked: str) -> tuple[str, int]:
-    """Collapse repeated verbatim copies of a locked descriptor down to the FIRST one.
-
-    A subject's appearance can reach the prompt from more than one channel — the LLM
-    weaving it into prose *and* restating it as a trailing identity block (despite being
-    told only to place/pose), multiple ``@token`` expansions, or a ``redraft`` inheriting
-    an already-injected parent prompt. Each full copy past the first is pure dilution at a
-    low step count, so we keep the earliest occurrence (usually the natural in-prose one)
-    and delete the rest. Case-insensitive, literal match; returns (prompt, removed_count).
-
-    Only *verbatim* copies of the current locked text are collapsed — a paraphrase the
-    LLM authored in its own words has no exact match to strip and is left for the
-    composition-side guard to discourage."""
-    if not locked:
-        return prompt, 0
-    spans = [m.span() for m in re.finditer(re.escape(locked), prompt, re.IGNORECASE)]
-    if len(spans) <= 1:
-        return prompt, 0
-    # Delete every occurrence after the first, back-to-front so earlier spans stay valid.
-    for start, end in reversed(spans[1:]):
-        prompt = prompt[:start] + prompt[end:]
-    return prompt, len(spans) - 1
-
-
-def enforce_canon(
-    prompt: str,
-    project: str | None,
-    *,
-    base_dir: Path | None = None,
-    force: tuple[str, ...] | list[str] = (),
-) -> tuple[str, list[str]]:
-    """Rewrite `prompt` to honor the project's locked canon. Returns (prompt, applied).
-
-    Deterministic, no LLM. For each subject named in the prompt: expand any ``@alias``
-    token to the locked descriptor, inject the locked descriptor when a plain alias is
-    named but the canonical text is absent, and strip any forbidden phrasing.
-
-    `force` is a list of subject **selectors** (aliases) to apply **even if the prompt
-    never names them** — the escape hatch for when the LLM refers to a subject by other
-    words (e.g. writes "sports-bar" but the alias is "the sports bar"), so canon would
-    otherwise miss. A forced subject is injected + its forbids stripped regardless.
-
-    `applied` is a human-readable list of what was changed (empty = no-op). A project with
-    no canon file is a no-op."""
-    if not project:
-        return prompt, []
-    subjects = ProjectCanon(project, base_dir=base_dir).load()
-    if not subjects:
-        return prompt, []
-
-    forced = {f.lower() for f in force}
-    applied: list[str] = []
-    for subj in subjects:
-        locked = subj.locked
-        is_forced = bool(forced & _alias_set(subj))
-        present = locked.lower() in prompt.lower()
-        plain_match: str | None = None
-
-        for alias in subj.aliases:
-            if alias.startswith("@"):
-                token = re.compile(re.escape(alias), re.IGNORECASE)
-                if token.search(prompt):
-                    prompt = token.sub(locked, prompt)
-                    applied.append(f"expanded '{alias}' → canonical descriptor")
-                    present = True
-            elif re.search(rf"\b{re.escape(alias)}\b", prompt, re.IGNORECASE):
-                plain_match = plain_match or alias
-
-        if (plain_match or is_forced) and not present:
-            prompt = f"{prompt.rstrip().rstrip(',.')}, {locked}"
-            verb = "injected" if plain_match else "forced"
-            applied.append(f"{verb} canon for '{plain_match or subj.aliases[0]}'")
-            present = True
-
-        if present:
-            # Idempotency: guarantee exactly one verbatim copy of the locked descriptor,
-            # regardless of how many channels put it there (LLM prose + trailing block,
-            # repeated @token expansions, redraft re-injection). Collapse before stripping
-            # forbids so the dedupe matches the intact locked text.
-            prompt, removed = _dedupe_locked(prompt, locked)
-            if removed:
-                copies = "copy" if removed == 1 else "copies"
-                applied.append(
-                    f"deduplicated {removed} redundant {copies} of canon "
-                    f"for '{plain_match or subj.aliases[0]}'"
-                )
-            for bad in subj.forbid:
-                bad_re = re.compile(re.escape(bad), re.IGNORECASE)
-                if bad_re.search(prompt):
-                    prompt = bad_re.sub("", prompt)
-                    applied.append(f"removed forbidden phrasing '{bad}'")
-
-    if applied:
-        prompt = _tidy(prompt)
-    return prompt, applied
 
 
 def subjects_matching(
     selectors: list[str], project: str | None, *, base_dir: Path | None = None
 ) -> list[CanonSubject]:
     """The canon subjects any of whose aliases match one of `selectors` (the `--canon`
-    force targets). Lets the caller also feed forced subjects into composition. Empty for
+    force selectors, fed into the compose-time cast and forced LoRA pins). Empty for
     no project / no canon / no selectors / no match."""
     if not project or not selectors:
         return []
@@ -305,13 +234,8 @@ def subjects_matching(
 
 
 def _subject_present(prompt: str, subj: CanonSubject) -> bool:
-    """True if `subj` appears in `prompt` — its locked descriptor is present, or any
-    of its aliases is named (``@`` tokens expand to the locked text, so they reduce to
-    the same check). Run *after* `enforce_canon`, where a present subject's locked text
-    has already been injected."""
-    lower = prompt.lower()
-    if subj.locked and subj.locked.lower() in lower:
-        return True
+    """True if any of `subj`'s aliases is named in `prompt` (word-boundary,
+    case-insensitive; a legacy ``@`` alias prefix is ignored)."""
     for alias in subj.aliases:
         plain = alias[1:] if alias.startswith("@") else alias
         if plain and re.search(rf"\b{re.escape(plain)}\b", prompt, re.IGNORECASE):
@@ -324,12 +248,11 @@ def scene_cast(
 ) -> list[CanonSubject]:
     """Canon subjects whose aliases are named in `scene_text` (e.g. a scene's narration).
 
-    Makes canon an *input* to composition, not just a post-hoc filter: when the
-    director's scene text names a locked subject, the craft step is told to render that
-    subject by name with their canonical appearance — so identity reaches the prompt at
-    compose time (and `enforce_canon`/`canon_loras_for` then fire deterministically on
-    the alias) instead of the character being silently dropped. Same alias/locked match
-    as `_subject_present`. No project / no canon file / empty text → []."""
+    Makes canon an *input* to composition: when the director's scene text names a
+    subject, the craft step is told to render that subject by name — so the character
+    reaches the prompt at compose time (and `canon_loras_for` then pins its LoRA on
+    the alias) instead of being silently dropped. No project / no canon file / empty
+    text → []."""
     if not project or not scene_text:
         return []
     return [
@@ -340,19 +263,27 @@ def scene_cast(
 
 
 def canon_loras_for(
-    prompt: str, project: str | None, *, base_dir: Path | None = None
+    prompt: str,
+    project: str | None,
+    *,
+    base_dir: Path | None = None,
+    force: Sequence[str] = (),
 ) -> list[LoraRef]:
-    """Return the character LoRAs that canon pins for every subject present in `prompt`.
+    """Return the character LoRAs canon pins for the subjects present in `prompt`.
 
-    The model-level counterpart to `enforce_canon`: a subject the scene names (so its
-    locked descriptor is in the prompt) also brings its registered character LoRA, so
-    identity holds across scenes at the model level — not just the text. Call after
-    `enforce_canon` and merge the result into the spec's `lora_stack` (dedupe by name).
-    A project with no canon file, or subjects without a `lora`, yields an empty list."""
+    The one deterministic canon channel: a subject the prompt names by alias — or a
+    subject FORCED via a `--canon` selector even when the prompt doesn't name it —
+    brings its registered character LoRA, so model-level identity travels with the
+    subject. Call after craft and merge into the spec's `lora_stack` (dedupe by
+    name; canon strength wins over the LLM's guess). A project with no canon file,
+    or subjects without a `lora`, yields an empty list."""
     if not project:
         return []
+    forced = {f.lower() for f in force}
     loras: list[LoraRef] = []
     for subj in ProjectCanon(project, base_dir=base_dir).load():
-        if subj.lora is not None and _subject_present(prompt, subj):
+        if subj.lora is None:
+            continue
+        if _subject_present(prompt, subj) or (forced & _alias_set(subj)):
             loras.append(subj.lora)
     return loras

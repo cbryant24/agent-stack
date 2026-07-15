@@ -51,10 +51,10 @@ filename). If the list is empty, set model to null and describe the desired mode
 in the rationale.
 
 When context is provided:
-- [PROJECT CANON: domain] entries are LOCKED identity. Place and pose the subject in the
-  scene (where it is, what it is doing), but do NOT restate its physical appearance —
-  hair, build, skin, face. The locked descriptor is injected deterministically; restating
-  it in your own words creates conflicting descriptions of the same subject.
+- [PROJECT CANON: domain] entries are authoritative identity context. Keep any appearance
+  language consistent with them rather than inventing your own; identity is primarily
+  carried at the model level (character LoRAs / reference assets), so favor placing and
+  posing the subject over describing it.
 - [PRIOR GENERATION: reaction=LOVED] entries are the user's own best results — lean on them.
 - [TECHNIQUE LESSON: positive/...] entries are confirmed preferences — honor them.
 - [USER FACT: comfyui_mechanics / runpod_mechanics] entries are user-verified — authoritative.
@@ -89,7 +89,7 @@ _REVISE_MODE_SYSTEM = """\
 
 REVISE MODE — you are revising an existing TEXT-TO-IMAGE prompt, not creating one from
 scratch and not editing pixels. Apply ONLY the targeted change the user asks for. Preserve
-every locked descriptor block and all unchanged composition/style/lighting language VERBATIM
+all unchanged composition/style/lighting and character language VERBATIM
 — copy it through word-for-word; do not paraphrase, reorder, or "improve" it. The recipe
 (seed, sampler, steps, model, LoRAs, dimensions) is inherited from the parent and locked by
 the caller: do NOT author settings and do NOT cite seed/recipe numbers in your rationale.
@@ -131,28 +131,29 @@ def _format_models(models: list[ModelAsset]) -> str:
 
 def _format_cast(cast: list[CanonSubject]) -> str:
     """One line per canon subject the scene features: primary name, other plain aliases,
-    and the locked appearance the model must honor."""
+    and the asset-reference id when set. Never appearance prose — identity is carried at
+    the model/asset level, not by descriptors."""
     lines: list[str] = []
     for s in cast:
         others = [a for a in s.aliases[1:] if not a.startswith("@")]
         also = f" (also called: {', '.join(others)})" if others else ""
-        lines.append(f'- "{s.aliases[0]}"{also}: {s.locked}')
+        asset = f" [asset: {s.id}]" if s.id else ""
+        lines.append(f'- "{s.aliases[0]}"{also}{asset}')
     return "\n".join(lines)
 
 
 def _cast_block(cast: list[CanonSubject] | None) -> str:
     """Composition-time canon: instruct the model to render the scene's canon characters
-    by name with their locked look, so identity is in the prompt before the deterministic
-    `enforce_canon` pass (which then matches the alias and pins the LoRA). Empty when the
-    scene names no canon subject."""
+    by name (so `canon_loras_for` then matches the alias and pins each LoRA). Empty when
+    the scene names no canon subject."""
     if not cast:
         return ""
     return (
         "\nProject canon — characters this scene features. Render EACH of them by name, "
-        "present and recognizable in the shot; do not omit them and do not restyle their "
-        "hair, build, skin, or face. Name the character in the prompt (the exact locked "
-        "descriptor is injected deterministically afterward, so place and pose them rather "
-        "than paraphrasing their appearance):\n" + _format_cast(cast) + "\n"
+        "present and recognizable in the shot; do not omit them. Character identity is "
+        "carried at the model level (character LoRAs / reference assets), not by prompt "
+        "prose — name and place/pose each character; do not invent detailed physical "
+        "descriptions for them:\n" + _format_cast(cast) + "\n"
     )
 
 
@@ -191,8 +192,8 @@ def _build_user_message(
 Apply ONLY this change: {intent}
 {directed}
 
-Preserve every locked descriptor block and all unchanged composition/style/lighting
-language VERBATIM — this is a targeted revise, not a rewrite. Do not author settings or
+Preserve all unchanged composition/style/lighting and character language VERBATIM
+— this is a targeted revise, not a rewrite. Do not author settings or
 cite seed/recipe numbers; the recipe is inherited from the parent.
 
 {template_block}

@@ -134,36 +134,6 @@ def test_draft_prefills_identity_from_registry(
     assert result.spec.identity_bearing is True
 
 
-def test_draft_applies_and_surfaces_canon(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
-) -> None:
-    from visual_generation.draft import draft_sync
-
-    _patch_chain(monkeypatch, RetrievedContext(), _crafted(prompt="the narrator on a roof"))
-    # Stub the deterministic canon step to a known transform to verify the wiring +
-    # persistence (enforce_canon itself is unit-tested in test_canon.py).
-    import importlib
-
-    draft_mod = importlib.import_module("visual_generation.draft")
-    monkeypatch.setattr(
-        draft_mod, "enforce_canon",
-        lambda prompt, project, **kw: (f"{prompt}, LOCKED-HAIR", ["injected canon for 'the narrator'"]),
-    )
-    store = _store(flux_template, [ModelAsset(name="flux1-dev.safetensors", kind="checkpoint")])
-
-    out = tmp_path / "celeste.batch.md"
-    result = draft_sync(
-        "the narrator on a roof", batch_path=out, template_name="flux-txt2img",
-        project="celeste", store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
-    )
-
-    assert "LOCKED-HAIR" in result.spec.prompt
-    assert result.canon_applied == ["injected canon for 'the narrator'"]
-    # The enforced prompt is what gets persisted to the batch file.
-    batch = read_batch(out)
-    assert "LOCKED-HAIR" in batch.specs[0].prompt
-
-
 def test_resolve_template_prefers_txt2img_for_sourceless_draft() -> None:
     """A text2img prompt that semantically ranks an inpaint template first must NOT pick
     it — its init_image/mask slots can't be filled without a source (would 400 at submit)."""
@@ -244,11 +214,11 @@ def test_draft_warns_when_sourceless_spec_lands_on_inpaint_template(
     assert any("no source image" in w and "skip" in w for w in result.inert_inheritance)
 
 
-def test_draft_passes_force_canon_through_to_enforce(
+def test_draft_force_canon_pins_lora_for_unnamed_subject(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flux_template
 ) -> None:
-    """`--canon` selectors reach enforce_canon as `force=…` so a subject the LLM never
-    named is injected anyway."""
+    """`--canon` selectors reach canon_loras_for as `force=…` so a subject the LLM never
+    named still gets its character LoRA pinned."""
     from visual_generation.draft import draft_sync
 
     import importlib
@@ -256,21 +226,22 @@ def test_draft_passes_force_canon_through_to_enforce(
     _patch_chain(monkeypatch, RetrievedContext(), _crafted(prompt="a wide cityscape, no people"))
     seen: dict = {}
 
-    def fake_enforce(prompt, project, **kw):
-        seen["force"] = kw.get("force")
-        return prompt, []
+    def fake_canon_loras(prompt, project, **kw):
+        seen["force"] = list(kw.get("force") or [])
+        return [LoraRef(name="bar-set.safetensors", strength=0.7)]
 
-    monkeypatch.setattr(draft_mod, "enforce_canon", fake_enforce)
+    monkeypatch.setattr(draft_mod, "canon_loras_for", fake_canon_loras)
     monkeypatch.setattr(draft_mod, "subjects_matching", lambda sel, proj, **k: [])
-    monkeypatch.setattr(draft_mod, "canon_loras_for", lambda p, proj, **k: [])
     store = _store(flux_template, [ModelAsset(name="flux1-dev.safetensors", kind="checkpoint")])
 
-    draft_sync(
+    result = draft_sync(
         "a wide cityscape", batch_path=tmp_path / "celeste.batch.md", template_name="flux-txt2img",
         project="celeste", force_canon=["the sports bar"],
         store=store, memory_store=MagicMock(), llm_provider=MagicMock(),
     )
     assert seen["force"] == ["the sports bar"]
+    assert [lr.name for lr in result.spec.lora_stack] == ["bar-set.safetensors"]
+    assert any("pinned canon LoRA" in note for note in result.canon_applied)
 
 
 def test_draft_pins_canon_character_lora(
@@ -328,14 +299,13 @@ def _patch_cast(monkeypatch, draft_mod) -> "object":
 
     from visual_generation.canon import CanonSubject
 
-    narrator = CanonSubject(aliases=["the narrator", "Chris"], locked="felt puppet, dreadlocks")
+    narrator = CanonSubject(aliases=["the narrator", "Chris"], id="narrator_v1")
 
     def fake(text, project, **kw):
         return [narrator] if project and re.search(r"narrator|Chris", text or "", re.I) else []
 
     monkeypatch.setattr(draft_mod, "scene_cast", fake)
-    # No-op the deterministic canon edits so the prompt is left as the LLM wrote it.
-    monkeypatch.setattr(draft_mod, "enforce_canon", lambda p, proj, **k: (p, []))
+    # No-op the canon LoRA pinning so the stack is left as the LLM wrote it.
     monkeypatch.setattr(draft_mod, "canon_loras_for", lambda p, proj, **k: [])
     return narrator
 

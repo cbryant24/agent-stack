@@ -77,7 +77,7 @@ def cli() -> None:
 
 
 def _echo_lora_strength_warnings(stack: list[LoraRef], *, indent: str = "") -> None:
-    """Print LoRA over-strength / over-stacked-identity advisories for a stack.
+    """Print LoRA over-strength / dual-identity-stacking advisories for a stack.
 
     Warn-loudly-allow: surfaced at draft, redraft, and the generate cost gate so
     the operator sees over-strength (which overrides the prompt + bleeds identity)
@@ -359,8 +359,8 @@ def _echo_provenance(legs: list) -> None:
 @click.option("--provider", "provider", default=None,
               help="LLM provider for the craft (anthropic|openai; default: config).")
 @click.option("--canon", "canon_force", multiple=True,
-              help="Force a canon subject (by any alias) into the prompt even if the LLM "
-                   "didn't name it — its locked text is injected + forbids stripped. "
+              help="Force a canon subject (by any alias) into the compose-time cast and "
+                   "pin its character LoRA even if the prompt doesn't name it. "
                    "Repeatable. Use when the model refers to a subject by other words.")
 def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
           output: str | None, template_name: str | None, project: str | None,
@@ -454,7 +454,7 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
         click.echo(f"\nRationale: {result.overall_reasoning}")
 
     if result.canon_applied:
-        click.echo("\n── Canon enforced (deterministic) ───────────────────")
+        click.echo("\n── Canon applied (LoRA pins) ────────────────────────")
         for note in result.canon_applied:
             click.echo(f"  • {note}")
 
@@ -499,8 +499,8 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
 @click.option("--provider", "provider", default=None,
               help="LLM provider for the craft (anthropic|openai; default: config).")
 @click.option("--canon", "canon_force", multiple=True,
-              help="Force a canon subject (by any alias) into the revised prompt even if it "
-                   "isn't named. Repeatable.")
+              help="Force a canon subject's character LoRA pin onto the revised spec even "
+                   "if the prompt doesn't name it (revise mode has no cast). Repeatable.")
 def redraft(gen_id: str, change: str, output: str | None, project: str | None,
             model: str | None, provider: str | None, canon_force: tuple[str, ...]) -> None:
     """Revise a prior generation's PROMPT (text2img) by applying CHANGE. Free.
@@ -544,7 +544,7 @@ def redraft(gen_id: str, change: str, output: str | None, project: str | None,
         click.echo(f"\nRationale: {result.overall_reasoning}")
 
     if result.canon_applied:
-        click.echo("\n── Canon enforced (deterministic) ───────────────────")
+        click.echo("\n── Canon applied (LoRA pins) ────────────────────────")
         for note in result.canon_applied:
             click.echo(f"  • {note}")
 
@@ -1049,38 +1049,52 @@ def _parse_lora(spec: str) -> LoraRef:
 
 @cli.group()
 def canon() -> None:
-    """Manage a project's LOCKED canon (deterministically enforced at draft/redraft)."""
+    """Manage a project's canon subjects (asset references + pinned character LoRAs;
+    LoRAs are pinned deterministically at draft/redraft)."""
 
 
 @canon.command("set")
 @click.argument("project")
 @click.option("--alias", "aliases", multiple=True, required=True,
-              help="A name the subject is called by (repeatable). Prefix with @ for a "
-                   "token that expands in place (e.g. @narrator). aliases[0] is the key.")
-@click.option("--locked", required=True,
-              help="The canonical descriptor that must appear whenever the subject is named.")
-@click.option("--forbid", "forbid", multiple=True,
-              help="A phrasing that contradicts canon and is stripped (repeatable).")
+              help="A name the subject is called by (repeatable). aliases[0] is the key.")
+@click.option("--id", "subject_id", default=None,
+              help="Versioned asset id for the subject (e.g. celeste_v1) — aligns with "
+                   "docs/shared-shot-schema.md.")
+@click.option("--reference-pack", "reference_pack", default=None,
+              help="Versioned reference bundle id (e.g. celeste_refs_v1).")
+@click.option("--wardrobe", "wardrobe", default=None,
+              help="Versioned wardrobe asset id (e.g. black_bar_uniform_v1).")
+@click.option("--hair", "hair", default=None,
+              help="Versioned hair asset id (e.g. bun_front_curl_v1).")
+@click.option("--region", "region", default=None,
+              help="Named region mask for this subject (e.g. celeste_mask).")
 @click.option("--lora", "lora", default=None,
               help="Character LoRA pinned whenever this subject appears, as "
                    "NAME[:STRENGTH] (strength defaults to 1.0). The NAME must key into "
                    "the model registry; flag it identity_bearing there.")
 def canon_set(
-    project: str, aliases: tuple[str, ...], locked: str, forbid: tuple[str, ...],
-    lora: str | None,
+    project: str, aliases: tuple[str, ...], subject_id: str | None,
+    reference_pack: str | None, wardrobe: str | None, hair: str | None,
+    region: str | None, lora: str | None,
 ) -> None:
-    """Upsert a locked subject for PROJECT (keyed by its first alias)."""
+    """Upsert a canon subject for PROJECT (keyed by its first alias).
+
+    REPLACES the whole subject — legacy locked/forbid fields on a replaced subject
+    are dropped. Use `canon edit` for surgical changes that preserve them."""
     lora_ref = _parse_lora(lora) if lora else None
     store = ProjectCanon(project)
     existed = any(selector_matches(s, aliases[0]) for s in store.load())
-    subject = store.set_subject(list(aliases), locked, list(forbid), lora=lora_ref)
+    subject = store.set_subject(
+        list(aliases), lora=lora_ref, id=subject_id, reference_pack=reference_pack,
+        wardrobe=wardrobe, hair=hair, region=region,
+    )
     verb = "replaced" if existed else "set"
     click.echo(f"Canon {verb} for {project!r} (subject '{subject.aliases[0]}'):")
     _echo_subject(subject, indent="  ")
     if existed:
         click.echo(
-            "\nNote: `canon set` REPLACES the whole subject. To change just one field "
-            "without restating the rest, use `canon edit`."
+            "\nNote: `canon set` REPLACES the whole subject (legacy locked/forbid are "
+            "dropped). To change just one field without restating the rest, use `canon edit`."
         )
     click.echo(f"\nStored at: {store.path}")
 
@@ -1092,17 +1106,28 @@ def selector_matches(subject: object, alias: str) -> bool:
 def _echo_subject(s: object, *, indent: str = "  ") -> None:
     """Print one canon subject's fields (shared by set/edit/show)."""
     click.echo(f"{indent}aliases: {', '.join(s.aliases)}")          # type: ignore[attr-defined]
-    click.echo(f"{indent}locked:  {s.locked}")                       # type: ignore[attr-defined]
-    if s.forbid:                                                     # type: ignore[attr-defined]
-        click.echo(f"{indent}forbid:  {', '.join(s.forbid)}")        # type: ignore[attr-defined]
-    if s.lora:                                                       # type: ignore[attr-defined]
-        click.echo(f"{indent}lora:    {s.lora.name}@{s.lora.strength}")  # type: ignore[attr-defined]
+    for label, attr in (
+        ("id:      ", "id"),
+        ("refs:    ", "reference_pack"),
+        ("wardrobe:", "wardrobe"),
+        ("hair:    ", "hair"),
+        ("region:  ", "region"),
+    ):
+        value = getattr(s, attr, None)
+        if value:
+            click.echo(f"{indent}{label} {value}")
+    lora = getattr(s, "lora", None)
+    if lora:
+        click.echo(f"{indent}lora:     {lora.name}@{lora.strength}")
+    extras = getattr(s, "__pydantic_extra__", None) or {}
+    if "locked" in extras or "forbid" in extras:
+        click.echo(f"{indent}(legacy locked/forbid present — ignored)")
 
 
 @canon.command("show")
 @click.argument("project")
 def canon_show(project: str) -> None:
-    """Show PROJECT's locked canon subjects."""
+    """Show PROJECT's canon subjects."""
     store = ProjectCanon(project)
     subjects = store.load()
     if not subjects:
@@ -1110,12 +1135,8 @@ def canon_show(project: str) -> None:
         return
     click.echo(f"Canon for {project!r} ({len(subjects)} subject(s)):")
     for s in subjects:
-        click.echo(f"\n  • aliases: {', '.join(s.aliases)}")
-        click.echo(f"    locked:  {s.locked}")
-        if s.forbid:
-            click.echo(f"    forbid:  {', '.join(s.forbid)}")
-        if s.lora:
-            click.echo(f"    lora:    {s.lora.name}@{s.lora.strength}")
+        click.echo("")
+        _echo_subject(s, indent="  ")
 
 
 @canon.command("edit")
@@ -1123,12 +1144,16 @@ def canon_show(project: str) -> None:
 @click.argument("subject")
 @click.option("--add-alias", "add_alias", multiple=True, help="Add an alias (repeatable).")
 @click.option("--rm-alias", "rm_alias", multiple=True, help="Remove an alias (repeatable).")
-@click.option("--add-forbid", "add_forbid", multiple=True,
-              help="Add a forbidden phrase (repeatable). Match is raw substring — prefer "
-                   "multi-word phrases over bare words (a bare 'tall' also strips 'metallic').")
-@click.option("--rm-forbid", "rm_forbid", multiple=True, help="Remove a forbidden phrase (repeatable).")
-@click.option("--locked", "locked", default=None,
-              help="Replace the locked descriptor (the only field that's a full overwrite).")
+@click.option("--id", "subject_id", default=None,
+              help="Set the versioned asset id (pass an empty string to clear).")
+@click.option("--reference-pack", "reference_pack", default=None,
+              help="Set the reference bundle id (empty string clears).")
+@click.option("--wardrobe", "wardrobe", default=None,
+              help="Set the wardrobe asset id (empty string clears).")
+@click.option("--hair", "hair", default=None,
+              help="Set the hair asset id (empty string clears).")
+@click.option("--region", "region", default=None,
+              help="Set the region mask name (empty string clears).")
 @click.option("--lora", "lora", default=None,
               help="Set/replace the pinned character LoRA as NAME[:STRENGTH] (registry name).")
 @click.option("--clear-lora", "clear_lora", is_flag=True, default=False,
@@ -1136,22 +1161,25 @@ def canon_show(project: str) -> None:
 def canon_edit(
     project: str, subject: str,
     add_alias: tuple[str, ...], rm_alias: tuple[str, ...],
-    add_forbid: tuple[str, ...], rm_forbid: tuple[str, ...], locked: str | None,
+    subject_id: str | None, reference_pack: str | None, wardrobe: str | None,
+    hair: str | None, region: str | None,
     lora: str | None, clear_lora: bool,
 ) -> None:
     """Edit ONE subject of PROJECT's canon in place, selected by SUBJECT (any of its aliases).
 
-    Surgical alternative to `canon set` (which replaces the whole subject): change just an
-    alias, a forbid phrase, the locked descriptor, or the pinned LoRA without restating the rest.
+    Surgical alternative to `canon set` (which replaces the whole subject): change just
+    an alias, an asset reference, or the pinned LoRA without restating the rest. Legacy
+    locked/forbid fields on the stored subject are preserved untouched.
 
         canon edit celeste-you-dangerous "the narrator" \\
-          --locked "...the full new descriptor..." --add-forbid "lanky"
+          --id narrator_v1 --reference-pack narrator_refs_v1
     """
-    if not any([add_alias, rm_alias, add_forbid, rm_forbid, locked is not None,
-                lora is not None, clear_lora]):
+    field_edits = [subject_id, reference_pack, wardrobe, hair, region]
+    if not any([add_alias, rm_alias, lora is not None, clear_lora,
+                *[v is not None for v in field_edits]]):
         raise click.UsageError(
-            "Nothing to edit. Pass at least one of --add-alias / --rm-alias / "
-            "--add-forbid / --rm-forbid / --locked / --lora / --clear-lora."
+            "Nothing to edit. Pass at least one of --add-alias / --rm-alias / --id / "
+            "--reference-pack / --wardrobe / --hair / --region / --lora / --clear-lora."
         )
     if lora and clear_lora:
         raise click.UsageError("Pass either --lora or --clear-lora, not both.")
@@ -1164,9 +1192,9 @@ def canon_edit(
         updated = store.update_subject(
             subject,
             add_aliases=list(add_alias), remove_aliases=list(rm_alias),
-            add_forbid=list(add_forbid), remove_forbid=list(rm_forbid),
-            locked=locked,
             lora=_parse_lora(lora) if lora else None, clear_lora=clear_lora,
+            id=subject_id, reference_pack=reference_pack, wardrobe=wardrobe,
+            hair=hair, region=region,
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
