@@ -24,7 +24,10 @@ with `WorkflowTemplate`/`slot_inference`, `ModelRegistry`, `canon`, `lora_guard`
    same characters, new pose/action" — is an instruction edit over the prior approved frame,
    which Z-Image Turbo (pure t2i) cannot do. Identity comes from reference images (character +
    outfit sheets), optionally with a light style LoRA stacked; the Lightning 4-step LoRA keeps
-   iteration fast. Z-Image Turbo stays for ideation and scene-opening drafts.
+   iteration fast. Z-Image Turbo stays for non-canonical ideation only — NOT scene-opening
+   production frames (amended 2026-07-15: keyframe/still authority is plate-first per the
+   consolidated audit §17; a scene opens on its approved framing plate, characters inserted
+   by masked edits).
 4. **Canon evolves from "pinned LoRA" to "pinned reference set"** (LoRA pinning stays for
    Z-Image drafts; reference-sheet pinning is added for Qwen keyframe edits).
 5. **Bake-off discipline:** new models validate on a separate pod + separate network volume
@@ -268,8 +271,9 @@ estimate isolation (image history doesn't contaminate video estimates).
 ## 5. Keyframe production method (the craft loop this enables)
 
 Per scene (one camera setup):
-1. **Scene-opening keyframe**: Z-Image Turbo draft (existing flow, LoRA canon) or a Qwen
-   composition from the two character reference sheets. Approve it.
+1. **Scene-opening keyframe** (amended 2026-07-15, audit §17): the scene's approved framing
+   plate with characters inserted by sequential masked edits — not a fresh Z-Image draft
+   (Z-Image is non-canonical ideation only). Approve it.
 2. **Each subsequent keyframe**: `draft --from <last approved> --template qwen-edit-2511` with a
    same-shot instruction; canon auto-appends character/outfit sheets as references. Generate,
    react, approve. This re-anchors identity and the Coraline aesthetic at every boundary —

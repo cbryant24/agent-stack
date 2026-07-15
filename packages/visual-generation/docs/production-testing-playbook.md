@@ -1,5 +1,14 @@
 # Production Testing Playbook — visual-generation (`celeste-you-dangerous`)
 
+> **MECHANICS CHANGED (2026-07-15, audit §5/§11):** the text-canon machinery this playbook
+> validates was **deleted** — locked-descriptor injection, `@token` expansion, and blind
+> `forbid` stripping no longer exist, and the `── Canon enforced (deterministic) ──` block is
+> now `── Canon applied (LoRA pins) ──` (only `pinned canon LoRA` / `canon override` / prune
+> notes appear; `injected canon …` and `removed forbidden phrasing …` expectations below are
+> obsolete). Workflows 5–6 are additionally marked **deprecated paths** in place. The harness
+> *structure* — run a workflow, capture the marked output, report back — remains the valid
+> exercise pattern; expected canon-text outputs should be read as historical.
+
 A step-by-step harness for exercising **every** way to generate the images for this story in
 production, so we can confirm the recent implementation behaves as we both expect. Run a
 workflow, capture the marked output, and report back; we adjust from there.
@@ -9,9 +18,9 @@ workflow, capture the marked output, and report back; we adjust from there.
 - **Knowledge surfacing** — categorized Qdrant knowledge actually reaches the LLM at draft time.
 - **Direct verification** — `knowledge-verify` + the `── Knowledge surfaced ──` provenance block prove it, deterministically.
 - **Doc compilation** — your own `directed.md`/`script.md`/etc. compile into the prompt (`── Compiled from ──`), so you feed key points, not hand-written prompts.
-- **Canon (text)** — locked identity descriptors reach every scene regardless of LLM discretion (`── Canon enforced ──`).
-- **Batch anchor continuity (B)** — `batch build --from` carries a character across scenes via img2img.
-- **Character LoRA (C)** — `canon set --lora` pins a trained character LoRA into every scene the subject appears in.
+- **Canon (subject registry)** — scene-named subjects reach composition as the cast, and their character LoRAs are pinned deterministically (`── Canon applied (LoRA pins) ──`). *(Historical: locked-text enforcement — deleted.)*
+- **Batch anchor continuity (B)** — `batch build --from` carries a character across scenes via img2img *(deprecated path — see Workflow 5)*.
+- **Character LoRA (C)** — `canon edit … --lora` pins a trained character LoRA into every scene the subject appears in *(deprecated path — see Workflow 6)*.
 
 ---
 
@@ -377,6 +386,11 @@ agent visual-generation generate /tmp/celeste-test.batch.md --all --endpoint <EN
 
 ## Workflow 5 — Anchor-frame img2img continuity (feature B)
 
+> **DEPRECATED PATH (2026-07-15, audit §11):** anchor-frame img2img is off the continuity
+> path — it imports one frame's composition, not identity. The harness structure (commands,
+> gates, report-back discipline) remains a valid exercise pattern; the continuity claim does
+> not. Production continuity is plate-first (audit §17).
+
 **Path for:** carry the narrator's look across all scenes by anchoring every scene to **one
 approved frame** as an img2img refinement. The no-training interim continuity fix.
 
@@ -419,11 +433,17 @@ agent visual-generation batch build celeste-you-dangerous \
 
 ---
 
-## Workflow 6 — Character-LoRA continuity (feature C — the durable fix)
+## Workflow 6 — Character-LoRA continuity (feature C — DEPRECATED, not "the durable fix")
 
-**Path for:** the strongest continuity — a **trained character LoRA** pinned into **every** scene a
-lead appears in, via canon. Identity travels at the model level, not just the text. This is the only
-path that fully locks a face across all four scenes.
+> **DEPRECATED PATH (2026-07-15, audit §7/§11):** a character LoRA trained on the current
+> synthetic dataset encodes a character class, not a locked identity — "fully locks a face"
+> is **withdrawn** (the claim rested on training inputs misread as outputs, audit §1). No
+> LoRA retraining until a coherent reference pack with held-out validation exists (audit
+> §16, training discipline). The harness structure below (training ops, registration,
+> pinning mechanics) remains valid as infrastructure documentation.
+
+**Path for:** a **trained character LoRA** pinned into **every** scene a lead appears in, via
+canon — a character-class prior at the model level (not a face lock; see the banner above).
 
 This workflow includes the training itself as first-class steps, grounded in your ingested tutorial
 **"How to Train a Character LoRA for Z-Image Turbo"** (Seb G., `k0UWypeLcJ4`) — the one Workflow 1

@@ -1,5 +1,11 @@
 # Character LoRA — plain-English explainer
 
+> **PROVENANCE (2026-07-15, audit §1):** the training dataset for these LoRAs =
+> agent-generated synthetic frames (the gen-ids in the dataset filenames are the agent's own
+> prior generation records). Any image shown or referenced in this doc is a training INPUT
+> unless a generation id proves it is an output. A LoRA trained on this material encodes a
+> character class, not a locked puppet identity (audit §7).
+
 Written 2026-07-01 to demystify the terms, models, and settings from the narrator-LoRA session.
 Companion to [`character-lora-plan.md`](character-lora-plan.md) (the phased plan) and
 [`character-lora-narrator-audit.md`](character-lora-narrator-audit.md) (the dataset audit).

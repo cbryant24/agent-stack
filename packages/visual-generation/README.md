@@ -81,6 +81,12 @@ CLI generations" below).
 built).** The steps below are the *operational* path for producing WAN clips in ComfyUI
 on the pod, plus what was decided during setup. The agent does not yet drive WAN.
 
+> **Architecture note (2026-07-15, consolidated audit §17):** still/keyframe authority is
+> **plate-first** — approved set plates + character reference packs + sequential masked
+> edits. Z-Image-Turbo is **non-canonical ideation only** (thumbnails, style exploration,
+> storyboards); it is not the source of truth for recurring production assets, and video
+> work waits on the still-continuity proof (audit §14, Phase 7).
+
 **Model:** WAN 2.2 14B (open-weights, Apache-2.0 — the reason it runs self-hosted on
 RunPod; WAN 2.5/2.6 are closed APIs and were rejected). Two modes in scope: **T2V**
 (text→video) and **I2V** (image→video, a seed image becomes frame 1). VACE is deferred.
@@ -226,14 +232,15 @@ Orientation for a newcomer operating this agent:
   plate), so registering a graph is no longer an open prerequisite for inpaint. Authoring
   *new* graphs (e.g. an img2img+LoRA template) remains a user task (see
   [workflow register](#workflow-register-exported-apijson---name-n)).
-- **Known bug — canon subject-detection matches *negated* mentions (open).** `canon._subject_present`
-  keys off the subject's name/aliases appearing in the prompt, so a phrase like **"no Celeste in
-  this shot"** still counts Celeste as present — her locked text and her pinned LoRA get injected
-  into what should be a solo shot. Two anti-patterns feed this: (a) it's bad Z-Image craft to name
-  an absent subject at all (a positive-only model can *summon* "no Celeste"), and (b) presence
-  detection should ignore negated/excluded contexts. **Workaround today:** don't name a subject you
-  want *out* of a shot — describe only who/what *is* there. **Fix (planned):** strip
-  `no/without/not <subject>` contexts before matching in `_subject_present`.
+- **Known bug — canon subject-detection matches *negated* mentions (open, blast radius reduced).**
+  `canon._subject_present` keys off the subject's name/aliases appearing in the prompt, so a
+  phrase like **"no Celeste in this shot"** still counts Celeste as present — her pinned LoRA
+  gets stacked onto what should be a solo shot. (Since the locked-text injection was removed
+  per the consolidated audit, the LoRA pin is the only remaining effect.) It's also bad
+  Z-Image craft to name an absent subject at all (a positive-only model can *summon* "no
+  Celeste"). **Workaround:** don't name a subject you want *out* of a shot — describe only
+  who/what *is* there. **Fix (planned):** strip `no/without/not <subject>` contexts before
+  matching in `_subject_present`.
 - **Pod realities:** a new pod = a new proxy URL (update `$EP`) AND a fresh
   ComfyUI that does NOT carry over a workflow you built in the browser — so
   export ([API format](#save-workflow-format-vs-export-api-format)) +
@@ -367,18 +374,22 @@ assets. **Tradeoffs:** extra editing labor; the plate must intentionally leave
 room for the overlay (clear headroom, blank-ish screens); IP responsibility
 shifts to composite time.
 
-### Character continuity: validate before propagating
+### Character continuity: a conditioning problem, not a prompt problem
 
-Prove a character's locked descriptor block on a **single** render before
-reusing it across other beats. For two-character beats, validate the **two-shot
-itself** (distinct puppets, no identity bleed — which held) before relying on it,
-rather than assuming a descriptor that works solo will compose cleanly.
+Per the consolidated audit (§4/§6): identity and continuity failures are
+**conditioning/asset-authority gaps** — prompt descriptors, seeds, and LoRA
+strengths cannot pin an exact puppet, and two globally-applied character LoRAs
+can never isolate two identities in one frame (no spatial routing exists; the
+"which held" solo-recipe validation claim was withdrawn — audit §1). The
+production path is **plate-first**: versioned character reference packs +
+approved set plates + sequential masked single-identity edits (audit §17).
 
-Three continuity mechanisms, weakest → strongest: a shared **fixed seed** (drifts as
-the prompt changes); **anchor-frame img2img** (`batch build --from <gen_id>` — imports
-one frame's composition into every scene; a real improvement, not a face lock); and a
-**character LoRA** pinned via `canon set … --lora` (model-level identity on every scene
-— the durable fix). See "Lock identity descriptors" below.
+The in-repo mechanisms are **deprecated ideation aids**, weakest → strongest: a
+shared **fixed seed** (drifts as the prompt changes); **anchor-frame img2img**
+(`batch build --from <gen_id>` — imports one frame's composition, not a face
+lock); and a **character LoRA** pinned via `canon edit … --lora` (a
+character-class prior at the model level — useful for rough solo ideation,
+never an identity lock). None of them is production continuity.
 
 ### Save (workflow) format vs. Export (API) format
 
@@ -487,24 +498,28 @@ drafter won't treat it as a character LoRA again.
 
 ### LoRA-stack guardrails (automatic — `draft` / `redraft` / `generate`)
 
-Two model-agnostic guards protect every generation (see `lora_guard.py`). **Canon owns
-identity**, and these enforce it:
+Advisory guards on every generation (see `lora_guard.py`). Scope honestly stated: they
+**mitigate over-strength and duplicate-checkpoint artifacts — they do NOT provide identity
+isolation** (no strength value or stack arrangement spatially routes an identity to one
+figure; audit §6):
 
 - **Auto-prune (at `draft`).** When the LLM composes a `lora_stack`, any identity LoRA that
   duplicates a canon-pinned character — the exact file *or* a checkpoint variant sharing its
   stem in either direction (`narrator-…-turbo-2500` **or** the superseded `narrator-…-coraline`
   vs the pinned `narrator-…-coraline-turbo`) — is dropped, with a note. So a spec can never
-  carry two files for one character. Different characters (a legit two-shot) and non-identity
-  adapters are untouched; a character canon does **not** pin is left alone (no authority to
-  override). `redraft` sidesteps the issue entirely by **inheriting the parent's clean stack**
-  rather than re-composing it.
+  carry two files for one character. Non-identity adapters are untouched; a character canon
+  does **not** pin is left alone. `redraft` sidesteps the issue entirely by **inheriting the
+  parent's clean stack** rather than re-composing it.
 - **Strength advisory (at `draft`, `redraft`, and the `generate` cost gate).** A LoRA at/above
-  a universal ceiling (default **1.5**, env-overridable via `VG_LORA_STRENGTH_WARN`), or a set
-  of identity LoRAs whose combined strength is high, prints a **warning** (warn-loudly-allow —
-  never blocks) explaining that at that level the LoRA **overrides prompt adherence** (pose /
-  staging / background directions get ignored) and its **identity bleeds** onto other figures.
-  The message carries the fix: a character LoRA that only "takes" at ~2.0 is base-trained but
-  run on a distilled/Turbo model — retrain it on Turbo so it applies near **1.0**.
+  a universal ceiling (default **1.5**, env-overridable via `VG_LORA_STRENGTH_WARN`) prints a
+  **warning** (warn-loudly-allow — never blocks): at that level the LoRA **overrides prompt
+  adherence** and bleeds onto other figures; a character LoRA that only "takes" at ~2.0 is
+  base-trained but run on a distilled/Turbo model — retraining it on Turbo restores prompt
+  adherence at ~1.0 (it does **not** make multi-identity frames safe).
+- **Dual-identity stacking advisory.** ANY stack carrying 2+ identity LoRAs draws a warning:
+  dual-identity stacking is deprecated outright (audit §6) — no strength pair isolates
+  identities in a single pass. Two-character frames use sequential masked single-identity
+  edits instead.
 
 ### `workflow register <exported-api.json> [--name N]`
 
@@ -647,62 +662,48 @@ and the agent compiles those docs + retrieved knowledge into the prompt:
 `--provider` selects the LLM (Claude today; OpenAI is a documented stub). `--model` is a free
 string the provider resolves (`sonnet`/`opus` or a concrete id).
 
-### Lock identity descriptors — `canon set/edit/show/rm <project>`
+### Canon subjects — `canon set/edit/show/rm <project>`
 
-> **Full reference: [`docs/canon-guide.md`](docs/canon-guide.md)** — concept, every command +
-> option, the "where does each change go" cheat-sheet, worked `celeste-you-dangerous` examples
-> (characters **and** places), and the gotchas. The summary below is the orientation.
+> **Full reference: [`docs/canon-guide.md`](docs/canon-guide.md)** — the subject registry
+> (cast naming, LoRA pinning, asset references), every command + option, and the gotchas.
+> The summary below is the orientation.
 
-Canon is **deterministically enforced** (not advisory) — the one channel that doesn't depend
-on the model's discretion. It locks anything whose look must be **identical across every image**:
-a **character** *or* a **recurring place** (a bar, a room). Set it once and every draft/redraft
-that names the subject gets it:
+Canon is a per-project **subject registry**: each subject = aliases + optional pinned
+character LoRA + versioned asset references (`--id`, `--reference-pack`, `--wardrobe`,
+`--hair`, `--region`, aligned with `docs/shared-shot-schema.md`). It does two deterministic
+things at draft/redraft: feed the scene's named cast into composition (by name and asset id —
+never appearance prose), and pin each present subject's character LoRA. It is **not an
+identity authority** — text canon was a prompt macro (consolidated audit §5); identity and
+set authority are versioned reference packs and approved plates (plate-first, audit §17).
 
 ```
 visual-generation canon set celeste-you-dangerous \
-  --alias "the narrator" --alias "@narrator" \
-  --locked "…long black yarn dreadlocks falling to the middle of his back" \
-  --forbid "short hair" \
+  --alias "the narrator" --alias "narrator" \
+  --id narrator_v1 --reference-pack narrator_refs_v1 \
   --lora celeste-narrator.safetensors:0.8
 ```
 
-`@narrator` expands in place; a plain "the narrator" mention injects the locked descriptor if
-absent; `--forbid` phrasings are stripped. The output shows `── Canon enforced ──`. A scene that
-**names** a canon subject also feeds it into composition (cast-weaving), and a `⚠ … ABSENT`
-advisory fires if the LLM still dropped it — so a missing lead is never silent.
+The output shows `── Canon applied (LoRA pins) ──`. A scene that **names** a canon subject
+feeds it into composition (cast-weaving), and a `⚠ … ABSENT` advisory fires if the LLM
+dropped it — a missing lead is never silent. `draft --canon "<subject>"` (repeatable; also on
+`redraft`) **forces** a subject into the cast and forces its LoRA pin when the model names it
+by other words.
 
-**`canon set` REPLACES the whole subject** (keyed by `aliases[0]`) — omitting `--forbid`/`--lora`
-drops them. To change **one field** without restating the rest, use **`canon edit`** (prints
-Before/After):
+**`canon set` REPLACES the whole subject** (keyed by `aliases[0]`) — including dropping any
+legacy `locked`/`forbid` fields still in stored JSON. To change **one field** without
+restating the rest, use **`canon edit`** (prints Before/After; asset fields clear with an
+empty string). Two subjects must have **non-overlapping aliases** (a shared `"the bar"` fires
+the wrong subject). Note: `canon/*.json` lives in `~/agent-data` (**outside git**) — it does
+**not** sync between machines; legacy files load fine and are flagged
+`(legacy locked/forbid present — ignored)`.
 
-```
-# tweak just the descriptor + add a forbid; aliases/LoRA preserved
-visual-generation canon edit celeste-you-dangerous "the narrator" \
-  --locked "…short and stocky… dreadlocks falling to mid-back" --add-forbid "lanky"
-```
-
-`canon edit` options: `--add-alias` / `--rm-alias` / `--add-forbid` / `--rm-forbid` / `--locked`
-/ `--lora` / `--clear-lora` (all optional; select the subject by **any** alias). **Two rules that
-bite:** `--forbid` is a raw substring strip (`"tall"` also hits `me`**`tall`**`ic` — forbid
-phrases, not bare words), and two subjects must have **non-overlapping aliases** (a shared
-`"the bar"` fires the wrong lock). See the guide. Note: `canon/*.json` lives in `~/agent-data`
-(**outside git**) — it does **not** sync between machines.
-
-**Forcing canon — `draft --canon "<subject>"`.** Injection only fires on an **exact alias match**,
-so canon **misses** when the model names a subject by other words (e.g. writes "sports-bar" while
-the alias is "the sports bar") — common for **places** and **`--from` refinements**. `draft
---canon "<subject>"` (repeatable; also on `redraft`) **forces** that subject's lock in and strips
-its forbids **even if the prompt never names it** (applied line: `forced canon for '…'`).
-
-**Character LoRA (model-level continuity).** `--lora NAME[:STRENGTH]` pins a trained character
-LoRA into the stack on *every* scene the subject appears in — the model-level half of canon.
-Locked text gives the *textual* identity; the LoRA gives the same identity at the model level,
-both guaranteed deterministically (the LLM never has to pick it; pinning dedupes if it did).
-This is the durable fix for cross-scene character drift that anchor-frame img2img only
-approximates. End-to-end: **curate** ~15–30 stills of the subject → **train** a Z-Image LoRA
-on the pod → **register** it (`model sync`, flagged `identity_bearing`) → **`canon set … --lora`**
-so it's pinned project-wide. The NAME must key into the model registry; a pinned LoRA on a
-template with no loader slot is surfaced as a "won't apply" advisory rather than silently dropped.
+**Character LoRA (deprecated ideation aid).** `--lora NAME[:STRENGTH]` pins a trained
+character LoRA into the stack on *every* scene the subject appears in. A LoRA is a
+**character-class prior**, not a locked identity (audit §7) — useful for rough solo
+ideation; never production continuity, and never a way to isolate two identities in one
+frame. The NAME must key into the model registry (flagged `identity_bearing`); a pinned LoRA
+on a template with no loader slot is surfaced as a "won't apply" advisory rather than
+silently dropped.
 
 ### Prove knowledge isn't being ignored — `knowledge-verify` / `digest`
 
@@ -814,10 +815,13 @@ signature: identity *bleed* (the character painted onto other figures) plus *pro
 (the LoRA drowns out the prose). Root cause: a character LoRA **trained on Z-Image Base but run
 on Z-Image Turbo** only registers around strength **2.0+**, and that high is exactly the
 override/bleed zone. **Fix:** retrain the LoRA **on Turbo** (with the Ostris de-distill adapter)
-so it applies near **1.0**; then run each character LoRA at ~1.0 (a two-shot is 1.0 + 1.0). The
-agent now **warns** at draft/redraft and the generate cost gate when a strength is ≥ the ceiling
-(default 1.5) — heed it. Verify what a finished render actually used from the stored record
-(`lora_stack`/`model`/`settings` in `visual_generation_memory`, keyed by the gen id).
+so it applies near **1.0** — that restores prompt adherence. It does **not** make
+multi-character frames safe: strength never isolates identities (audit §6) — two-character
+frames need sequential masked single-identity edits, not a strength pair; the agent warns on
+any 2+ identity-LoRA stack. It also warns at draft/redraft and the generate cost gate when a
+strength is ≥ the ceiling (default 1.5) — heed it. Verify what a finished render actually used
+from the stored record (`lora_stack`/`model`/`settings` in `visual_generation_memory`, keyed
+by the gen id).
 
 **Two versions of the same character are stacked in one spec (muddy likeness).** The `draft` LLM
 tends to pile alternate checkpoints (e.g. `*-turbo-2500`) onto the pinned character LoRA. Since
@@ -826,9 +830,9 @@ older/hand-edited batch: keep exactly one file per character at canon strength. 
 source by unregistering bake-off scratch (`model rm <name>`), and re-roll via `redraft` (which
 inherits the parent's clean stack) rather than a fresh `draft`.
 
-**A "solo" shot pulls in the other character's identity/LoRA.** Almost always the prompt *names*
+**A "solo" shot pulls in the other character's LoRA.** Almost always the prompt *names*
 the absent character to exclude them ("no Celeste in this shot"); canon presence-detection matches
-the name and injects her anyway (see the negated-mention bug under "gaps worth closing"). **Fix:**
+the name and pins her LoRA anyway (see the negated-mention bug under "gaps worth closing"). **Fix:**
 reword to name only who *is* present, then re-roll. If it slipped into a spec, `batch rm` it and
 `redraft` with the absent character removed from the prose entirely.
 

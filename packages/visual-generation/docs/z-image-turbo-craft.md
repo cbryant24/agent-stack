@@ -11,6 +11,15 @@ maintainer: "Chris Bryant"
 evidence_scope: "Celeste-you-dangerous project empirical results + official/external Z-Image references"
 ---
 
+> **IDEATION-ONLY (2026-07-15).** Per the consolidated Coraline audit (§8/§17) this doc has
+> left the continuity path: Z-Image-Turbo is for ideation, thumbnails, style exploration,
+> storyboards, and non-canonical variants — **not** the source of truth for recurring
+> production assets (identity/set authority is plate-first: reference packs + approved
+> plates + masked edits). The craft notes below remain valid as model-specific ideation
+> guidance (audit §12). Composition-Ledger verdicts about **identity/continuity**
+> (button-eye retention, two-shot stability) are **small-n observations** (typically n≤2),
+> not validated recipes — see `docs/agent-retrospective-corrections.md` §B3/§D4.
+
 # Z-Image Turbo Craft
 
 ## Purpose
@@ -419,7 +428,7 @@ soften only his body and surroundings — his face stays readable and his black 
 - **Risky case:** two characters facing forward, especially at different depths.
 - **Observed behavior:** Button eyes rendered on the near character but simplified into generic/cartoon eyes on the smaller background character; a prior face-forward two-shot dropped them on both.
 - **Implication:** Prompt wording is not the only cause. Pixel allocation and composition priority matter.
-- **Confirming counter-case (SUPPORTED):** when both faces sit on the **same plane** (same-depth close two-shot), both sets of button eyes held even pulled back (`5489cbf7`, `c7ae42b8`). Contrast the different-depth keeper `2c2c912e`, where the small/back face dropped. So same-plane placement — not just prompting — is the lever that protects the second face. See the Composition Ledger.
+- **Confirming counter-case (SUPPORTED — small-n, n=2; demoted 2026-07-15):** when both faces sit on the **same plane** (same-depth close two-shot), both sets of button eyes held even pulled back (`5489cbf7`, `c7ae42b8`). Contrast the different-depth keeper `2c2c912e`, where the small/back face dropped. So same-plane placement — not just prompting — is the lever that protects the second face. Two samples: an observation, not a validated recipe (retrospective §D4 wants n≥5 + a counter-case search). See the Composition Ledger.
 
 ## Technique 7 — Use masked eye inpaint as the reliable correction
 
@@ -540,14 +549,14 @@ blue jeans and white socks, no shoes; the Air Jordan 1s belong to the narrator o
 
 | Composition | Internal outcome | Status |
 |---|---|---|
-| Solo/close face | Button eyes reliable in loved anchor | **SUPPORTED** |
-| Two-person **same-depth** close two-shot | Both characters' button eyes held even pulled back — both faces on the same plane (`5489cbf7`, `c7ae42b8`) | **SUPPORTED** |
+| Solo/close face | Button eyes reliable in loved anchor | **SUPPORTED (small-n)** |
+| Two-person **same-depth** close two-shot | Both characters' button eyes held even pulled back — both faces on the same plane (`5489cbf7`, `c7ae42b8`) | **SUPPORTED (small-n, n=2)** |
 | Two-person **different-depth** shot | Small/back face's button eyes dropped (`2c2c912e`) | **RISKY** |
 | Two-person face-forward shot | Small face details dropped on one or both characters | **RISKY** |
 | Foreground subject sharp, background subject blurred | Foreground eyes held; background eyes simplified | **RISKY** |
 | Foreground Celeste cross-legged, narrator behind cheering | Staging eventually reached a loved keeper | **LOCKED keeper composition** |
 | Narrator farther back near couch, jumping with one hand raised | User rated final staging ★5 | **LOCKED keeper composition** |
-| TV POV with back edge visible low in frame | Successfully sold the POV | **SUPPORTED** |
+| TV POV with back edge visible low in frame | Successfully sold the POV | **SUPPORTED (small-n)** |
 | Degree-based rotation instruction | Replaced as unreliable | **FAILED wording** |
 
 ## Keeper staging block
@@ -1093,7 +1102,7 @@ Do not copy image-only conclusions into Wan 2.2 without testing. In particular:
 ## 2026-06-27 — v1.1.0
 
 - **Added — new ★5 keeper anchor:** the couch ending (`57bd1c94`), with correct felt-puppet design and clean button eyes on both characters; recorded the five-beat set (bar meeting `ed49b68c`, pizza debate `73369544`, shared taste `2c2c912e`, Jazz Club `bd245d93`, couch ending `57bd1c94`).
-- **Promoted to SUPPORTED:** same-depth close two-shot holds both characters' button eyes (`5489cbf7`, `c7ae42b8`) — added to the Composition Ledger and Technique 6; positive wardrobe descriptors beat negative subtraction (Technique 14, `bfed13d5` → `a77c6bb1`); a coherent whole-body re-pose beats an impossible incremental one (Technique 15, `eafde073`); subject-orientation over camera-position language and the subtract-the-descriptor lighting lever (Techniques 1 and 11).
+- **Promoted to SUPPORTED (demoted 2026-07-15 to small-n observation, n=2 — retrospective §D4):** same-depth close two-shot holds both characters' button eyes (`5489cbf7`, `c7ae42b8`) — added to the Composition Ledger and Technique 6; positive wardrobe descriptors beat negative subtraction (Technique 14, `bfed13d5` → `a77c6bb1`); a coherent whole-body re-pose beats an impossible incremental one (Technique 15, `eafde073`); subject-orientation over camera-position language and the subtract-the-descriptor lighting lever (Techniques 1 and 11).
 - **Added — RISKY:** the felt/clay aesthetic descriptor band (Technique 13, `6959dda3` / `c2557f59` / `966fc7e2`); reaffirmed the button-eye dropout across **both** seeds (Button-Eye Failure Analysis), confirming it is a depth/size limit, not a wording one.
 - **Added — FAILED:** pose contradiction, redundant clause stacking (the third-leg case `2d9b11c8`), and leg-detail instability (`ce0be66f`) — all under Technique 15 and the "What Did Not Work" list; over-verbose redrafts drifting locked attributes (Technique 17).
 - **Demoted:** the legs-across-lap pose → edit-stage inpaint only (off the redraft path), per resolved Experiment 4 (seed-vs-design); kept `57bd1c94` as keeper.

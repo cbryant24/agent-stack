@@ -1,5 +1,14 @@
 # Character LoRA plan — narrator & Celeste (Z-Image)
 
+> **SUPERSEDED (2026-07-15)** by the consolidated Coraline audit §7 and
+> `docs/agent-retrospective-corrections.md` §B3. Kept as history. The dataset was ~12 of the
+> agent's own synthetic outputs — no approved hero geometry, no coherent multi-view package,
+> no held-out validation views — so the trained LoRAs encode a **character class, not a
+> locked puppet identity**. The "Phase 6 verification passed" / "usable for real scenes"
+> claims below are **withdrawn**: one two-shot iterated until "usable" is tuning, not
+> validation. Do not retrain on this dataset (audit §7: fix the source identity package
+> first). The RunPod / ai-toolkit operational gotchas (§4) remain valid.
+
 **Status:** planned, not started. **Written:** 2026-06-29 (machine A).
 **Picks up on:** another MacBook / another Claude Code instance — read this top to bottom first.
 **Project:** `celeste-you-dangerous`. **Image model:** `z_image_turbo_bf16.safetensors` (Z-Image-Turbo).

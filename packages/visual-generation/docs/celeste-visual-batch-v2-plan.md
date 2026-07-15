@@ -1,5 +1,13 @@
 # celeste-you-dangerous — visual-batch v2 plan (8 production shots)
 
+> **SUPERSEDED (2026-07-15)** by the consolidated Coraline audit (§6/§11) and
+> `docs/agent-retrospective-corrections.md` §B3. Kept as history. The "Proven per-shot
+> recipes (hard-won — follow them)" claim is **withdrawn**: the 1.5/1.5 two-LoRA two-shot
+> recipe is deprecated — LoRA-strength balancing is not identity isolation, and the
+> `visual-workflow-lora2` template has been deleted. Two-character frames use sequential
+> masked single-identity edits on a locked plate (audit §17, plate-first). Do not execute
+> this plan.
+
 **Status:** ready to execute, not started. **Written:** 2026-07-02 (end of the Celeste-LoRA session).
 **Picks up in:** a fresh Claude Code session — read this top to bottom first, then execute.
 **Goal:** a **fresh `visual-batch.md`** with **8 production stills** covering all four sections of

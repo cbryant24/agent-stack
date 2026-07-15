@@ -1,204 +1,126 @@
-# Canon — locked identity for characters *and* places
+# Canon — subject registry: cast naming, LoRA pinning, asset references
 
-Canon is the one channel in `visual-generation` that does **not** depend on the model's
-discretion. A retrieved fact can be ignored by the LLM; a **canon lock is enforced in code**
-on every `draft`/`redraft`. Use it for anything whose look must be **identical across every
-image** — a character, or a **recurring place** (a bar, a room, a street). This guide is the
-full reference: the mental model, every command and option, the gotchas we hit building the
-`celeste-you-dangerous` canon, and the cheat-sheet for where each kind of change belongs.
+> **Rewritten 2026-07-15** per the consolidated Coraline audit (§5/§11) and
+> `docs/agent-retrospective-corrections.md` §B3. The B3 row proposed retitling this doc
+> "deterministic prompt-macro + LoRA-pinning layer"; since the prompt-macro mechanism itself
+> (locked-text injection, `@token` expansion, blind `--forbid` substring stripping) has now
+> been **deleted from the code**, that title would describe a removed mechanism — B3's intent
+> is honored by this body rewrite instead. What canon is NOT: an identity authority. Text
+> descriptors were a prompt macro — they raised the probability of broad semantic traits and
+> could not pin geometry, materials, camera, or region assignment. Identity and set authority
+> are **versioned reference images and approved plates** (audit §17, plate-first).
+
+Canon is `visual-generation`'s per-project **subject registry**. A subject is a named,
+recurring entity (a character or a place) with:
+
+- **aliases** — the names the subject is called by (cast detection + LoRA pinning key);
+- an optional pinned **character LoRA** — the deprecated single-LoRA ideation path
+  (model-level character-class prior, pinned deterministically on every scene that names
+  the subject);
+- **asset references** aligned with [`docs/shared-shot-schema.md`](../../../docs/shared-shot-schema.md):
+  `id` (e.g. `celeste_v1`), `reference_pack`, `wardrobe`, `hair`, `region` — pipeline
+  metadata for the plate-first production path, never prompt prose.
 
 > **Where it lives:** `~/agent-data/visual-generation/canon/<project>.json`, one file per
 > project, `{"subjects": [ … ]}`. **This is outside the git repo** (`agent-data/`), so it does
-> **not** sync between machines — set canon up on each box, or copy the JSON across. (Canon
-> survives across sessions on the *same* machine; it's the cross-machine sync that git doesn't
-> cover.)
+> **not** sync between machines. Legacy files carrying `locked`/`forbid` fields still load and
+> round-trip untouched — those fields are ignored (`canon show` flags them).
 
 ---
 
-## 1. Where does each change go? (the cheat-sheet)
+## 1. What canon does now (the mechanics)
 
-The single deciding question for any change: **does this persist across *every* image of this
-thing, or is it just this shot?**
+1. **Cast-weaving (composition input).** `draft --scene` scans the scene text for subject
+   aliases and hands the named subjects to the craft step as the scene's cast — by **name
+   and asset id only**, never an appearance descriptor. The LLM is instructed to render each
+   cast character by name and to place/pose them, not describe them: identity is carried at
+   the model/asset level.
+2. **Deterministic LoRA pinning.** After the prompt is crafted, every subject the prompt
+   names by alias gets its registered character LoRA pinned into the spec's `lora_stack`
+   (`── Canon applied (LoRA pins) ──` in the output). Canon owns the pinned strength value —
+   if the LLM guessed a different strength for the same file, the canon value overrides it.
+   Duplicate checkpoints of the same character are pruned (`lora_guard`).
+3. **Absent-cast advisory.** If a scene-named subject is missing from the composed prompt,
+   you get a non-blocking `⚠ … ABSENT` advisory — a dropped lead is visible, not silent.
+4. **`draft --canon "<subject>"` (force).** Alias matching misses when the LLM names a
+   subject by other words. `--canon` (repeatable; also on `redraft`) forces the subject into
+   the compose-time cast **and** forces its LoRA pin even when the prompt never names it.
 
-| Home | Use it for | Persists across | How it's applied | Examples |
-|------|------------|-----------------|------------------|----------|
-| **Canon `locked`** — `canon set` / `canon edit` | The **immutable identity** of a named entity — a character **or a recurring place** | **Every** image that names the entity | Locked text is injected into the prompt deterministically wherever an alias appears | Narrator's dreadlocks & stocky build; the bar's 55″ flat-screen TVs; the terracotta facade |
-| **Canon `forbid`** — `canon set` / `canon edit` | Wrong words that keep creeping back in | Same as above (only while that subject is named) | The phrasing is stripped from the whole prompt | strip `CRT`, `lanky`, `chalkboard`, `antenna` |
-| **`--points`** — per `draft` | **This-shot** creative choices that **vary** scene to scene | Just that one render | Composed into the prompt by the LLM (advisory, not guaranteed) | Clothing, camera framing, time of day, what's in/out of frame, mood |
-| **`draft --from <gen_id>`** — refine | Iterating on a render you **mostly like** | Builds on one good frame (img2img) | The change rides on top of the source frame | "take this frame, pull the camera back, make it night, drop the tables" |
-| **`settings`** — on the spec | Engine knobs | The spec | Mapped through the template slot map at `generate` | `steps`, `cfg`, `denoise`, `width`/`height` |
-
-**Rules of thumb:**
-- Identity that never changes (a character, or a recurring place's look) → **canon `locked`**.
-- A trait the model keeps getting *wrong* in words → reinforce with **canon `forbid`**.
-- Anything that legitimately changes per scene (clothing, time, framing, props that come and go)
-  → **`--points`**, never canon. If you lock it, it's forced into *every* shot.
-- A render whose composition you already like → **`draft --from`**, don't re-roll from scratch.
+**What was removed** (audit §11 — delete, not deprecate): locked-descriptor injection,
+`@token` expansion, and the blind `forbid` substring strip. Appearance consistency is not a
+prompt-layer problem; see the audit's plate-first architecture (§17).
 
 ---
 
-## 2. How enforcement actually works (the mechanics)
+## 2. Where does each change go? (the cheat-sheet)
 
-Knowing these four mechanics explains every behavior — and every gotcha:
-
-1. **Whole-descriptor injection on any alias.** When **any** of a subject's aliases appears in
-   the composed prompt (word-boundary, case-insensitive), the **entire** `locked` descriptor is
-   injected. → *Corollary:* don't stuff exterior **and** interior into one lock, or an exterior
-   shot gets interior bric-a-brac forced in. Keep each lock **lean** (§4).
-2. **`@token` aliases expand in place.** An alias beginning with `@` (e.g. `@narrator`) is a
-   token: wherever it appears it's **replaced** by the locked descriptor, rather than triggering
-   an append. Plain aliases ("the narrator") trigger an append if the locked text isn't already
-   present.
-3. **`forbid` is a raw substring strip** — case-insensitive, **no word boundary**. → *Gotcha:*
-   `--forbid "tall"` also guts `me`**`tall`**`ic`, `in`**`stall`**. Forbid **multi-word phrases**
-   or words that aren't substrings of common words (`lanky`, `skinny`, `chalkboard`), and lean on
-   the **positive** locked text instead of forbidding bare words.
-4. **Deterministic, at compose-time, on `draft`/`redraft` only.** Canon runs **after** the LLM
-   writes the prompt and **before** the spec is saved. `generate` renders the stored prompt
-   **verbatim — it does NOT re-enforce canon.** → *Corollary:* if you hand-edit a batch spec and
-   delete the locked text, `generate` won't put it back. Re-`draft` to re-apply.
-
-### Forcing canon when the LLM names the subject by *other words* — `draft --canon`
-
-Because injection is an **exact word-boundary alias match**, canon **misses** when the model
-refers to a subject by words that aren't an alias — e.g. it writes *"sports-bar corner building"*
-or *"the bar entrance"* while your alias is `"the sports bar"`, so the bar lock never fires (no
-`── Canon enforced ──` line for it). This is most common with **places** and on **`draft --from`
-refinements** (where the prompt is inherited from a pre-canon parent).
-
-The escape hatch is **`draft --canon "<subject>"`** (repeatable; also on `redraft`): it **forces**
-the named subject's locked text in **and strips its forbids — even if the prompt never names it**.
-Select the subject by **any** alias. The applied line reads `forced canon for '<subject>'`.
-
-```bash
-# The bar's exterior lock fires even though the LLM wrote "sports-bar", not the alias:
-agent visual-generation draft --from <gen_id> --project celeste-you-dangerous --scene "Arrival" \
-  --points "pull the camera back; night" \
-  --canon "the sports bar"        # ← forces the storefront lock (flat-screens in, CRT stripped)
-```
-
-Two better long-term fixes that reduce the need for `--canon`: (1) add aliases that match how the
-model actually phrases it (but keep them **non-overlapping** between subjects — §3); (2) name the
-exact alias in `--points`. `--canon` is the guaranteed override when those aren't enough.
-
-### Cast-weaving (canon as a *composition input*, not just a filter)
-
-Because injection only fires on an alias that's *already in the prompt*, a scene could silently
-drop its own lead (the LLM writes a characterless shot → no alias → nothing to enforce). To
-close that, `draft --scene` now **feeds the scene's canon cast into composition**: subjects the
-scene **names** are handed to the LLM with their locked look so it writes them in *by name* —
-and then enforcement fires on the alias as usual.
-
-If a scene-named subject is **still** missing from the composed prompt, you get a non-blocking
-advisory:
-
-```
-⚠ Canon character(s) named in this scene but ABSENT from the prompt:
-  • 'the narrator' is named in scene 'Arrival' but absent from the drafted prompt —
-    re-draft with a point naming them, or proceed if this shot intentionally omits them.
-```
-
-This makes a dropped lead **visible** instead of silent. An intentional establishing shot with
-no figure is fine — the advisory is informational.
+| Home | Use it for | How it's applied |
+|------|------------|------------------|
+| **Canon subject** — `canon set` / `canon edit` | A recurring entity's aliases, asset references, pinned LoRA | Cast naming + deterministic LoRA pin on every scene that names it |
+| **`--points`** — per `draft` | This-shot creative choices (clothing, framing, time of day, mood) | Composed into the prompt by the LLM (advisory) |
+| **`draft --from <gen_id>`** — refine | Iterating on a render you mostly like | img2img/inpaint on the source frame |
+| **`settings`** — on the spec | Engine knobs (`steps`, `cfg`, `denoise`, dims) | Mapped through the template slot map at `generate` |
+| **Reference packs / plates** (plate-first path) | Identity and set authority | Versioned image assets + masks — see the consolidated audit §10/§17 |
 
 ---
 
 ## 3. Subjects — characters *and* recurring places
 
-A **subject** is one locked entity: `aliases` + `locked` + optional `forbid` + optional `lora`.
-Subjects are **not** only characters — any named, recurring thing whose look should be
-consistent is a subject. In `celeste-you-dangerous` there are four:
+A subject is `aliases` + optional asset references + optional `lora`. In
+`celeste-you-dangerous` there are four: the narrator, Celeste, the bar exterior, the bar
+interior.
 
-| Subject | Kind | Why it's canon |
-|---|---|---|
-| **the narrator** (Chris) | character | Hair length, build, skin must never drift |
-| **Celeste** | character | The waitress / love interest, recurring across scenes 2–4 |
-| **the bar exterior** | place | Recurring storefront — facade, plain entrance, exterior TVs |
-| **inside the bar** | place | Recurring interior — bar counter, seating, wall TVs |
+### Alias disambiguation — still the most important rule
 
-### Alias disambiguation — the most important place-canon rule
-
-The alias is **what decides which lock fires.** If two subjects share an alias, the wrong lock
-can fire. Real example we hit: giving the **exterior** the bare alias `"the bar"` collides with
-the interior — an interior scene narrating *"he sat at the bar"* would inject the **storefront
-facade** into an **interior** shot.
-
-**Rule: aliases must be unambiguous and non-overlapping.** For the bar:
-
-- **Exterior** → `"the storefront"`, `"outside the bar"`, `"the bar exterior"`, `"the sports bar"`
-- **Interior** → `"inside the bar"`, `"the bar interior"`, `"the bar counter"`
-
-Then steer which fires by how you name it in `--points`/scene text: *"the storefront at night"*
-(exterior) vs *"inside the bar, at the counter"* (interior). **Never name both in one draft** —
-both locks would inject.
+Aliases decide which subject a scene names (cast + LoRA pin). If two subjects share an
+alias, the wrong subject fires. **Aliases must be unambiguous and non-overlapping** — e.g.
+exterior → `"the storefront"`, `"outside the bar"`; interior → `"inside the bar"`,
+`"the bar counter"`. Never name both in one draft.
 
 ---
 
-## 4. The lean-lock principle
+## 4. Command reference
 
-Put in `locked` **only** the invariants that (a) must be identical every appearance **and**
-(b) are actually visible in the shots where the subject appears. Everything else is `--points`.
-
-- ✅ In the lock: the narrator's dreadlocks + build; the bar's flat-screen TVs, terracotta
-  facade, warm-wood palette.
-- ❌ Not in the lock: clothing (varies), the crowd (varies), sidewalk tables (you remove them in
-  some shots), time of day (unless it's *always* night) — these are `--points`.
-
-A bloated lock (every interior prop + every exterior detail in one descriptor) makes the prompt
-long, forces irrelevant detail into the wrong frame, and dilutes Z-Image at 8 steps. Split a
-place into **exterior** and **interior** subjects when each is a distinct, recurring frame.
-
----
-
-## 5. Command reference
-
-All canon commands are **free** (no LLM, no GPU) and file-backed. `<project>` is the slug
-(e.g. `celeste-you-dangerous`); `<subject>` selects a subject by **any** of its aliases.
+All canon commands are **free** (no LLM, no GPU) and file-backed. `<project>` is the slug;
+`<subject>` selects a subject by **any** of its aliases.
 
 ### `canon show <project>`
 
-Print every locked subject (aliases, locked, forbid, lora). Run it first — `edit` works from
-what you see here.
+Print every subject (aliases, asset references, lora). Subjects whose stored JSON still
+carries legacy fields print `(legacy locked/forbid present — ignored)`.
 
-### `canon set <project> --alias … --locked … [--forbid …] [--lora NAME[:STRENGTH]]`
+### `canon set <project> --alias … [asset options] [--lora NAME[:STRENGTH]]`
 
-**Create or fully REPLACE** a subject, keyed by its first alias (`aliases[0]`, case-insensitive).
-
-| Option | Repeatable | Meaning |
-|---|---|---|
-| `--alias` | ✅ (≥1 required) | A name the subject is called by. `aliases[0]` is the key. Prefix `@` for a token that **expands in place**. |
-| `--locked` | required | The canonical descriptor injected whenever the subject is named. |
-| `--forbid` | ✅ | A phrasing to strip from the prompt (raw substring — see §2.3). |
-| `--lora` | — | `NAME[:STRENGTH]` character LoRA pinned whenever the subject appears (model-level continuity). `NAME` must key into the model registry; strength defaults to `1.0`. |
-
-⚠ **`set` replaces the *whole* subject.** Omitting `--forbid`/`--lora` **drops** them. To change
-just one field without restating everything, use **`canon edit`**. (`set` now prints a reminder
-to this effect when it replaces an existing subject.)
-
-### `canon edit <project> <subject> [--add-alias …] [--rm-alias …] [--add-forbid …] [--rm-forbid …] [--locked …]`
-
-**Surgically edit** an existing subject in place — the safe alternative to `set` when you only
-want to tweak one thing. Prints **Before / After** so you can see exactly what changed.
+**Create or fully REPLACE** a subject, keyed by its first alias (case-insensitive).
 
 | Option | Repeatable | Meaning |
 |---|---|---|
-| `--add-alias` | ✅ | Add an alias (deduped case-insensitively). |
-| `--rm-alias` | ✅ | Remove an alias (refuses to remove the **last** one). |
-| `--add-forbid` | ✅ | Add a forbidden phrase. Prefer multi-word phrases over bare words (§2.3). |
-| `--rm-forbid` | ✅ | Remove a forbidden phrase. |
-| `--locked` | — | Replace the locked descriptor (the one field that *is* a full overwrite). |
-| `--lora` | — | Set/replace the pinned character LoRA as `NAME[:STRENGTH]` (registry name). |
-| `--clear-lora` | — | Remove the pinned character LoRA (mutually exclusive with `--lora`). |
+| `--alias` | ✅ (≥1 required) | A name the subject is called by. `aliases[0]` is the key. |
+| `--id` | — | Versioned asset id (e.g. `celeste_v1`) — shared-shot-schema aligned. |
+| `--reference-pack` | — | Versioned reference bundle id (e.g. `celeste_refs_v1`). |
+| `--wardrobe` | — | Versioned wardrobe asset id (e.g. `black_bar_uniform_v1`). |
+| `--hair` | — | Versioned hair asset id (e.g. `bun_front_curl_v1`). |
+| `--region` | — | Named region mask (e.g. `celeste_mask`). |
+| `--lora` | — | `NAME[:STRENGTH]` character LoRA pinned whenever the subject appears. `NAME` must key into the model registry; strength defaults to `1.0`. |
 
-At least one edit option is required. `<subject>` may be **any** current alias. Everything you
-don't name — the LoRA, untouched aliases/forbids, the descriptor if you don't pass `--locked` —
-is preserved.
+⚠ **`set` replaces the *whole* subject** — including dropping any legacy `locked`/`forbid`
+still in the stored JSON. Use **`canon edit`** to change one field while preserving the rest.
+
+### `canon edit <project> <subject> [--add-alias …] [--rm-alias …] [asset options] [--lora …] [--clear-lora]`
+
+**Surgically edit** an existing subject in place. Prints **Before / After**. Everything you
+don't name — untouched aliases, the LoRA, legacy fields — is preserved.
+
+| Option | Meaning |
+|---|---|
+| `--add-alias` / `--rm-alias` | Add/remove an alias (repeatable; refuses to remove the last one). |
+| `--id` / `--reference-pack` / `--wardrobe` / `--hair` / `--region` | Set the field; **pass an empty string to clear it**. |
+| `--lora` | Set/replace the pinned character LoRA (`NAME[:STRENGTH]`). |
+| `--clear-lora` | Remove the pinned LoRA (mutually exclusive with `--lora`). |
 
 ```bash
-# Add a build trait + new forbids without restating the aliases or existing forbids:
 agent visual-generation canon edit celeste-you-dangerous "the narrator" \
-  --locked "a felt-and-clay stop-motion puppet of a young Black man, short and stocky with a compact broad-shouldered build and a large head-to-body ratio, deep caramel-brown felt skin, long black yarn dreadlocks falling to mid-back" \
-  --add-forbid "lanky" --add-forbid "skinny" --add-forbid "slender"
+  --id narrator_v1 --reference-pack narrator_refs_v1
 ```
 
 ### `canon rm <project> <alias>`
@@ -207,88 +129,38 @@ Remove the whole subject any of whose aliases match `<alias>`.
 
 ---
 
-## 6. Worked example — `celeste-you-dangerous`
+## 5. Recipes
 
-The four `canon set` commands that build the project's canon. Phrased in the **felt-and-clay
-stop-motion idiom** so each lock reinforces the Coraline aesthetic rather than fighting it.
-
-```bash
-# 1 — the narrator (character): build + hair locked; substring-safe forbids
-agent visual-generation canon set celeste-you-dangerous \
-  --alias "the narrator" --alias "narrator" --alias "@narrator" \
-  --alias "Chris" --alias "the man" \
-  --locked "a felt-and-clay stop-motion puppet of a young Black man, short and stocky with a compact broad-shouldered build and a large head-to-body ratio, deep caramel-brown felt skin, long black yarn dreadlocks falling to mid-back" \
-  --forbid "short hair" --forbid "shoulder-length" --forbid "buzz cut" \
-  --forbid "lanky" --forbid "skinny" --forbid "slender"
-
-# 2 — Celeste (character)
-agent visual-generation canon set celeste-you-dangerous \
-  --alias "Celeste" --alias "the waitress" \
-  --locked "a felt-and-clay stop-motion puppet of a young woman, smooth matte felt skin, long black yarn hair falling just past her shoulders, bare felt face with no makeup, glossy black stitched sewing-button eyes"
-
-# 3 — the bar EXTERIOR (place): plain entrance + two exterior TVs (non-overlapping aliases)
-agent visual-generation canon set celeste-you-dangerous \
-  --alias "the storefront" --alias "outside the bar" --alias "the bar exterior" --alias "the sports bar" \
-  --locked "a felt-and-clay stop-motion model of a modern Buenos Aires corner sports bar at street level, burnt-orange terracotta painted facade above a full-width black steel-framed folding glass storefront, plain uncluttered entrance with clean glass doors and bare facade, warm amber wood-panelled interior glowing through the glass, two 55-inch flat-screen televisions mounted on the exterior facade one on each side of the entrance, both facing the sidewalk and showing the Lakers basketball game, grey hexagonal Buenos Aires pavement tiles in front" \
-  --forbid "chalkboard" --forbid "chalk art" --forbid "league decals" \
-  --forbid "sports stickers" --forbid "posters" \
-  --forbid "CRT" --forbid "tube television" --forbid "antenna"
-
-# 4 — inside the bar INTERIOR (place): seating locked to the reference
-agent visual-generation canon set celeste-you-dangerous \
-  --alias "inside the bar" --alias "the bar interior" --alias "the bar counter" \
-  --locked "a felt-and-clay stop-motion model of the cozy warm interior of a modern Buenos Aires sports bar, burnt-orange terracotta painted walls and ceiling, honey-toned wood plank floor with wood-panelled wainscoting, a long polished wood bar counter backed by warm backlit shelves of liquor bottles, wooden ladder-back bar stools at the counter, round high-top wood tables with tall teal blue-green upholstered cushioned bar chairs, clusters of warm Edison-bulb cage pendant lights, several 55-inch wall-mounted flat-screen televisions showing the Lakers basketball game, framed sports memorabilia on the walls, warm amber lighting" \
-  --forbid "CRT" --forbid "tube television" --forbid "antenna"
-```
-
-Note the **shared invariant** across the two place-subjects — *55″ flat-screens showing the
-Lakers, terracotta + warm-wood palette* — so inside and outside read as the same building. The
-**`CRT`/`tube television`/`antenna` forbids** appear wherever TVs do, to hold the flat-screen
-look. Seating, crowd, and clothing are deliberately **not** locked (they're per-scene `--points`).
+- **A character's look must hold across shots.** Not a canon-text job — build a versioned
+  **reference pack** (audit §7: hero + multi-view bundle) and record it: `canon edit …
+  --reference-pack <id>`. The plate-first pipeline consumes it.
+- **Pin a character LoRA for the ideation path.** Register the LoRA (`model sync`, flagged
+  `identity_bearing`), then `canon edit … --lora NAME:STRENGTH`. Deprecated ideation aid: a
+  LoRA is a character-class prior, not a locked identity. Never stack two identities in one
+  pass — the CLI warns (dual-identity stacking is deprecated, audit §6).
+- **Change clothing for one shot.** Per-scene → `--points`.
+- **Iterate on a render you like.** `draft --from <gen_id> --points "<the change>"`.
 
 ---
 
-## 7. Recipes (common tasks → the right home)
-
-- **Give a character a permanent trait (height/build).** It's identity → `canon edit … --locked`.
-  Use **proportion** language ("short and stocky, large head-to-body ratio"), not an absolute
-  height — a single frame has no scale reference, so "5′7″" can't render; proportions do.
-- **Change clothing for one shot.** Per-scene → `--points`. If the garment can cover the hair,
-  **state the occlusion**: *"hood down, long dreadlocks falling freely over the collar to
-  mid-back."* Canon locks the *length*; it can't fix a *visual* occlusion — that's prompt craft,
-  and a front/¾ view shows hair far better than a dead-rear view with the hood up.
-- **A recurring place keeps drifting (e.g. TVs).** Stop re-describing it per draft — make it a
-  **place-subject** (§3) and lock the invariant once.
-- **Lock a character at the model level (not just text).** Train a Z-Image character LoRA, register
-  it (`model sync`, flagged `identity_bearing`), then `canon set … --lora NAME:STRENGTH`. The LoRA
-  is pinned on *every* scene the subject appears in; pinning dedupes if the LLM already picked it.
-  A pinned LoRA on a template with no loader slot is surfaced as a "won't apply" advisory, never
-  silently dropped.
-- **Iterate on a render you like.** `draft --from <gen_id> --points "<the change>"` — img2img off
-  the good frame, preserving composition.
-
----
-
-## 8. Gotchas (consolidated)
+## 6. Gotchas (consolidated)
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Editing canon wiped the forbids/LoRA | `canon set` **replaces** the whole subject | Use `canon edit` for one-field changes |
-| `--forbid "tall"` mangled unrelated words | `forbid` is a raw substring strip | Forbid multi-word phrases / non-substring words; lean on positive locked text |
-| Wrong lock fired (exterior look in an interior shot) | Two subjects share an alias | Non-overlapping aliases; don't name both in one draft (§3) |
-| Canon change didn't affect an existing render | Canon runs at `draft`/`redraft`, not `generate` | Re-`draft` (or `batch rebuild`) the scene |
-| A subject's lock didn't fire (no `Canon enforced` line for it) | The LLM named it by other words, not an exact alias (common for places / `--from` refinements) | `draft --canon "<subject>"` to force it; or add a matching (non-overlapping) alias |
-| `draft --from` render was **skipped** at `generate` ("no init_image slot") | A refinement landed on a txt2img template | Fixed — `--from`/`--image` now default to the img2img graph (inpaint when `--mask`). Pass `--template` to override |
-| Scene's lead missing, no `Canon enforced` block | LLM composed a characterless prompt → no alias to enforce | Cast-weaving now writes them in; if still absent you get the `⚠ ABSENT` advisory — add a `--points` naming them |
+| Editing canon wiped the LoRA/asset ids | `canon set` **replaces** the whole subject | Use `canon edit` for one-field changes |
+| Wrong subject fired (exterior LoRA/cast in an interior shot) | Two subjects share an alias | Non-overlapping aliases; don't name both in one draft (§3) |
+| Canon change didn't affect an existing render | Canon runs at `draft`/`redraft`, not `generate` | Re-`draft` the scene |
+| A subject didn't fire (no `Canon applied` line) | The LLM named it by other words, not an exact alias | `draft --canon "<subject>"` to force it; or add a matching (non-overlapping) alias |
+| A "solo" shot pulls in the other character's LoRA | Subject-detection matches *negated* mentions ("no Celeste in this shot" counts as naming her) | Don't name absent characters in points/prompts |
 | Canon set on machine A, missing on machine B | `canon/*.json` lives in `~/agent-data`, outside git | Set canon on each machine, or copy the JSON |
-| Long lock, diluted output | Exterior + interior crammed into one subject | Split into place-subjects; keep each lean (§4) |
+| `canon show` prints "(legacy locked/forbid present — ignored)" | The stored JSON predates the audit cleanup | Harmless; `canon set` on that subject drops the legacy fields |
 
 ---
 
-## 9. Verifying canon is working
+## 7. Verifying canon is working
 
 - **`canon show <project>`** — the subjects on disk.
-- **`draft` output** — `── Canon enforced (deterministic) ──` lists exactly what was injected /
-  expanded / stripped; `⚠ … ABSENT` flags a scene-named subject the prompt dropped.
-- **`knowledge-verify "<query>" --project <slug>`** — proves the surrounding knowledge (incl.
-  ingested canon docs) is reachable, with per-leg scores and gap flags.
+- **`draft` output** — `── Canon applied (LoRA pins) ──` lists the pins/overrides/prunes;
+  `⚠ … ABSENT` flags a scene-named subject the prompt dropped.
+- **`knowledge-verify "<query>" --project <slug>`** — proves the surrounding knowledge is
+  reachable, with per-leg scores and gap flags.

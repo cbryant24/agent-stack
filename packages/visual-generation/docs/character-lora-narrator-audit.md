@@ -1,5 +1,11 @@
 # Narrator LoRA — asset audit & dataset (celeste-you-dangerous)
 
+> **PROVENANCE (2026-07-15, audit §1):** the dataset below = agent-generated synthetic
+> frames (gen-ids in filenames are the agent's own prior generation records). Every image
+> listed here is a training INPUT — never cite one as evidence of LoRA output quality
+> unless a generation id proves it was rendered *by* the trained LoRA. This mislabeling is
+> exactly the misread the consolidated audit §1 corrects.
+
 **Date:** 2026-06-29 (machine B). **Source:** `~/agent-data/visual-generation/assets/celeste-you-dangerous/` (59 PNGs).
 **Method:** 3 parallel vision passes, each judging angle / face-visibility / felt-quality / consistency-vs-favorites.
 **Identity anchor (director's favorites):** `0a25cbb2`, `ce0be66f` (felt); `a77c6bb1`, `bfed13d5` (smooth — see style note).
