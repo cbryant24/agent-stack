@@ -512,7 +512,7 @@ Registers a ComfyUI graph (must be **Export (API)** format — see above) as a
 named, embedded (via Voyage AI), semantically-searchable template, with an
 inferred slot map (see above). Requires a working `VOYAGE_API_KEY` — if
 `.env` stores it as a 1Password reference
-(`op://Personal/VOYAGE_API_KEY/credential`), prefix the command with
+(`op://Claude/VOYAGE_API_KEY/credential`), prefix the command with
 `op run --env-file=~/projects/agent-stack/.env --` so the
 reference is resolved to a real key before the CLI runs.
 
