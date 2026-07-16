@@ -47,27 +47,57 @@ class LoraRef(BaseModel):
     strength: float = 1.0
 
 
-class VisualSource(BaseModel):
-    """Where a refinement starts from (img2img / inpaint).
-
-    Two mutually-exclusive forms: `from_generation` (a prior VisualGeneration
-    entry_id, resolved to its `asset_path` at spend time — the iterate loop) OR
-    `image_path` (an external image already on disk — a reference start). `mask`
-    is inpaint-only: a user-supplied PNG path where white = the area to change.
-    An absent source on a spec means current text-to-image behavior, unchanged.
-    """
+class RefImage(BaseModel):
+    """One ordered reference image for a Qwen keyframe edit — a prior generation
+    (`from_generation`) OR an external path (`image_path`). Order is meaningful:
+    the edit instruction addresses images positionally ("the person from image 1").
+    Used for canon character/outfit reference sheets and manual `--ref` images."""
 
     from_generation: str | None = None
     image_path: str | None = None
-    mask: str | None = None  # inpaint only; user-supplied PNG, white = area to change
 
     @model_validator(mode="after")
-    def _exactly_one_origin(self) -> VisualSource:
+    def _exactly_one(self) -> RefImage:
+        if bool(self.from_generation) == bool(self.image_path):
+            raise ValueError("reference: set exactly one of from_generation / image_path")
+        return self
+
+
+class VisualSource(BaseModel):
+    """Where a generation starts from — the multi-image source spanning refinement
+    (img2img/inpaint), FLF2V (first + last frame), and Qwen edit (base + references).
+
+    The FIRST/base frame is always exactly one of `from_generation` (a prior
+    VisualGeneration entry_id, resolved to its `asset_path` at spend time — the
+    iterate loop) OR `image_path` (an external image on disk). `mask` is inpaint-only
+    (white = area to change). `last_from_generation`/`last_image_path` are the FLF2V
+    last frame (at most one form). `references` are ordered Qwen edit reference sheets.
+    An absent source on a spec means text-to-image, unchanged.
+    """
+
+    from_generation: str | None = None  # first/base frame (init_image / first_frame)
+    image_path: str | None = None
+    mask: str | None = None  # inpaint only; user-supplied PNG, white = area to change
+    last_from_generation: str | None = None  # flf2v last frame
+    last_image_path: str | None = None
+    references: list[RefImage] = Field(default_factory=list)  # qwen-edit ordered refs
+
+    @model_validator(mode="after")
+    def _validate_origins(self) -> VisualSource:
         if bool(self.from_generation) == bool(self.image_path):
             raise ValueError(
-                "source: set exactly one of from_generation / image_path"
+                "source: set exactly one of from_generation / image_path (the first/base frame)"
+            )
+        if self.last_from_generation and self.last_image_path:
+            raise ValueError(
+                "source: set at most one of last_from_generation / last_image_path"
             )
         return self
+
+    @property
+    def last_frame_ref(self) -> str | None:
+        """The flf2v last-frame origin (gen_id or path), or None if not an flf2v source."""
+        return self.last_from_generation or self.last_image_path
 
 
 # ── Memory entry models (Qdrant payload schema) ───────────────────────────────
@@ -119,6 +149,9 @@ class VisualGeneration(BaseModel):
     project: str | None = None
     # Lineage (spans output types).
     parent_id: str | None = None
+    # FLF2V second boundary: a clip records BOTH keyframes — parent_id is the first
+    # frame, parent_last_id the last frame. None for stills / single-parent generations.
+    parent_last_id: str | None = None
     chain_root_id: str = ""  # set to own entry_id when this is a chain root
     # Refinement provenance (img2img / inpaint): the resolved LOCAL paths used as
     # init image / mask. parent_id carries the from_generation lineage; these
@@ -276,6 +309,41 @@ class GenerationBatch(BaseModel):
     created_at: str = Field(default_factory=_now_iso)
     source_path: str | None = None
     specs: list[VisualSpec] = Field(default_factory=list)
+
+
+class ClipSpec(BaseModel):
+    """One FLF2V clip in a scene sequence: a first→last approved-keyframe pair plus the
+    motion prompt describing the action between them. `order` positions it in the scene;
+    consecutive clips share a boundary (`clip[n].last_frame == clip[n+1].first_frame`).
+    The `motion_prompt` is the human-readable body of the sequence-file section; the rest
+    rides the per-clip HTML-comment JSON (mirrors VisualSpec in a batch file)."""
+
+    clip_id: str = Field(default_factory=_new_id)
+    heading: str = ""  # human label for the section (not load-bearing)
+    motion_prompt: str = ""  # the body: action between the two frames
+    first_frame: str = ""  # gen_id of the start keyframe boundary
+    last_frame: str = ""  # gen_id of the end keyframe boundary
+    workflow_ref: str | None = None  # the FLF2V WorkflowTemplate name
+    settings: dict[str, Any] = Field(default_factory=dict)  # length/fps/… ride here
+    seed: int | None = None
+    seed_strategy: Literal["fixed", "random"] = "fixed"
+    order: int = 0  # 1-based position within the scene
+
+
+class Sequence(BaseModel):
+    """A per-scene, ordered set of boundary-sharing FLF2V clips (a `.sequence.md` file).
+
+    `fps`/`clip_frames` are scene-level defaults (each clip's `settings` may override).
+    Structural validity (contiguous order, shared boundaries) is checked by
+    `sequence.validate_sequence`, not here, so a hand-edited file degrades gracefully."""
+
+    project: str | None = None
+    scene: str | None = None
+    fps: int = 16
+    clip_frames: int = 81  # 81 = 4n+1, ~5s @ 16fps (Wan 2.2 native clip length)
+    created_at: str = Field(default_factory=_now_iso)
+    source_path: str | None = None
+    clips: list[ClipSpec] = Field(default_factory=list)
 
 
 class VisualResult(BaseModel):

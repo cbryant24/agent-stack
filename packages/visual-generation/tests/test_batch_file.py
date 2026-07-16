@@ -72,6 +72,36 @@ def test_source_block_round_trips(tmp_path: Path) -> None:
     assert restored.specs[1].source.image_path == "/tmp/ref.png"
 
 
+def test_flf2v_and_edit_source_fields_round_trip(tmp_path: Path) -> None:
+    # FLF2V (first + last frame) and Qwen edit (base + ordered references) round-trip.
+    from visual_generation.models import RefImage
+
+    batch = GenerationBatch(
+        project="short-film",
+        specs=[
+            _spec(
+                "clip 1", "narrator walks in", workflow_ref="wan22-flf2v",
+                settings={"length": 81, "fps": 16},
+                source=VisualSource(from_generation="genA", last_from_generation="genB"),
+            ),
+            _spec(
+                "keyframe edit", "same shot, new pose", workflow_ref="qwen-edit-2511",
+                source=VisualSource(
+                    from_generation="genBase",
+                    references=[RefImage(from_generation="idSheet"),
+                                RefImage(image_path="/tmp/outfit.png")],
+                ),
+            ),
+        ],
+    )
+    path = tmp_path / "seq.batch.md"
+    write_batch(batch, path)
+    restored = read_batch(path)
+    assert restored == batch  # lossless round-trip
+    assert restored.specs[0].source.last_from_generation == "genB"
+    assert restored.specs[1].source.references[1].image_path == "/tmp/outfit.png"
+
+
 def test_prompt_is_the_body_not_duplicated(tmp_path: Path) -> None:
     batch = GenerationBatch(specs=[_spec("wolf", "a wolf in neon rain")])
     path = tmp_path / "p.batch.md"

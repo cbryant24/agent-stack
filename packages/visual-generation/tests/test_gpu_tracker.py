@@ -4,7 +4,7 @@ import itertools
 
 import pytest
 
-from visual_generation.constants import DEFAULT_PER_RUN_MINUTES
+from visual_generation.constants import DEFAULT_PER_RUN_MINUTES, DEFAULT_PER_RUN_MINUTES_VIDEO
 from visual_generation.gpu_tracker import GpuLedger, SessionMeter, estimate_per_run_cost
 
 
@@ -26,6 +26,16 @@ def test_estimate_learned_from_prior_costs() -> None:
 def test_estimate_ignores_zero_costs() -> None:
     usd, source = estimate_per_run_cost([0.0, 0.0], rate=2.0)
     assert source == "default"  # no non-zero history → cold-start default
+
+
+def test_estimate_video_cold_start_uses_video_default() -> None:
+    # A video template with no history uses the per-modality (larger) cold-start.
+    usd, source = estimate_per_run_cost([], rate=3.0, is_video=True)
+    assert source == "default"
+    assert usd == pytest.approx(DEFAULT_PER_RUN_MINUTES_VIDEO / 60.0 * 3.0)
+    # ...and it is much larger than the image cold-start.
+    img, _ = estimate_per_run_cost([], rate=3.0, is_video=False)
+    assert usd > img
 
 
 # ── GpuLedger ────────────────────────────────────────────────────────────────

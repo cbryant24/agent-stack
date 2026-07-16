@@ -15,13 +15,21 @@ from visual_generation.generate import (
 )
 from visual_generation.graph_build import build_prompt_graph
 from visual_generation.gpu_tracker import GpuLedger
+from visual_generation.batch_file import write_batch
 from visual_generation.models import (
+    GenerationBatch,
     LoraRef,
     ModelAsset,
+    RefImage,
     VisualGeneration,
     VisualSource,
     VisualSpec,
     WorkflowTemplate,
+)
+from visual_generation.sequence import (
+    build_scene_manifest,
+    scaffold_sequence,
+    sequence_to_specs,
 )
 from visual_generation.slot_inference import infer_slots
 
@@ -298,12 +306,12 @@ def test_from_generation_resolves_uploads_and_sets_parent_lineage(tmp_path: Path
         ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
     )
 
-    # The parent's frame was uploaded with a collision-proof (spec-id-prefixed) name.
+    # The parent's frame uploaded once with a collision-proof (source-identity) name.
     assert len(fake.uploads) == 1
-    assert fake.uploads[0][0] == f"{spec.spec_id}_parentframe.png"
+    assert fake.uploads[0][0].endswith("_parentframe.png")
     assert fake.uploads[0][1] == b"\x89PNGparent"
     # The returned pod-side filename landed in the LoadImage init_image slot.
-    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{spec.spec_id}_parentframe.png"
+    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{fake.uploads[0][0]}"
     # Lineage: parent_id set, chain_root_id INHERITED from the parent.
     gen = store.upsert_generation.call_args[0][0]
     assert gen.parent_id == "gen-parent"
@@ -348,10 +356,12 @@ def test_inpaint_uploads_init_and_mask(tmp_path: Path, flux_template) -> None:
     )
 
     names = [n for n, _ in fake.uploads]
-    assert names == [f"{spec.spec_id}_init.png", f"{spec.spec_id}_mask_mask.png"]
+    assert len(names) == 2
+    assert names[0].endswith("_init.png")
+    assert names[1].endswith("_mask.png")
     # Both slots written into the graph.
-    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{spec.spec_id}_init.png"
-    assert fake.submitted[0]["12"]["inputs"]["image"] == f"input/{spec.spec_id}_mask_mask.png"
+    assert fake.submitted[0]["10"]["inputs"]["image"] == f"input/{names[0]}"
+    assert fake.submitted[0]["12"]["inputs"]["image"] == f"input/{names[1]}"
     gen = store.upsert_generation.call_args[0][0]
     assert gen.source_mask_path == str(mask)
 
@@ -372,7 +382,7 @@ def test_source_against_txt2img_template_skips_with_reason(tmp_path: Path, flux_
 
     store.upsert_generation.assert_not_called()
     assert spec.spec_id in result.skipped
-    assert any("no init_image slot" in r for r in result.skip_reasons)
+    assert any("no image slot" in r for r in result.skip_reasons)
 
 
 def test_missing_parent_generation_skips_with_reason_no_upload(tmp_path: Path, flux_template) -> None:
@@ -419,6 +429,327 @@ def test_sourceless_spend_uploads_nothing(tmp_path: Path, flux_template) -> None
         client=fake, ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
     )
     assert fake.uploads == []  # text-to-image path never uploads
+
+
+# ── FLF2V + Qwen edit: multi-image provisioning (Phase 3) ────────────────────
+
+
+class _FakeComfyUploadVideo(_FakeComfyUpload):
+    """Upload-recording fake whose history reports an mp4 output (FLF2V clips)."""
+
+    async def history(self, prompt_id: str) -> dict:
+        return {"outputs": {"108": {"videos": [
+            {"filename": "clip.mp4", "subfolder": "video", "type": "output"}
+        ]}}}
+
+    videos_from_history = staticmethod(ComfyUIClient.videos_from_history)
+
+
+def _flf2v_template() -> WorkflowTemplate:
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 0]}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5.safetensors", "type": "wan"}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "bad", "clip": ["4", 0]}},
+        "6": {"class_type": "WanFirstLastFrameToVideo", "inputs": {
+            "width": 832, "height": 480, "length": 81, "positive": ["3", 0],
+            "negative": ["5", 0], "vae": ["7", 0], "start_image": ["1", 0], "end_image": ["2", 0]}},
+        "7": {"class_type": "VAELoader", "inputs": {"vae_name": "wan_2.1_vae.safetensors"}},
+        "8": {"class_type": "KSamplerAdvanced", "inputs": {
+            "add_noise": "enable", "noise_seed": 42, "steps": 4, "cfg": 1.0,
+            "sampler_name": "euler", "scheduler": "simple", "model": ["9", 0],
+            "positive": ["6", 0], "negative": ["6", 1], "latent_image": ["6", 2]}},
+        "9": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan_high.safetensors"}},
+        "10": {"class_type": "CreateVideo", "inputs": {"fps": 16, "images": ["11", 0]}},
+        "11": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["7", 0]}},
+        "108": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0]}},
+    }
+    inferred = infer_slots(graph)
+    return WorkflowTemplate(name="wan22-flf2v", descriptor="flf2v", graph=graph,
+                            slot_map=inferred.slot_map, required_models=inferred.required_models)
+
+
+def _edit_template() -> WorkflowTemplate:
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": ""}},
+        "3": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
+            "prompt": "", "clip": ["4", 0], "vae": ["5", 0], "image1": ["1", 0], "image2": ["2", 0]}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_vl.safetensors"}},
+        "5": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_vae.safetensors"}},
+        "6": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
+            "prompt": "", "clip": ["4", 0], "vae": ["5", 0], "image1": ["1", 0]}},
+        "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "8": {"class_type": "KSampler", "inputs": {
+            "seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple",
+            "denoise": 1.0, "model": ["9", 0], "positive": ["3", 0], "negative": ["6", 0],
+            "latent_image": ["7", 0]}},
+        "9": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_edit.safetensors"}},
+        "8b": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["5", 0]}},
+        "9b": {"class_type": "SaveImage", "inputs": {"images": ["8b", 0]}},
+    }
+    inferred = infer_slots(graph)
+    return WorkflowTemplate(name="qwen-edit-2511", descriptor="edit", graph=graph,
+                            slot_map=inferred.slot_map, required_models=inferred.required_models)
+
+
+def test_flf2v_uploads_both_frames_and_records_boundary_lineage(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"
+    first.write_bytes(b"F")
+    last = tmp_path / "last.png"
+    last.write_bytes(b"L")
+    store = _store()
+    fake = _FakeComfyUploadVideo()
+    spec = _spec(
+        workflow_ref="wan22-flf2v",
+        source=VisualSource(image_path=str(first), last_image_path=str(last)),
+        settings={"length": 81, "fps": 16},
+    )
+
+    spend_generation_sync(
+        _source_plan(_flf2v_template(), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    names = [n for n, _ in fake.uploads]
+    assert len(names) == 2  # first + last
+    assert any(n.endswith("_first.png") for n in names)
+    assert any(n.endswith("_last.png") for n in names)
+    gen = store.upsert_generation.call_args[0][0]
+    # External-image frames carry no generation lineage; the clip asset is an .mp4.
+    # (Boundary gen-id lineage is covered by the from_generation test below.)
+    assert gen.parent_last_id is None
+    assert gen.asset_path.endswith(".mp4")
+
+
+def test_flf2v_from_generation_sets_both_parent_ids(tmp_path: Path) -> None:
+    a = tmp_path / "a.png"
+    a.write_bytes(b"A")
+    b = tmp_path / "b.png"
+    b.write_bytes(b"B")
+    gen_a = VisualGeneration(entry_id="genA", caption="a", asset_path=str(a), chain_root_id="root")
+    gen_b = VisualGeneration(entry_id="genB", caption="b", asset_path=str(b), chain_root_id="root")
+    store = _store()
+    store.get_generation = AsyncMock(side_effect=lambda gid: {"genA": gen_a, "genB": gen_b}.get(gid))
+    fake = _FakeComfyUploadVideo()
+    spec = _spec(
+        workflow_ref="wan22-flf2v",
+        source=VisualSource(from_generation="genA", last_from_generation="genB"),
+        settings={"length": 81, "fps": 16},
+    )
+
+    spend_generation_sync(
+        _source_plan(_flf2v_template(), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    gen = store.upsert_generation.call_args[0][0]
+    assert gen.parent_id == "genA"
+    assert gen.parent_last_id == "genB"
+    assert gen.chain_root_id == "root"
+
+
+def test_flf2v_missing_last_frame_skips(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"
+    first.write_bytes(b"F")
+    store = _store()
+    fake = _FakeComfyUploadVideo()
+    spec = _spec(workflow_ref="wan22-flf2v", source=VisualSource(image_path=str(first)))
+
+    result = spend_generation_sync(
+        _source_plan(_flf2v_template(), spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    store.upsert_generation.assert_not_called()
+    assert any("needs a last frame" in r for r in result.skip_reasons)
+
+
+def test_edit_uploads_base_and_references_into_edit_slots(tmp_path: Path) -> None:
+    base = tmp_path / "base.png"
+    base.write_bytes(b"BASE")
+    ref = tmp_path / "sheet.png"
+    ref.write_bytes(b"SHEET")
+    store = _store()
+    fake = _FakeComfyUpload()  # edit outputs a still image
+    template = _edit_template()
+    spec = _spec(
+        workflow_ref="qwen-edit-2511",
+        source=VisualSource(image_path=str(base), references=[RefImage(image_path=str(ref))]),
+    )
+
+    spend_generation_sync(
+        _source_plan(template, spec),
+        endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    names = [n for n, _ in fake.uploads]
+    assert len(names) == 2  # base (edit_image_1) + one reference (edit_image_2)
+    # Base landed in edit_image_1's LoadImage (node 1), ref in edit_image_2's (node 2).
+    assert fake.submitted[0]["1"]["inputs"]["image"] == f"input/{names[0]}"
+    assert fake.submitted[0]["2"]["inputs"]["image"] == f"input/{names[1]}"
+
+
+# ── approval gate + per-template cost + poll timeout (Phase 4) ───────────────
+
+
+def _gate_batch(tmp_path: Path, **source_kwargs) -> Path:
+    from visual_generation.batch_file import write_batch
+    from visual_generation.models import GenerationBatch
+    spec = _spec(
+        heading="clip 1", workflow_ref="wan22-flf2v",
+        source=VisualSource(**source_kwargs), settings={"length": 81, "fps": 16},
+    )
+    path = tmp_path / "s.batch.md"
+    write_batch(GenerationBatch(project="short-film", specs=[spec]), path)
+    return path
+
+
+def _gate_store(template, reactions: dict[str, str], costs=None) -> MagicMock:
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_template_by_name = AsyncMock(return_value=template)
+    store.recent_generation_costs = AsyncMock(return_value=costs or [])
+    gens = {gid: VisualGeneration(entry_id=gid, caption=gid, reaction=rx)
+            for gid, rx in reactions.items()}
+    store.get_generation = AsyncMock(side_effect=lambda gid: gens.get(gid))
+    return store
+
+
+def test_approval_gate_skips_unapproved_boundary(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, from_generation="genA", last_from_generation="genB")
+    store = _gate_store(_flf2v_template(), {"genA": "loved", "genB": "pending"})  # B unapproved
+    plan = plan_generation_sync(path, all_sections=True, store=store, memory_store=MagicMock())
+    assert plan.plans == []
+    assert any("not approved" in r and "genB" in r for r in plan.skip_reasons)
+
+
+def test_approval_gate_passes_when_both_boundaries_approved(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, from_generation="genA", last_from_generation="genB")
+    store = _gate_store(_flf2v_template(), {"genA": "loved", "genB": "liked_with_changes"})
+    plan = plan_generation_sync(path, all_sections=True, store=store, memory_store=MagicMock())
+    assert len(plan.plans) == 1
+    assert plan.skipped == []
+
+
+def test_allow_unapproved_overrides_gate(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, from_generation="genA", last_from_generation="genB")
+    store = _gate_store(_flf2v_template(), {"genA": "pending", "genB": "pending"})
+    plan = plan_generation_sync(
+        path, all_sections=True, allow_unapproved=True, store=store, memory_store=MagicMock()
+    )
+    assert len(plan.plans) == 1
+
+
+def test_gate_does_not_apply_to_external_image_source(tmp_path: Path) -> None:
+    # An external image (no gen id) has no reaction to check → never gated.
+    ext = tmp_path / "first.png"
+    ext.write_bytes(b"F")
+    ext2 = tmp_path / "last.png"
+    ext2.write_bytes(b"L")
+    path = _gate_batch(tmp_path, image_path=str(ext), last_image_path=str(ext2))
+    store = _gate_store(_flf2v_template(), {})
+    plan = plan_generation_sync(path, all_sections=True, store=store, memory_store=MagicMock())
+    assert len(plan.plans) == 1
+
+
+def test_plan_video_cost_uses_video_default_and_filters_by_template(tmp_path: Path) -> None:
+    path = _gate_batch(tmp_path, image_path="x")  # external → no gate; just exercising cost
+    store = _gate_store(_flf2v_template(), {})
+    plan = plan_generation_sync(path, all_sections=True, gpu_rate=2.09,
+                                store=store, memory_store=MagicMock())
+    # Cost history was queried filtered to the video template only.
+    store.recent_generation_costs.assert_awaited_once()
+    assert store.recent_generation_costs.await_args.kwargs["workflow_ref"] == "wan22-flf2v"
+    # Cold-start used the per-modality VIDEO default (≈$0.35/clip at $2.09/hr), not cents.
+    assert plan.per_run_estimate_usd == pytest.approx(10.0 / 60.0 * 2.09)
+    assert plan.estimate_source == "default"
+
+
+def test_poll_timeout_for_video_template_uses_video_ceiling() -> None:
+    from visual_generation.constants import DEFAULT_POLL_TIMEOUT_SEC_VIDEO
+    from visual_generation.generate import _poll_timeout_for
+
+    spec = _spec(workflow_ref="wan22-flf2v", source=VisualSource(image_path="a", last_image_path="b"),
+                 settings={"length": 81, "fps": 16})
+    sp = _source_plan(_flf2v_template(), spec).plans[0]
+    assert _poll_timeout_for(sp, 600.0) == DEFAULT_POLL_TIMEOUT_SEC_VIDEO
+    # An explicit per-spec override wins.
+    spec.settings["poll_timeout"] = 42.0
+    assert _poll_timeout_for(sp, 600.0) == 42.0
+
+
+def test_poll_timeout_for_image_template_uses_session_default() -> None:
+    from visual_generation.generate import _poll_timeout_for
+    sp = _plan(_img2img_template(with_mask=False), _spec(workflow_ref="z-img2img",
+              source=VisualSource(image_path="a"))).plans[0]
+    assert _poll_timeout_for(sp, 600.0) == 600.0
+
+
+# ── Phase 5: full sequence render (mocked ComfyUI) — the integration test ────
+
+
+def _render_store(template, gens_by_id: dict) -> MagicMock:
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.get_template_by_name = AsyncMock(return_value=template)
+    store.recent_generation_costs = AsyncMock(return_value=[])
+    store.get_generation = AsyncMock(side_effect=lambda gid: gens_by_id.get(gid))
+    store.upsert_generation = AsyncMock()
+    store.get_model = lambda name: None
+    return store
+
+
+def test_sequence_render_shares_boundary_upload_lineage_and_manifest(tmp_path: Path) -> None:
+    # 3 approved keyframes on disk → 2 boundary-shared FLF2V clips (A→B, B→C).
+    gens: dict[str, VisualGeneration] = {}
+    for k in ("A", "B", "C"):
+        f = tmp_path / f"{k.lower()}.png"
+        f.write_bytes(k.encode())
+        gens[f"gen{k}"] = VisualGeneration(
+            entry_id=f"gen{k}", caption=k, asset_path=str(f),
+            reaction="loved", chain_root_id="root",
+        )
+
+    seq = scaffold_sequence(
+        ["genA", "genB", "genC"], project="short-film", scene="bar", fps=16, clip_frames=81
+    )
+    batch = GenerationBatch(project="short-film", specs=sequence_to_specs(seq))
+    bpath = tmp_path / "bar.batch.md"
+    write_batch(batch, bpath)
+
+    store = _render_store(_flf2v_template(), gens)
+    plan = plan_generation_sync(bpath, all_sections=True, store=store, memory_store=MagicMock())
+    assert len(plan.plans) == 2  # both clips passed the approval gate
+
+    fake = _FakeComfyUploadVideo()
+    result = spend_generation_sync(
+        plan, endpoint="x", gpu_rate=2.09, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "l.json"), clock=_clock(),
+    )
+
+    # The shared boundary frame (genB) uploaded ONCE: 3 uploads for A,B,C, not 4.
+    assert len(fake.uploads) == 3
+
+    # Lineage: each clip records BOTH boundaries; both share the scene chain root.
+    upserted = [c.args[0] for c in store.upsert_generation.call_args_list]
+    g1 = next(g for g in upserted if g.parent_id == "genA")
+    g2 = next(g for g in upserted if g.parent_id == "genB")
+    assert g1.parent_last_id == "genB"          # clip 1: A → B
+    assert g2.parent_last_id == "genC"          # clip 2: B → C  (shares B with clip 1)
+    assert g1.chain_root_id == g2.chain_root_id == "root"
+
+    # Manifest: ordered clips, the shared boundary surfaced, mp4 assets, right duration.
+    manifest = build_scene_manifest(seq, {r.spec_id: r for r in result.results})
+    assert [c["order"] for c in manifest["clips"]] == [1, 2]
+    assert manifest["boundaries"] == ["genB"]
+    assert all(c["asset_path"].endswith(".mp4") for c in manifest["clips"])
+    assert manifest["clips"][0]["duration_sec"] == pytest.approx(81 / 16)
 
 
 # ── plan-phase: runtime denoise default + coherence warning ──────────────────

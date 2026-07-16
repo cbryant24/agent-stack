@@ -42,6 +42,7 @@ from visual_generation.constants import (
     MEMORY_TYPE_WORKFLOW_TEMPLATE,
     STATUS_COMPLETE,
     STATUS_PENDING,
+    VIDEO_ASSET_EXTS,
 )
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.models import (
@@ -57,8 +58,16 @@ def _memory_type_filter(memory_type: str) -> Filter:
 
 
 def _generation_input(gen: VisualGeneration) -> MultimodalInput:
-    """Build the multimodal embedding input for a generation: image + caption."""
-    image_path = Path(gen.asset_path) if gen.asset_path else None
+    """Build the multimodal embedding input for a generation.
+
+    Stills embed image + caption (voyage-multimodal-3). Video clips (`.mp4`/`.webm`/…)
+    embed **text-only** — the caption + motion prompt — because voyage-multimodal-3
+    cannot embed video; handing it an mp4 path would fail. (A later refinement could
+    embed a ffmpeg-extracted middle frame; not needed for v1.)
+    """
+    image_path: Path | None = None
+    if gen.asset_path and not gen.asset_path.lower().endswith(VIDEO_ASSET_EXTS):
+        image_path = Path(gen.asset_path)
     return MultimodalInput(text=gen.caption, image_path=image_path)
 
 
@@ -449,14 +458,23 @@ class VisualGenerationStore:
 
     # ── Generation cost history (seeds the per-run GPU estimate) ──────────────
 
-    async def recent_generation_costs(self, limit: int = 20) -> list[float]:
+    async def recent_generation_costs(
+        self, limit: int = 20, *, workflow_ref: str | None = None
+    ) -> list[float]:
         """Recent non-zero per-run `cost_usd` across generations, oldest→newest.
 
         Feeds `gpu_tracker.estimate_per_run_cost`'s learned branch; an empty list
-        (cold start) makes it fall back to the config default.
+        (cold start) makes it fall back to the per-modality config default. When
+        `workflow_ref` is given, only generations from that template are counted — so a
+        video template's estimate is learned from prior video runs, never contaminated
+        by cheap image runs (a 5s FLF2V clip and a Z-Image still can't share an estimate).
         """
-        filters = _memory_type_filter(MEMORY_TYPE_GENERATION)
-        gens = await self._scroll_generations(filters)
+        conditions = [FieldCondition(key="memory_type", match=MatchValue(value=MEMORY_TYPE_GENERATION))]
+        if workflow_ref is not None:
+            conditions.append(
+                FieldCondition(key="workflow_ref", match=MatchValue(value=workflow_ref))
+            )
+        gens = await self._scroll_generations(Filter(must=conditions))
         gens.sort(key=lambda g: g.created_at)
         costs = [g.cost_usd for g in gens if g.cost_usd and g.cost_usd > 0]
         return costs[-limit:]

@@ -17,11 +17,42 @@ loop is where the user resolves them once.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 _SAMPLER_CLASSES = {"KSampler", "KSamplerAdvanced"}
 _LATENT_CLASSES = {"EmptyLatentImage", "EmptySD3LatentImage", "EmptyLatentImageAdvanced"}
+
+# ── Video / edit topology (Wan 2.2 FLF2V / I2V, Qwen-Image-Edit 2511) ─────────
+# The Wan video-latent nodes emit conditioning on outputs 0/1 and a latent on 2, so
+# the sampler's positive/negative trace THROUGH them (see _resolve_cond). Class names +
+# input keys below are confirmed against ComfyUI master (comfy_extras/nodes_wan.py,
+# nodes_qwen.py): WanImageToVideo has one image input `start_image`; WanFirstLastFrameToVideo
+# adds `end_image`; both output (positive, negative, latent). Still diff a committed
+# Phase-0 export before production in case the pinned pod's ComfyUI version differs.
+_VIDEO_LATENT_CLASSES = {
+    "WanImageToVideo",
+    "WanFirstLastFrameToVideo",
+    "WanFirstLastFrameToVideoLatent",  # 5B variant name (defensive; not in master extras)
+}
+_EDIT_ENCODE_CLASSES = {"TextEncodeQwenImageEditPlus", "TextEncodeQwenImageEditPlusAdvance"}
+_CREATE_VIDEO_CLASSES = {"CreateVideo"}
+
+# Per-encoder input key holding the prompt text. Confirmed against source: CLIPTextEncode
+# uses "text"; TextEncodeQwenImageEditPlus uses "prompt" (with image ports image1/image2/image3).
+_TEXT_INPUT_KEYS = {
+    "CLIPTextEncode": "text",
+    "TextEncodeQwenImageEditPlus": "prompt",
+    "TextEncodeQwenImageEditPlusAdvance": "prompt",
+}
+
+
+def _text_key(node: dict[str, Any] | None) -> str:
+    """The input key holding a text encoder's prompt string (class-dependent)."""
+    if node is None:
+        return "text"
+    return _TEXT_INPUT_KEYS.get(node.get("class_type", ""), "text")
 
 # Image-input (img2img / inpaint) topology. The sampler's `latent_image` traces back
 # through a VAE-encode of an uploaded image instead of an empty latent.
@@ -103,8 +134,9 @@ def _resolve_cond(
     transparently traversed via its `conditioning` input.
     """
     visited = visited if visited is not None else set()
+    out_idx = link[1] if _is_link(link) else None
     nid, node = _source(graph, link)
-    if node is None or nid in visited:
+    if node is None or nid is None or nid in visited:
         return "none", None, None
     visited.add(nid)
     class_type = node.get("class_type")
@@ -112,6 +144,19 @@ def _resolve_cond(
 
     if class_type == "CLIPTextEncode":
         return "text", nid, node
+    if class_type in _EDIT_ENCODE_CLASSES:
+        # A Qwen edit-encode node IS the text source (prompt lives under a non-"text"
+        # key — see _text_key); its conditioning is a terminal for tracing.
+        return "text", nid, node
+    if class_type in _VIDEO_LATENT_CLASSES:
+        # Wan video-latent nodes fuse conditioning: output 0 is positive, 1 is negative
+        # (2 is the latent). The sampler links to one of these outputs, so continue the
+        # trace into the matching conditioning INPUT of this node.
+        if out_idx == 0:
+            return _resolve_cond(graph, inputs.get("positive"), flux_guidance, visited)
+        if out_idx == 1:
+            return _resolve_cond(graph, inputs.get("negative"), flux_guidance, visited)
+        return "none", None, None
     if class_type == "FluxGuidance":
         if "guidance" in inputs and not _is_link(inputs["guidance"]):
             flux_guidance.setdefault("node_id", nid)
@@ -210,6 +255,22 @@ def _find_sampler(graph: dict[str, Any]) -> tuple[str | None, dict[str, Any] | N
         )
         return None, None, notes
     if len(samplers) > 1:
+        # Dual-sampler (high/low-noise MoE) graphs: the seed lives on the pass that
+        # ADDS noise (add_noise == "enable"); the other pass continues from its latent.
+        # Pick that one deterministically instead of relying on dict order.
+        noise_adders = [
+            (nid, node)
+            for nid, node in samplers
+            if node.get("class_type") == "KSamplerAdvanced"
+            and node.get("inputs", {}).get("add_noise") == "enable"
+        ]
+        if len(noise_adders) == 1:
+            nid, node = noise_adders[0]
+            notes.append(
+                f"{len(samplers)} samplers found; using the noise-adding pass ({nid}) "
+                "as the seed/param carrier (high/low-noise dual-sampler graph)."
+            )
+            return nid, node, notes
         notes.append(
             f"{len(samplers)} sampler nodes found; inferred from the first "
             f"({samplers[0][0]}). Confirm it's the right one."
@@ -218,10 +279,72 @@ def _find_sampler(graph: dict[str, Any]) -> tuple[str | None, dict[str, Any] | N
     return nid, node, notes
 
 
+def _video_latent_node(
+    graph: dict[str, Any], latent_link: Any
+) -> tuple[str | None, dict[str, Any] | None]:
+    """The Wan video-latent node (WanImageToVideo / WanFirstLastFrameToVideo…): the one
+    the sampler's latent traces to, else the first such node in the graph."""
+    nid, node = _source(graph, latent_link)
+    if node is not None and node.get("class_type") in _VIDEO_LATENT_CLASSES:
+        return nid, node
+    for nid, node in graph.items():
+        if node.get("class_type") in _VIDEO_LATENT_CLASSES:
+            return nid, node
+    return None, None
+
+
+def _infer_video_frame_slots(
+    graph: dict[str, Any], node: dict[str, Any]
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Map first_frame/last_frame to their LoadImage `image` inputs off a Wan video-latent
+    node. WanImageToVideo has one image input (start_image → first_frame); FLF2V adds
+    end_image → last_frame. A non-LoadImage source is noted, never guessed."""
+    slots: dict[str, dict[str, Any]] = {}
+    notes: list[str] = []
+    inputs = node.get("inputs", {})
+    for input_key, slot_name in (("start_image", "first_frame"), ("end_image", "last_frame")):
+        link = inputs.get(input_key)
+        if link is None:
+            continue
+        src_nid, src = _source(graph, link)
+        if src_nid is not None and src is not None and src.get("class_type") in _IMAGE_LOAD_CLASSES:
+            slots[slot_name] = _slot(src_nid, "image")
+        elif src is not None:
+            notes.append(
+                f"video: {input_key} traces to {src.get('class_type')!r}, not a LoadImage. "
+                f"Declare the {slot_name} slot manually."
+            )
+    return slots, notes
+
+
+def _infer_edit_image_slots(
+    graph: dict[str, Any], node: dict[str, Any]
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Map edit_image_1..N to the Qwen edit-encode node's image inputs, IN ORDER (order is
+    semantic — 'the person from image 1'). Image ports are `image`/`image1`/`image2`/…"""
+    slots: dict[str, dict[str, Any]] = {}
+    notes: list[str] = []
+    inputs = node.get("inputs", {})
+    img_keys = [k for k in inputs if re.match(r"^image\d*$", k)]
+    img_keys.sort(key=lambda k: int(m.group(1)) if (m := re.search(r"(\d+)$", k)) else 0)
+    i = 1
+    for k in img_keys:
+        src_nid, src = _source(graph, inputs.get(k))
+        if src_nid is not None and src is not None and src.get("class_type") in _IMAGE_LOAD_CLASSES:
+            slots[f"edit_image_{i}"] = _slot(src_nid, "image")
+            i += 1
+        elif src is not None:
+            notes.append(
+                f"edit: image input {k!r} traces to {src.get('class_type')!r}, not a "
+                "LoadImage. Declare the edit_image slot manually."
+            )
+    return slots, notes
+
+
 def _empty_text(node: dict[str, Any] | None) -> bool:
     if node is None:
         return False
-    text = node.get("inputs", {}).get("text")
+    text = node.get("inputs", {}).get(_text_key(node))
     return isinstance(text, str) and text.strip() == ""
 
 
@@ -247,12 +370,27 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
             if input_key in s_inputs and not _is_link(s_inputs[input_key]):
                 slot_map[slot_name] = _slot(sampler_id, input_key)
 
+        # Switch-fed scalars (dual-recipe Wan graphs route steps/cfg/end_at_step through
+        # ComfySwitchNode/Primitive toggles): they're links, so NOT slot-mapped above.
+        # Report it instead of resolving the switch (register propose→confirm can add a
+        # manual slot if runtime control is wanted). We do not build a switch resolver.
+        linked_scalars = [
+            k for k in ("steps", "cfg", "sampler_name", "scheduler")
+            if _is_link(s_inputs.get(k))
+        ]
+        if linked_scalars:
+            result.notes.append(
+                f"Sampler {', '.join(linked_scalars)} are driven by upstream nodes "
+                "(e.g. ComfySwitchNode/Primitive toggles), not literals — not slot-mapped. "
+                "Declare them at register time if runtime control is wanted."
+            )
+
         # positive prompt — trace the sampler's `positive` conditioning input.
         flux_guidance: dict[str, Any] = {}
         pos_link = s_inputs.get("positive")
         pos_kind, pos_id, _pos_node = _resolve_cond(graph, pos_link, flux_guidance)
         if pos_kind == "text" and pos_id is not None:
-            slot_map["positive"] = _slot(pos_id, "text")
+            slot_map["positive"] = _slot(pos_id, _text_key(_pos_node))
         else:
             result.notes.append(
                 "Could not resolve the positive prompt by tracing the sampler's "
@@ -266,13 +404,13 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
         neg_kind, neg_id, neg_node = _resolve_cond(graph, neg_link, neg_flux)
         pos_node_id = slot_map.get("positive", {}).get("node_id")
         if neg_kind == "text" and neg_id is not None and neg_id != pos_node_id and not _empty_text(neg_node):
-            slot_map["negative"] = _slot(neg_id, "text")
+            slot_map["negative"] = _slot(neg_id, _text_key(neg_node))
         else:
             result.negative_suppressed = True
             # If the negative traced to a CLIPTextEncode (an empty-text placeholder),
             # we know the node — offer it as the override target in propose→confirm.
             if neg_kind == "text" and neg_id is not None:
-                result.negative_candidate = _slot(neg_id, "text")
+                result.negative_candidate = _slot(neg_id, _text_key(neg_node))
             if flux_present:
                 result.negative_reason = "flux"
                 result.notes.append(
@@ -334,6 +472,36 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
         if mask_slot is not None:
             slot_map["mask"] = mask_slot
         result.notes.extend(image_notes)
+
+        # video input (Wan I2V / FLF2V) — the sampler's latent traces to a Wan
+        # video-latent node carrying the frame image inputs + length; width/height/
+        # (via CreateVideo) fps are literals these graphs use instead of EmptyLatent.
+        video_id, video_node = _video_latent_node(graph, s_inputs.get("latent_image"))
+        if video_node is not None and video_id is not None:
+            frame_slots, frame_notes = _infer_video_frame_slots(graph, video_node)
+            slot_map.update(frame_slots)
+            result.notes.extend(frame_notes)
+            v_inputs = video_node.get("inputs", {})
+            if "length" in v_inputs and not _is_link(v_inputs["length"]):
+                slot_map["length"] = _slot(video_id, "length")
+            # Dimensions live on the video-latent node (no EmptyLatent to read).
+            if "width" not in slot_map and "width" in v_inputs and not _is_link(v_inputs["width"]):
+                slot_map["width"] = _slot(video_id, "width")
+            if "height" not in slot_map and "height" in v_inputs and not _is_link(v_inputs["height"]):
+                slot_map["height"] = _slot(video_id, "height")
+            for nid, node in graph.items():
+                if node.get("class_type") in _CREATE_VIDEO_CLASSES:
+                    fps = node.get("inputs", {}).get("fps")
+                    if fps is not None and not _is_link(fps):
+                        slot_map["fps"] = _slot(nid, "fps")
+                    break
+
+        # edit images (Qwen-Image-Edit): the positive prompt resolves to an edit-encode
+        # node; its ordered image inputs become edit_image_1..N.
+        if _pos_node is not None and _pos_node.get("class_type") in _EDIT_ENCODE_CLASSES:
+            edit_slots, edit_notes = _infer_edit_image_slots(graph, _pos_node)
+            slot_map.update(edit_slots)
+            result.notes.extend(edit_notes)
 
     # checkpoint / unet loaders
     for nid, node in graph.items():

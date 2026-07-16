@@ -30,6 +30,7 @@ from agent_runtime import (
 from visual_generation.batch_file import append_spec
 from visual_generation.canon import (
     canon_loras_for,
+    canon_references_for,
     enforce_canon,
     scene_cast,
     subjects_matching,
@@ -47,6 +48,7 @@ from visual_generation.models import (
     DraftResult,
     LoraRef,
     ProvenanceLeg,
+    RefImage,
     VisualGeneration,
     VisualSource,
     VisualSpec,
@@ -91,11 +93,19 @@ async def _resolve_template(
 
 
 def _template_modality(template: WorkflowTemplate | None) -> str | None:
-    """The graph's modality, read from its slots: inpaint (init_image + mask),
-    img2img (init_image), else text2img. None when no template resolved."""
+    """The graph's modality, read from its slots (highest-precedence first):
+    edit (edit_image_1 — Qwen keyframe edit), flf2v (first_frame + last_frame — Wan
+    first-last-frame video), i2v (first_frame only — Wan image-to-video), inpaint
+    (init_image + mask), img2img (init_image), else text2img. None when no template."""
     if template is None:
         return None
     slots = template.slot_map
+    if "edit_image_1" in slots:
+        return "edit"
+    if "first_frame" in slots and "last_frame" in slots:
+        return "flf2v"
+    if "first_frame" in slots:
+        return "i2v"
     if "init_image" in slots and "mask" in slots:
         return "inpaint"
     if "init_image" in slots:
@@ -144,6 +154,46 @@ def _pin_canon_loras(spec: VisualSpec, project: str | None, store: Any) -> list[
     )
     notes += dropped
     spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
+    return notes
+
+
+def _pin_canon_references(
+    spec: VisualSpec, template: WorkflowTemplate | None, project: str | None
+) -> list[str]:
+    """For an edit-modality (Qwen keyframe) spec, append each present canon subject's
+    reference sheets to `spec.source.references` — the reference-set analog of
+    `_pin_canon_loras`. Deduped, and capped at the template's edit-image slot count
+    (minus the base frame); overflow is warned, never forced. No-op off edit modality
+    or when the spec has no source. Returns notes for `canon_applied`."""
+    if _template_modality(template) != "edit" or spec.source is None:
+        return []
+    canon_refs = canon_references_for(spec.prompt, project)
+    if not canon_refs:
+        return []
+
+    def _key(r: RefImage) -> str | None:
+        return r.from_generation or r.image_path
+
+    existing = spec.source.references
+    seen = {_key(r) for r in existing}
+    edit_slots = sum(1 for k in (template.slot_map if template else {}) if k.startswith("edit_image_"))
+    room = max(0, edit_slots - 1 - len(existing))  # -1 reserves edit_image_1 for the base frame
+    notes: list[str] = []
+    added = 0
+    for r in canon_refs:
+        if _key(r) in seen:
+            continue
+        if added >= room:
+            notes.append(
+                f"canon references exceed the template's {edit_slots} edit-image slots — "
+                "dropped the extras"
+            )
+            break
+        existing.append(r)
+        seen.add(_key(r))
+        added += 1
+    if added:
+        notes.append(f"pinned {added} canon reference sheet(s)")
     return notes
 
 
@@ -285,6 +335,9 @@ async def draft(
                 # Pin the present subject's character LoRA too (model-level continuity);
                 # re-derives identity_bearing inside, superseding the pre-fill above.
                 canon_applied += _pin_canon_loras(spec, project, store)
+                # For a Qwen keyframe edit, pin the subject's reference sheets as edit
+                # references (identity travels as reference images, not just LoRA/text).
+                canon_applied += _pin_canon_references(spec, template, project)
 
                 # Did every scene-named canon character actually land in the prompt? A lead
                 # the scene features but the shot omitted is surfaced as an advisory (never

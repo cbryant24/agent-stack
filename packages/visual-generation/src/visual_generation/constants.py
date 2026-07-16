@@ -191,6 +191,10 @@ DELEGATE_TARGET_TUTORIAL_RESEARCH = "tutorial-research"
 DEFAULT_GPU_RATE_USD_PER_HR = 0.69
 # Cold-start per-run estimate (no recorded history yet): minutes × rate.
 DEFAULT_PER_RUN_MINUTES = 1.0
+# Video (Wan I2V/FLF2V) runs are 10–30× an image run — a per-modality cold-start so a
+# 12–18-clip scene shows an honest session estimate before the first submit. At the
+# ~$2.09/hr pod rate this is ≈ $0.35/clip vs the image default's cents.
+DEFAULT_PER_RUN_MINUTES_VIDEO = 10.0
 # How many recent recorded per-run costs feed the learned per-run estimate.
 RECENT_COST_SAMPLE = 20
 
@@ -205,6 +209,9 @@ RESEARCH_GAP_THRESHOLD = 0.35
 # ── History poll loop (bounded; interval/timeout injectable for tests) ────────
 DEFAULT_POLL_INTERVAL_SEC = 2.0
 DEFAULT_POLL_TIMEOUT_SEC = 600.0
+# Video runs take minutes, not seconds — a longer per-modality poll ceiling so a slow
+# FLF2V clip isn't abandoned mid-render. A spec's settings may override via "poll_timeout".
+DEFAULT_POLL_TIMEOUT_SEC_VIDEO = 1800.0
 
 # ── Refinement (img2img / inpaint) denoise ────────────────────────────────────
 # A source spec with no explicit `denoise` defaults to this at runtime only (the
@@ -225,9 +232,21 @@ IMG2IMG_TEMPLATE_NAME = "visual-workflow-img2img"
 # draft with a `--mask` defaults its template to this when no --template is given.
 INPAINT_TEMPLATE_NAME = "visual-workflow-inpaint"
 
+# Canonical video/edit template names (the graphs registered from the Phase-0 exports).
+# A `draft` with FLF2V frames / Qwen refs and no --template defaults to these, mirroring
+# the img2img/inpaint defaults above.
+FLF2V_TEMPLATE_NAME = "wan22-flf2v"
+QWEN_EDIT_TEMPLATE_NAME = "qwen-edit-2511"
+
 # ── Asset write paths + Q8 opsec (under agent_data_dir / AGENT_SUBDIR) ────────
 AGENT_SUBDIR = "visual-generation"
 ASSETS_SUBDIR = "assets"          # non-identity assets
 IDENTITY_SUBDIR = "identity"       # secured, isolated identity-bearing assets
 GPU_LEDGER_FILENAME = "gpu_ledger.json"
 DEFAULT_ASSET_EXT = "png"
+# Video/animation container extensions (leading dot). Used to (a) recognise a
+# SaveVideo output in a ComfyUI history record whatever key it lands under
+# (comfyui_client.videos_from_history) and (b) decide a generation's asset is a
+# clip, so it embeds text-only — voyage-multimodal-3 can't embed video
+# (store._generation_input). Kept as one list so both sites agree.
+VIDEO_ASSET_EXTS = (".mp4", ".webm", ".mkv", ".mov", ".m4v", ".gif")

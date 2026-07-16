@@ -23,6 +23,10 @@ _SETTING_SLOTS = {
     "scheduler": "scheduler",
     "denoise": "denoise",
     "flux_guidance": "flux_guidance",
+    # Video clip knobs ride the same model-agnostic settings dict ({"length": 81,
+    # "fps": 16}); written only when the template declares the slot (video graphs do).
+    "length": "length",
+    "fps": "fps",
 }
 
 
@@ -52,19 +56,30 @@ def apply_source_filenames(
     *,
     init_image: str | None = None,
     mask: str | None = None,
+    first_frame: str | None = None,
+    last_frame: str | None = None,
+    edit_images: list[str] | None = None,
 ) -> list[str]:
     """Write uploaded pod-side filenames into the image-input slots.
 
-    Used at spend time (after `ComfyUIClient.upload_image`) to place the init image
-    and, for inpaint, the mask. Returns the names of any requested slots the template
-    lacks (advisory) — notably an `init_image` miss means the template is txt2img and
-    cannot do img2img/inpaint.
+    Used at spend time (after `ComfyUIClient.upload_image`) to place, per modality:
+    img2img/inpaint — `init_image` (+ `mask`); FLF2V — `first_frame` (+ `last_frame`);
+    Qwen edit — `edit_image_1..N` (ordered). Returns the names of any requested slots
+    the template lacks (advisory) — notably an `init_image`/`first_frame` miss means
+    the template can't accept that source.
     """
     unmapped: list[str] = []
     if init_image is not None and not write_slot(graph, slot_map, "init_image", init_image):
         unmapped.append("init_image")
     if mask is not None and not write_slot(graph, slot_map, "mask", mask):
         unmapped.append("mask")
+    if first_frame is not None and not write_slot(graph, slot_map, "first_frame", first_frame):
+        unmapped.append("first_frame")
+    if last_frame is not None and not write_slot(graph, slot_map, "last_frame", last_frame):
+        unmapped.append("last_frame")
+    for i, name in enumerate(edit_images or [], start=1):
+        if not write_slot(graph, slot_map, f"edit_image_{i}", name):
+            unmapped.append(f"edit_image_{i}")
     return unmapped
 
 
