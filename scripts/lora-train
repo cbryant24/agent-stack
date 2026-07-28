@@ -47,9 +47,16 @@
 # Env knobs (constants — all overridable):
 #   POD_NAME           Pod name to target.                     Default: zimage-lora-trainer
 #   POD_ID             Target a specific pod id.               Default: unset
-#   TEMPLATE_ID        RunPod template to deploy from (preferred — carries the
-#                      Ostris env/ports); account-specific. Empty (the default) uses IMAGE.
-#   IMAGE              Container image (fallback when TEMPLATE_ID is empty).
+#   LORAS_TEMPLATE_ID  RunPod template to deploy from (PREFERRED — carries the Ostris
+#                      start command that actually boots the ai-toolkit UI + SSH). Set
+#                      this, NOT TEMPLATE_ID: TEMPLATE_ID collides with scripts/pod's
+#                      ComfyUI template in .env. Known-good: 0fqzfjy6f3 (Ostris "AI
+#                      Toolkit - ui - official", image ostris/aitoolkit:latest), validated
+#                      2026-07-13. Empty falls back to TEMPLATE_ID, then to the bare IMAGE.
+#   TEMPLATE_ID        Fallback template if LORAS_TEMPLATE_ID is unset. Account-specific.
+#   IMAGE              Container image — LAST-resort fallback (both template vars empty).
+#                      A BARE image boots a GPU but NEVER binds the port/SSH (runtime null,
+#                      "pod not ready" forever) — same trap as scripts/pod. Prefer a template.
 #                                                              Default: ostris/aitoolkit:latest
 #   GPU_ID             GPU type.                               Default: NVIDIA GeForce RTX 5090
 #   CLOUD_TYPE         Cloud type.                             Default: SECURE
@@ -70,7 +77,7 @@
 set -euo pipefail
 
 POD_NAME="${POD_NAME:-zimage-lora-trainer}"
-TEMPLATE_ID="${TEMPLATE_ID-}"
+TEMPLATE_ID="${LORAS_TEMPLATE_ID:-${TEMPLATE_ID-}}"
 IMAGE="${IMAGE:-ostris/aitoolkit:latest}"
 GPU_ID="${GPU_ID:-NVIDIA GeForce RTX 5090}"
 CLOUD_TYPE="${CLOUD_TYPE:-SECURE}"

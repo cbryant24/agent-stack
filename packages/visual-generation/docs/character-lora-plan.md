@@ -231,6 +231,14 @@ sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-
       (`liked` / `liked_with_changes` + notes).
 
 ### Operational gotchas (RunPod / ai-toolkit) — learned 2026-07-01, save the next run
+- **Deploy the ai-toolkit TEMPLATE, never the bare image** (learned 2026-07-13). Set
+  `LORAS_TEMPLATE_ID=0fqzfjy6f3` (Ostris "AI Toolkit - ui - official", `ostris/aitoolkit:latest`).
+  A bare-`--image` pod boots RUNNING with a GPU but its runtime/SSH never come up — `ssh-info`
+  hangs at "pod not ready" indefinitely (same trap as the ComfyUI pod's :8188). `lora-train`
+  prefers `LORAS_TEMPLATE_ID` over `TEMPLATE_ID` (the latter collides with the ComfyUI template
+  in `.env`). With the right template, SSH is reachable ~2 min after RUNNING. EU-RO-1 capacity is
+  frequently exhausted across all GPU types — poll `up` across a GPU list; a 4090 (24 GB) trains
+  this fine (`low_vram`+qfloat8, ~15 GB used, ~3.2 s/it).
 - **Point outputs at the persistent volume.** ai-toolkit defaults to `/app/ai-toolkit/output` (container
   disk) which is **wiped when the pod cycles**. We nearly lost the checkpoints; recovered only because we'd
   `cp`'d them to `/mnt`. Next time: set `training_folder` to `/mnt/output`, or `cp … /mnt/` right after each save.
