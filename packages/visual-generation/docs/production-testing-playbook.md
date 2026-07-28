@@ -305,8 +305,9 @@ agent visual-generation draft \
 - **Does:** discovers the project's docs, narrows to the **Arrival** section of `directed.md`,
   compiles that + retrieved knowledge + your points into a prompt Claude composes. **Canon
   characters the scene names are fed into composition as the scene's cast** — the Arrival
-  narration names *Chris*, so Claude is told to render the narrator by name with his locked
-  look, and `enforce_canon` then injects/pins on the alias. No `INTENT` string needed.
+  narration names *Chris*, so Claude is told to render the narrator by name, and canon then
+  pins that subject's character LoRA on the alias (no prompt text is rewritten). No `INTENT`
+  string needed.
 - **Expected — look for:**
   - `── Compiled from (your project docs) ────` listing `directed.md` (Arrival) and likely
     `brief.md`/`techniques.md` if present — **this is the proof your script fed the prompt.**
