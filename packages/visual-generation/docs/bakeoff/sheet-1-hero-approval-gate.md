@@ -16,9 +16,9 @@ Date: __________   Session: __________
 |---|---|---|---|---|
 | 1 | Face structure | Reads as the real person's facial structure translated to puppet; would be recognized side-by-side with the reference photo | | |
 | 2 | Button eyes | Small, round, flat black; matched size; symmetric placement; catch-light consistent | | |
-| 3 | Hair topology | Correct style per character spec (below); sculpted-strand look with soft lacquered gloss, no yarn/fiber | | |
+| 3 | Hair topology | Correct style per character spec (below); solid sculpted mass with fine combed striations, matte lacquered finish; no yarn/fiber, no clay coils | | |
 | 4 | Proportions | Natural real-person proportions; not elongated, lanky, or chibi | | |
-| 5 | Material treatment | Smooth matte clay-resin skin with subtle satin sheen; fabric texture on garments only, never on skin; no waxy CGI gloss | | |
+| 5 | Material treatment | Smooth matte **painted-resin** skin: subtle sheen, slight translucency, **no clay grain, no fingerprint/sculpt texture, no uniform surface noise**; real woven cloth at true fiber scale on garments only, never on skin; no waxy CGI gloss | | |
 | 6 | Wardrobe & shoes | Exact per character spec (below), no substitutions | | |
 | 7 | Neutral lighting | Soft even key, no colored cast, no dramatic mood lighting baked into the identity | | |
 | 8 | No background dependence | Plain neutral backdrop; identity readable if background replaced | | |
@@ -27,17 +27,19 @@ Date: __________   Session: __________
 
 ## Character spec — Celeste (from celeste-v2-design-TARGET.md)
 
-- Smooth clean skin — **no freckles, no blush, no gray**; warm peach-ivory clay.
-- Dark brown curly hair **up in a voluminous textured bun**, **one long curly strand** falling in
-  front of her face.
+- Smooth clean skin — **no freckles, no blush, no gray**; warm peach-ivory **matte painted resin**
+  (subtle sheen, slight translucency; no clay grain or sculpt texture).
+- Dark brown curly hair **up in a voluminous textured bun** — solid sculpted mass, fine combed
+  striations, matte lacquered — **one long curly strand** falling in front of her face.
 - **Smiling by default.**
 - Black long-sleeve collared button-down, black slim jeans, small pendant necklace (+ thin
   bracelet), black low sneakers with **white soles + white ankle socks**.
 
 ## Character spec — Narrator (from canon)
 
-- Warm medium caramel-brown smooth sculpted clay skin, subtle satin sheen.
-- Clean-shaven, **no facial hair**. Long dreadlocks to mid-back.
+- Warm medium caramel-brown smooth sculpted **matte painted-resin** skin, subtle sheen, slight
+  translucency (no clay grain or sculpt texture).
+- Clean-shaven, **no facial hair**. Long dreadlocks to mid-back — sculpted mass, matte lacquered.
 - Long black distressed long-sleeve shirt, dark denim jeans, red-and-white Jordan 1s.
 
 ## Result

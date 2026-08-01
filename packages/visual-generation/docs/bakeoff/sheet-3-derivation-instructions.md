@@ -25,18 +25,23 @@ Inputs: image 1 = face hero photo; image 2 = outfit full-body photo. Instruction
 TARGET.md draft, image-addressed):
 
 > Convert the woman from image 1 into a hand-sculpted LAIKA/Coraline stop-motion puppet: smooth
-> matte clay-resin with warm cream peach-ivory skin and a subtle satin sheen (no gray, no
+> matte painted resin with warm cream peach-ivory skin, a subtle sheen and slight translucency,
+> no clay grain and no sculpt texture (no gray, no
 > freckles, no blush). Keep her real facial structure and prettiness. Small round flat black
-> Coraline button eyes. Dark brown curly hair worn UP in a voluminous textured bun with a single
+> Coraline button eyes. Dark brown curly hair worn UP in a voluminous textured bun — a solid
+> sculpted mass with fine combed striations and a matte lacquered finish — with a single
 > long curly strand falling down in front of her face. She is smiling warmly. She wears the
-> outfit from image 2: black long-sleeve collared button-down shirt, black slim jeans, a small
+> outfit from image 2 in real woven cloth at true fiber scale: black long-sleeve collared
+> button-down shirt, black slim jeans, a small
 > pendant necklace, black low sneakers with white soles and white ankle socks. Natural slim
 > real-woman proportions, not elongated or lanky. Full-body front view, plain neutral studio
 > backdrop, soft even studio key light.
 
 Iteration rules: change ONE clause per re-attempt; log which clause; three failures of the same
 defect → stop per guardrail 3 and note the architecture question. Known defect→clause map to
-try first: waxy skin → strengthen "matte clay-resin… subtle satin sheen, not glossy"; blush →
+try first: waxy skin → strengthen "smooth matte painted resin… subtle sheen, not glossy"; clay
+grain / fingerprint texture / uniform surface noise on skin → "smooth matte painted resin, no
+clay grain, no sculpt texture"; blush →
 prepend "bare-faced, no makeup, no blush"; strand missing → move the strand clause earlier;
 proportions drift → "keep the body proportions from image 2".
 
@@ -57,8 +62,9 @@ Test B1's cumulative scoring later — don't hide it.
 
 Input: the approved solo render. Instruction:
 
-> Keep this exact stop-motion puppet character unchanged — same face, same caramel-brown clay
-> skin, same mid-back dreadlocks, same black distressed long-sleeve shirt, dark denim jeans, and
+> Keep this exact stop-motion puppet character unchanged — same exact face shape and deep
+> caramel-brown skin tone, unchanged; smooth matte painted resin, no clay grain or sculpt
+> texture; same mid-back dreadlocks, same black distressed long-sleeve shirt, dark denim jeans, and
 > red-and-white Jordan 1 sneakers. Full-body front view, standing relaxed facing camera, plain
 > neutral studio backdrop, soft even studio key light.
 
@@ -71,6 +77,9 @@ Per view, input = the approved hero (Qwen may add the outfit photo as image 2 fo
 fidelity on turns). Instruction pattern:
 
 > Keep this exact puppet character unchanged — same face, button eyes, hair, outfit, materials.
+> Her skin is smooth matte painted resin with a subtle sheen and slight translucency, no clay
+> grain and no sculpt texture; her hair is a solid sculpted mass with fine combed striations and
+> a matte lacquered finish; her clothes are real woven cloth at true fiber scale.
 > Change only the camera/pose: [three-quarter view, body turned 45° | full profile facing left |
 > back view, back to camera | seated on a stool, hands in lap]. Same neutral backdrop and even
 > studio light.

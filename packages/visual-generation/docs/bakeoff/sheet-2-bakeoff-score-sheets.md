@@ -21,7 +21,8 @@ From the approved hero, derive per editor: front full-body, 3/4 view, profile, b
 seated pose. (These become the reference pack if the editor wins.)
 
 Score each derived view on: face structure · button eyes · hair topology · proportions ·
-wardrobe fidelity · material continuity (skin stays clay, fabric stays fabric).
+wardrobe fidelity · material continuity (skin stays smooth matte painted resin — no clay grain or
+sculpt texture; hair stays a matte-lacquered sculpted mass; fabric stays real woven cloth).
 
 | View | Face | Eyes | Hair | Prop. | Wardrobe | Material | /12 |
 |---|---|---|---|---|---|---|---|

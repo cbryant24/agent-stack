@@ -14,12 +14,24 @@ Real photos stay LOCAL — used only as reference/img2img sources on our own pod
 - **Hair:** dark brown, curly/textured, worn **UP in a voluminous bun**, with **one long
   curly strand hanging down in front of her face** (per `celeste-real-face-hero.png`).
 - **Expression:** **smiling by default.**
-- **Skin:** warm moderate peach-ivory clay, subtle satin sheen, **no gray, no blush**.
+- **Skin:** warm moderate peach-ivory **smooth matte painted resin** — subtle sheen, slight
+  translucency; **no clay grain, no fingerprint/sculpt texture, no uniform surface noise**;
+  **no gray, no blush**.
 - **Outfit:** black long-sleeve collared button-down + black slim jeans + small pendant
   necklace (+ thin bracelet).
 - **Shoes:** black low sneakers with **white soles + white ankle socks** (corrects the old
   Chuck-Taylor canon).
-- **Style:** LAIKA/Coraline hand-sculpted clay-resin puppet, matte with satin sheen.
+- **Hair:** solid sculpted mass with fine combed striations, **matte lacquered** finish — not
+  clay coils, not yarn/fiber.
+- **Wardrobe material:** real woven cloth at **true fiber scale** — visible weave and stitching.
+- **Style:** LAIKA/Coraline hand-sculpted **painted-resin** puppet, smooth matte with subtle sheen.
+
+> **Material spec correction (2026-08-01, director).** The original spec said "clay"/"clay-resin"
+> throughout. Reviewing Coraline film reference, the correct target is LAIKA-style **smooth matte
+> painted resin**, not clay: clay language was pulling grain, fingerprint/sculpt texture, and
+> uniform surface noise into the skin, and clay-coil hair. Applies to **both characters**
+> (Celeste and the narrator). Sheet-1 criterion 5, Sheet-2 Test A "material", and the Sheet-3
+> instruction templates were corrected in the same pass.
 - **Default poses to mint:** (1) both hands on hips, confident "superman"; (2) arms crossed.
 
 ## Reference roles (this folder)
@@ -35,11 +47,14 @@ Real photos stay LOCAL — used only as reference/img2img sources on our own pod
 ## Qwen-Edit instruction (draft)
 
 > Convert the woman in the reference photos into a hand-sculpted LAIKA/Coraline
-> stop-motion puppet: smooth matte clay-resin with warm cream peach-ivory skin and a
-> subtle satin sheen (no gray, no freckles, no blush). Keep her real facial structure
+> stop-motion puppet: smooth matte painted resin with warm cream peach-ivory skin, a
+> subtle sheen and slight translucency, no clay grain or sculpt texture (no gray, no
+> freckles, no blush). Keep her real facial structure
 > and prettiness. Small round black Coraline button eyes. Dark brown curly hair worn UP
-> in a voluminous textured bun with a single long curly strand falling down in front of
-> her face. She is smiling warmly. Black long-sleeve collared button-down shirt, black
+> in a voluminous textured bun, a solid sculpted mass with fine combed striations and a
+> matte lacquered finish, with a single long curly strand falling down in front of
+> her face. She is smiling warmly. Black long-sleeve collared button-down shirt in real
+> woven cloth at true fiber scale, black
 > slim jeans, a small pendant necklace, black low sneakers with white soles and white
 > ankle socks. Natural slim real-woman proportions, not elongated or lanky. Full-body
 > front view, plain neutral studio backdrop, soft theatrical key light, shallow DOF.
