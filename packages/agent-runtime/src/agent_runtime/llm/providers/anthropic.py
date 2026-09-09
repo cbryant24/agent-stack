@@ -8,8 +8,10 @@ the Anthropic provider. Every alias target must have a pricing row in
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from anthropic import AsyncAnthropic
 from anthropic.types import TextBlock
@@ -24,6 +26,29 @@ MODEL_ALIASES: dict[str, str] = {
     "sonnet": "claude-sonnet-4-6",
     "opus": "claude-opus-4-8",
 }
+
+_IMAGE_MEDIA_TYPES: dict[str, str] = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+def _image_block(path: Path) -> dict[str, Any]:
+    suffix = path.suffix.lower()
+    media_type = _IMAGE_MEDIA_TYPES.get(suffix)
+    if media_type is None:
+        raise ValueError(
+            f"Unsupported image extension {suffix!r} for {path}; "
+            f"supported: {sorted(_IMAGE_MEDIA_TYPES)}"
+        )
+    data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": media_type, "data": data},
+    }
 
 
 class AnthropicProvider:
@@ -48,13 +73,18 @@ class AnthropicProvider:
         model: str | None = None,
         max_tokens: int,
     ) -> LLMCompletion:
-        # `image_paths` is accepted for forward-compat (vision) but not yet sent.
         resolved = self.resolve_model(model)
+        content: str | list[dict[str, Any]]
+        if image_paths:
+            content = [{"type": "text", "text": user_text}]
+            content.extend(_image_block(Path(p)) for p in image_paths)
+        else:
+            content = user_text
         response = await self._client.messages.create(
             model=resolved,
             max_tokens=max_tokens,
             system=system,
-            messages=[{"role": "user", "content": user_text}],
+            messages=[{"role": "user", "content": content}],
         )
         block = response.content[0] if response.content else None
         text = block.text if isinstance(block, TextBlock) else ""

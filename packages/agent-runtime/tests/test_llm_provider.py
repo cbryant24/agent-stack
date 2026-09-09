@@ -70,6 +70,50 @@ async def test_anthropic_complete_returns_completion() -> None:
     # the resolved model + max_tokens reached the SDK
     assert client.calls[0]["model"] == "claude-opus-4-8"
     assert client.calls[0]["max_tokens"] == 123
+    # No images → content stays a bare string (unchanged shape).
+    assert client.calls[0]["messages"][0]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_complete_forwards_images(tmp_path) -> None:
+    from pathlib import Path
+
+    frame = tmp_path / "frame.jpg"
+    frame.write_bytes(b"\xff\xd8\xff\xe0fakejpeg")
+    png = tmp_path / "frame.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfakepng")
+
+    client = _FakeClient(text="ok", i=1, o=1)
+    provider = AnthropicProvider(client=client)
+    await provider.complete(
+        system="sys",
+        user_text="describe",
+        image_paths=[frame, png],
+        model="sonnet",
+        max_tokens=64,
+    )
+    content = client.calls[0]["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "describe"}
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["type"] == "base64"
+    assert content[1]["source"]["media_type"] == "image/jpeg"
+    assert content[1]["source"]["data"]  # non-empty base64
+    assert content[2]["source"]["media_type"] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_complete_rejects_unknown_image_extension(tmp_path) -> None:
+    from pathlib import Path
+
+    bad = tmp_path / "frame.bmp"
+    bad.write_bytes(b"whatever")
+    client = _FakeClient()
+    provider = AnthropicProvider(client=client)
+    with pytest.raises(ValueError, match="Unsupported image extension"):
+        await provider.complete(
+            system="sys", user_text="x", image_paths=[bad], max_tokens=16
+        )
 
 
 # ── OpenAI stub ─────────────────────────────────────────────────────────────────

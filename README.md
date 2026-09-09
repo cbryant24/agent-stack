@@ -17,6 +17,7 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 | `edit-brief` | Assembles a director-owned, time-ordered `edit-brief.md` execution checklist from the approved script + artifacts discovered by `project_id` (VO takes, music, assets) and retrieved technique findings — all timing computed in code; Tier-1, stateless | Phase 1 / Tier 1 (51 tests) |
 | `feedback-iteration` | Revises an `edit-brief.md` in place from natural-language feedback — anchor-addressed, state-preserving, versioned; recomputes timing in code (the LLM never emits a number); proposes durable `editing_preference` lessons | Functional — 42 tests (no phase label declared) |
 | `orchestrator` | Conversational meta-agent over the system — a LangGraph ReAct loop that retrieves from the knowledge bases, reads the live code/docs, invokes 8 of the 9 sibling agents (all except `yt-intelligence-pipeline`) as tools (free/non-side-effecting ops only, plus technique-research's budgeted identify), and runs read-only vector-DB diagnostics (diagnose + report, never writes); thread-keyed SQLite checkpointer for resumable chat | Phase 2 first slice + Phase 3 sub-agent surface + diagnostics (59 tests) |
+| `video-clipping` | Long-form video → highlight clips against a director spec — ffmpeg + PySceneDetect pre-pass, faster-whisper transcript, Claude vision+decide per segment, Voyage intra- and opt-in cross-run dedupe, ffmpeg cut; auto-accrues `run` / `segment` / `lesson` points to `video_clipping_memory` and answers questions grounded in that memory via `clip explain` | Phases 0 + 1 + 2 complete (85 tests) |
 
 ## Setup
 
@@ -76,7 +77,8 @@ agent-stack/
 │   ├── technique-research/         # technique discovery → curated TechniqueReport
 │   ├── edit-brief/                 # script + artifacts → edit-brief.md execution checklist
 │   ├── feedback-iteration/         # NL feedback → in-place edit-brief.md revision
-│   └── orchestrator/               # conversational meta-agent (LangGraph) over the whole system
+│   ├── orchestrator/               # conversational meta-agent (LangGraph) over the whole system
+│   └── video-clipping/             # long-form video → highlight clips + Qdrant memory + `clip explain`
 ├── infrastructure/                 # docker-compose.yml (Qdrant + Jaeger)
 └── docs/
     └── architecture.md             # detailed design and API reference
@@ -456,6 +458,7 @@ python3 scripts/agent_costs.py --all-agents    # every agent, not just orchestra
 | `voiceover_direction_memory` | Takes (text → voice/settings/reaction) and direction lessons (voiceover-direction) |
 | `visual_generation_memory` | Generations (image+caption multimodal), technique lessons, workflow templates (visual-generation) |
 | `technique_research_outputs` | Curated per-technique findings — technique → description, why it matters, how to apply, toolset fit, source refs (technique-research) |
+| `video_clipping_memory` | `run` / `segment` / `lesson` points from `clip generate` (video-clipping). Payload indices on `memory_type` and `run_id`; auto-accrued lessons surface into future decide prompts |
 
 ## Required Environment Variables
 

@@ -1,0 +1,23 @@
+[project]
+name = "video-clipping"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = [
+    "agent-runtime",
+    "pyyaml>=6",
+    "scenedetect>=0.6",
+    "faster-whisper>=1",
+]
+
+[project.scripts]
+clip = "video_clipping.cli:cli"
+
+[tool.uv.sources]
+agent-runtime = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_clipping"]
