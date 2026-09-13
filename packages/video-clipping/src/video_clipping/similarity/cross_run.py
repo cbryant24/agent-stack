@@ -83,9 +83,10 @@ async def apply_cross_run_dedupe(
                 filter_by_type="segment",
                 exclude_run_ids=[current_run_id],
             )
-        except Exception:
-            logger.exception(
-                "cross-run query failed for segment %s; keeping it", decision.segment_id
+        except Exception as exc:
+            logger.warning(
+                "Cross-run query failed for segment %s (keeping it): %s",
+                decision.segment_id, exc,
             )
             outcome.skipped_segment_ids.append(decision.segment_id)
             outcome.kept.append(decision)

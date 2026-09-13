@@ -143,8 +143,13 @@ async def surface_lessons_for_spec(
         embedder = store._store.embedding_client
         [qv] = await embedder.embed([query], input_type="query")
         hits = await store.query_nearest(qv, top_k=top_k, filter_by_type="lesson")
-    except Exception:
-        logger.exception("lesson surfacing failed; continuing without lessons")
+    except Exception as exc:
+        logger.warning(
+            "Lesson surfacing skipped (Qdrant unreachable?): %s. "
+            "Start Qdrant with `docker compose -f infrastructure/docker-compose.yml up -d` "
+            "to enable lesson-aware decide prompts.",
+            exc,
+        )
         return []
 
     summaries: list[str] = []

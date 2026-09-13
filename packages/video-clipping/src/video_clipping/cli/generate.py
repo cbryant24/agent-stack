@@ -143,8 +143,33 @@ def generate_command(
 
     click.echo("")
     click.echo(f"  status:            {result.status}")
+    click.echo(f"  qdrant memory:     {_qdrant_summary(result, dry_run)}")
     click.echo(f"  actual cost:       ${result.actual_cost_usd or 0.0:.4f}")
     click.echo(f"  clips written:     {len(result.clip_paths)}")
     if result.halted_reason:
         click.echo(f"  halted_reason:     {result.halted_reason}", err=True)
     click.echo(f"  run manifest:      {plan.parent / 'run.json'}")
+
+
+def _qdrant_summary(run, dry_run: bool) -> str:
+    """One-line summary of memory-persistence outcome for the CLI end-of-run block.
+
+    Kept honest so `status: completed` isn't the whole story — a run that produced
+    clips but couldn't write to Qdrant is only partially done from a memory
+    standpoint, and this line surfaces that.
+    """
+    if dry_run:
+        return "n/a (dry-run)"
+    if run.status == "failed":
+        return "not attempted (run failed)"
+    if not run.accepted_segment_ids:
+        return "nothing to persist (no accepted clips)"
+    if run.qdrant_deviation:
+        return (
+            "⚠  DEVIATED — writes failed; re-run to persist "
+            "(start with `docker compose -f infrastructure/docker-compose.yml up -d`)"
+        )
+    lesson_count = len(run.lessons_recorded)
+    seg_count = len(run.accepted_segment_ids)
+    lesson_part = f", {lesson_count} lesson{'s' if lesson_count != 1 else ''}" if lesson_count else ""
+    return f"persisted (run + {seg_count} segment{'s' if seg_count != 1 else ''}{lesson_part})"

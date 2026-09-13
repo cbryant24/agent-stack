@@ -138,8 +138,8 @@ async def _related_prior_clips_section(run: Run, store: VideoClippingStore) -> s
     ]
     try:
         lines = await _related_prior_clips_lines(run, accepted, store)
-    except Exception:
-        logger.exception("related-prior-clips section: Qdrant query failed")
+    except Exception as exc:
+        logger.warning("Related-prior-clips section skipped: %s", exc)
         return "\n## Related prior clips\n\n_(Qdrant unavailable)_"
     return "\n".join(["", "## Related prior clips", "", *lines])
 
@@ -149,8 +149,8 @@ async def _lessons_section(run: Run, store: VideoClippingStore) -> str:
         return ""
     try:
         payloads = await store.retrieve_lessons(run.lessons_recorded)
-    except Exception:
-        logger.exception("lessons section: Qdrant query failed")
+    except Exception as exc:
+        logger.warning("Lessons section skipped: %s", exc)
         return "\n## Lessons recorded this run\n\n_(Qdrant unavailable)_"
     if not payloads:
         return ""

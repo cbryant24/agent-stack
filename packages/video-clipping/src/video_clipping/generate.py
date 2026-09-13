@@ -165,8 +165,10 @@ async def _apply_cross_run(
         return all_decisions, kept, []
     try:
         await store.ensure_collection()
-    except Exception:
-        logger.exception("cross-run dedupe: ensure_collection failed; skipping")
+    except Exception as exc:
+        logger.warning(
+            "Cross-run dedupe skipped (Qdrant unreachable?): %s", exc
+        )
         return all_decisions, kept, []
 
     outcome = await apply_cross_run_dedupe(
@@ -266,8 +268,14 @@ async def _persist_to_qdrant(
         # Run last, with the lesson_ids captured in payload.
         run.lessons_recorded = lesson_ids
         await store.upsert_run(run)
-    except Exception:
-        logger.exception("Qdrant persistence failed; run remains successful on disk")
+    except Exception as exc:
+        logger.warning(
+            "Qdrant persistence skipped (Qdrant unreachable?): %s. "
+            "Run remains successful on disk with qdrant_deviation=True. "
+            "Start Qdrant with `docker compose -f infrastructure/docker-compose.yml up -d` "
+            "and re-run to persist this run's memory.",
+            exc,
+        )
         deviation = True
     return lesson_ids, deviation
 
