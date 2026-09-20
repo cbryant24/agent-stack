@@ -13,7 +13,7 @@ agent-stack/
 ├── pyproject.toml          # uv workspace root + pytest config
 ├── README.md               # per-agent CLI usage (see §5 — note drift in §6)
 ├── .env / .env.example     # API keys & paths (op:// 1Password refs; not committed)
-├── packages/               # 11 workspace members (see §3)
+├── packages/               # 12 workspace members (see §3)
 ├── infrastructure/
 │   └── docker-compose.yml  # Qdrant (6333/6334) + Jaeger (16686/4318) ONLY
 ├── scripts/
@@ -42,7 +42,7 @@ Runtime data lives **outside the repo**: `~/agent-data/` (sources, audio, stills
 | `technique-research` | Goal → prioritized technique domains → delegate gaps to tutorial-research → `TechniqueReport` | `technique-research` | tutorial-research, anthropic, tavily | [README](packages/technique-research/README.md) |
 | `edit-brief` | Approved `script.md` + artifacts discovered by `project_id` (VO takes, music, assets) + retrieved technique findings → director-owned, time-ordered `edit-brief.md` checklist for a DaVinci Resolve *free* session; all timing computed in code, never by the LLM. Tier-1 (no DaVinci API/automation/delegation), stateless | `edit-brief` | anthropic | [README](packages/edit-brief/README.md) |
 | `feedback-iteration` | NL feedback on an `edit-brief.md` → state-preserving, anchor-addressed, in-place revision + version trail; timing recomputed in code (LLM never emits a number); proposes durable `editing_preference` lessons to `user_knowledge`. Stateless | `feedback-iteration` | anthropic | [README](packages/feedback-iteration/README.md) |
-| `orchestrator` | **Hub.** Conversational LangGraph ReAct meta-agent; wraps 8 of the 9 sibling CLI agents as tools (2 free/non-side-effecting ops each; all except `yt-intelligence-pipeline`, reached indirectly via `tutorial-research`); resumable SQLite-checkpointed chat | `orchestrator` | langgraph, langgraph-checkpoint-sqlite, langchain-anthropic, + those 8 agents | [README](packages/orchestrator/README.md) |
+| `orchestrator` | **Hub.** Conversational LangGraph ReAct meta-agent; wraps 8 of 10 sibling CLI agents as tools (free/non-side-effecting ops only); `yt-intelligence-pipeline` and `video-clipping` are not wrapped | `orchestrator` | langgraph, langgraph-checkpoint-sqlite, langchain-anthropic, + those 8 agents | [README](packages/orchestrator/README.md) |
 
 **`agent-runtime`** (shared lib, no CLI): config, OTel tracing, budget tracking, delegation, Qdrant memory + Voyage embeddings, knowledge/`docs_ingest`, reporting, diagnostics, registry. → [README](packages/agent-runtime/README.md). All Python is **≥3.12**.
 
@@ -72,3 +72,7 @@ Runtime data lives **outside the repo**: `~/agent-data/` (sources, audio, stills
 - **visual-generation model naming drift:** design docs say Flux (stills) / WAN 2.2 (video), but the built path used **Z-Image-Turbo** (different recipe: cfg≈1, steps≈8, `res_multistep`/`simple`). WAN 2.2 workflow JSON lives in `packages/visual-generation/workflows/`. See `docs/visual-generation-known-issues.md`.
 - **No in-repo GPU.** `visual-generation` holds no RunPod credential — you spin up a pod (`scripts/pod up`) and pass `--endpoint <comfyui-url>`. `infrastructure/` is only Qdrant + Jaeger.
 - **Qdrant collections (6):** `user_knowledge`, `tutorial_research`, `music_curation_memory`, `voiceover_direction_memory`, `visual_generation_memory`, `technique_research_outputs`. → README "Qdrant Collections".
+
+## 7. Session wrap-up
+
+- **End-of-session knowledge check.** After a session with substantial technical work (new infra, an incident diagnosis, a non-trivial implementation — not every session), **ask** whether the user wants a dated point-in-time knowledge-drop doc written to `docs/handoffs/`. Don't create it unprompted. If yes: a narrative covering *why*, not just *what changed*, dense enough that an LLM reading it cold could generate real comprehension questions from it (the user pastes it into a separate chat afterward to quiz themselves and surface gaps). Worked example of the expected shape/depth: [`docs/handoffs/visual-generation-2026-09-20-runpod-global-volume-handoff.md`](docs/handoffs/visual-generation-2026-09-20-runpod-global-volume-handoff.md).

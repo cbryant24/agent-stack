@@ -101,3 +101,63 @@ code is ahead of the docs.
   (all the troubleshooting, recipe, and subgraph notes are Z-Image). Reconcile the
   model naming in `docs/ai-director-agent-system.md` and the handoffs so the spec
   matches practice (and note that WAN 2.2 — not Flux — is the confirmed video model).
+
+## Infra resilience — 2026-09-20 (post Global Volume migration)
+
+The Global Volume was reclaimed once already (RunPod account balance hit zero while
+the user was away for an extended period — RunPod deletes an unfunded volume after it
+sits empty too long). The user has since set up balance auto-reload, so this specific
+trigger shouldn't recur, but the underlying risk (volume loss for any reason) isn't
+eliminated, and the recovery — re-provisioning the pod, re-installing ComfyUI, and
+verifying everything end to end — took a full session of live discovery+debugging on
+2026-09-20 (see `docs/handoffs/visual-generation-2026-09-20-runpod-global-volume-handoff.md`
+for the full incident narrative). None of that discovery should need repeating.
+
+- **Checkpointed pod/volume rebuild runbook.** Deferred: turning the rebuild sequence
+  below into an actual script (bash, matching `scripts/pod` / `scripts/comfyui-bootstrap`
+  conventions — `set -euo pipefail`, timestamped `log()`, idempotent steps). Not built
+  yet by design — captured here as a step-by-step spec so it can be implemented
+  directly without re-deriving the steps, whenever the user wants it built. Each step
+  should be independently retryable: if one fails, fix it and resume from that step
+  rather than restarting the whole sequence.
+
+  1. **Confirm the Global Volume still exists** (`stably_diffused` /
+     `IMAGE_NETWORK_VOLUME_ID` in `.env`) via the RunPod console or API. Checkpoint:
+     volume is listed with `models/` populated at roughly the expected size (~85GB+).
+     Failure here means a much bigger rebuild — the models themselves are gone, not
+     just the ComfyUI install — out of scope for this runbook as written.
+  2. **Confirm `.env` has safe values**: `TEMPLATE_ID=runpod-torch-v280` (never the
+     crash-looping `cnne9dp3rt`/`agent-stack` template) and a valid `RUNPOD_API_KEY`.
+     Checkpoint: both present; `scripts/pod`'s own `guard_against_known_bad_source()`
+     is a second line of defense here regardless.
+  3. **`op run --env-file=.env -- ./scripts/pod up`.** Creates the pod via GraphQL,
+     verifies GPU attachment, then polls `uptimeSeconds` for real progress (the
+     health check). Checkpoint: `up` exits 0 and prints a pod id. Failure mode: if it
+     deletes the pod and exits nonzero, re-check step 2 before retrying — that's the
+     most common cause.
+  4. **Add SSH keepalive config** if `~/.ssh/config` doesn't already have it (prevents
+     the tunnel drops hit repeatedly on 2026-09-20 during long cold-load waits):
+     `ServerAliveInterval 30` / `ServerAliveCountMax 3` under `Host *`. One-time setup,
+     not per-rebuild, but worth checking.
+  5. **Get SSH-over-TCP connection info**: `runpodctl pod get <id> -o json | jq .ssh`
+     (IP/port/`ssh_command`). Checkpoint: fields are populated (not null).
+  6. **`scp scripts/comfyui-bootstrap` onto the pod** over the direct-TCP endpoint.
+     Checkpoint: `scp` exits 0.
+  7. **Run it over SSH**: `bash /root/comfyui-bootstrap`. Installs ComfyUI (with
+     partial-install detection, so debris from any prior crash-loop doesn't get
+     trusted as a complete install), builds the venv, starts the server. Checkpoint:
+     script exits 0; its own internal check (`main.py` present + plausible file
+     count) already fails loudly if the install didn't land.
+  8. **Open an SSH tunnel** (`ssh -N -L 8188:127.0.0.1:8188 ...`) and confirm
+     `curl 127.0.0.1:8188/system_stats` responds, both from inside the pod directly
+     and through the tunnel from the Mac. Checkpoint: valid JSON back from both.
+  9. **Smoke-test one generation per model family actually needed** (Z-Image-Turbo
+     and/or Wan 2.2 T2V/I2V, whichever this rebuild is for). Expect the cold-load
+     times documented in `runpod-setup-context.md`'s "Cold vs. warm model-load times"
+     section (minutes, not seconds, on the first generation per model) — this is
+     normal and not itself a failure signal; only treat it as a problem if
+     `nvidia-smi dmon` shows no compute burst at all by the time it should have
+     finished, or the job errors outright.
+  10. **Tear down or hand off**: `./scripts/pod down` if done, or leave it running
+      and start `./scripts/pod watch` (on the Mac, not over SSH) for idle-cost
+      protection if work continues.

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #
 # pod — RunPod lifecycle controller & idle-cost watchdog for the visual-generation
-#       ComfyUI pod (image runpod/comfyui:1.3.0-cuda12.8, US-NE-1, ~$2.09/hr).
+#       ComfyUI pod (~$2.09/hr). ComfyUI itself is installed/started separately by
+#       scripts/comfyui-bootstrap, NOT baked into the deployed image/template — see
+#       "POD CREATION GOES THROUGH GRAPHQL" and the TEMPLATE_ID env knob below for why.
 #
 # LIFECYCLE: create-fresh / delete (NOT start/stop).
 #
-# This pod uses a network volume (gen-usne1, US-NE-1) and a scarce GPU (RTX PRO 6000
-# Blackwell). RunPod pins a STOPPED pod to its original physical host; for this GPU the
+# This pod uses a RunPod Global Volume (region-independent, elastic, object-storage-backed
+# via a FUSE layer — fuse.geesefs) and a scarce GPU (RTX PRO 6000 Blackwell). RunPod pins a
+# STOPPED pod to its original physical host; for this GPU the
 # host's GPUs are taken by the time you'd resume, so `pod start` reliably fails ("not
 # enough free GPUs on the host machine") and stopped pods can also be reclaimed. The
-# correct lifecycle is therefore create-fresh / delete: the network volume SURVIVES pod
+# correct lifecycle is therefore create-fresh / delete: the Global Volume SURVIVES pod
 # deletion, and a fresh `pod create` schedules onto any available host. Everything
 # persistent lives on the volume; the pod is disposable scaffolding.
 #
@@ -18,10 +21,27 @@
 #     this script has no reason to read or modify it.
 #   - NEVER call `pod start` or `pod stop`. This script is create/delete ONLY.
 #
+# POD CREATION GOES THROUGH GRAPHQL, NOT runpodctl:
+#   `runpodctl pod create --network-volume-id <global-volume-id>` fails with "Network
+#   volume not found" — runpodctl (and the newer REST API it wraps) has no support for
+#   attaching a Global Volume. The RunPod web console attaches one via an undocumented
+#   `volumeMounts` array on the older `podFindAndDeployOnDemand` GraphQL mutation, captured
+#   from the console's network traffic on 2026-09-19 (operation: DeployOnDemand, endpoint
+#   https://api.runpod.io/graphql, auth via `?api_key=` query param — confirmed against
+#   RunPod's own GraphQL docs at docs.runpod.io/sdks/graphql/manage-pods, not guessed).
+#   `create_pod()` below POSTs that mutation directly with curl. This is undocumented beta
+#   API surface (the `volumeMounts` field / `OBJECT_STORE_VOLUME` enum value appear nowhere
+#   in RunPod's public docs) and MAY BREAK without notice. Everything downstream of getting
+#   a pod id back — verifying it came up with a GPU, status, delete, watch — still goes
+#   through runpodctl exactly as before; only creation itself is GraphQL.
+#
 # Subcommands:
 #   up      Ensure a running pod exists. If one matching POD_NAME is already RUNNING with
-#           a GPU, reuse it; otherwise create a fresh pod and verify it came up RUNNING
-#           with gpuCount >= 1 (a 0-GPU result is capacity failure -> delete + retry).
+#           a GPU, reuse it; otherwise create a fresh pod, verify it came up RUNNING with
+#           gpuCount >= 1 (a 0-GPU result is capacity failure -> delete + retry), THEN poll
+#           for real uptime progress (RUNNING/gpuCount alone is not enough — a crash-looping
+#           container can show both the whole time; see HEALTH_CHECK_* below and the
+#           runpod-setup-context.md incident it's guarding against).
 #   down    Delete ALL pods matching the target (running OR exited) so stale pods don't
 #           accumulate. NEVER touches the network volume.
 #   status  Print id, name, desiredStatus, gpuCount, costPerHr for each matching pod
@@ -34,51 +54,84 @@
 # Env knobs (constants — all overridable):
 #   POD_NAME           Pod name to target.                       Default: visual-generation
 #   POD_ID             Target a specific pod id instead of name. Default: unset.
-#   TEMPLATE_ID        RunPod template to deploy from (preferred — the `agent-stack`
-#                      template carries the start command that launches ComfyUI on :8188
-#                      from the volume's /workspace/runpod-slim/ComfyUI). Empty (the default)
-#                      falls back to IMAGE, but a BARE image does NOT reliably auto-start
-#                      ComfyUI (pod schedules with a GPU yet nothing binds :8188 — 404 on
-#                      every path). Set this to the agent-stack template id for a pod that
-#                      actually serves. Default: unset.
-#   IMAGE              Container image (fallback when TEMPLATE_ID is empty).
-#                                              Default: runpod/comfyui:1.3.0-cuda12.8
+#   TEMPLATE_ID        RunPod template to deploy from. Default: runpod-torch-v280 (RunPod's
+#                      stock PyTorch template — image runpod/pytorch:1.0.2-cu1281-torch280-
+#                      ubuntu2404). Set to "" (explicitly empty) to fall back to IMAGE instead.
+#                      DO NOT set this to the agent-stack/runpod-comfyui template (id
+#                      cnne9dp3rt, image runpod/comfyui:*) — its entrypoint rsyncs a baked
+#                      ComfyUI bundle onto /workspace on every boot using `rsync -a`, which
+#                      needs chown + atomic-rename; the Global Volume supports neither, so
+#                      it fails, the entrypoint dies under `set -e`, and the container
+#                      crash-loops at full GPU cost with zero processes running (observed
+#                      2026-09-19: ~11 restarts at 17s intervals, $2.11/hr, until deleted).
+#                      See runpod-setup-context.md's "Template" section for the full story —
+#                      this supersedes that section's old advice to prefer the comfyui
+#                      template, which was correct for the old regional network volume and
+#                      is now actively wrong. ComfyUI is installed and started separately by
+#                      scripts/comfyui-bootstrap, which avoids both operations (see its
+#                      header comment). create_pod() also actively REFUSES to create against
+#                      this template id (or the runpod/comfyui image, if TEMPLATE_ID is
+#                      empty) — see guard_against_known_bad_source() — so a stale env value
+#                      fails fast instead of crash-looping; that check only covers what's
+#                      knowable at create time, see its own comment for the exact limits.
+#   IMAGE              Container image (fallback when TEMPLATE_ID is empty). Must likewise
+#                      avoid any baked ComfyUI-workspace-sync entrypoint — the reasoning
+#                      above applies to any image, not just runpod/comfyui specifically.
+#                                Default: runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 #   GPU_ID             GPU type.   Default: NVIDIA RTX PRO 6000 Blackwell Server Edition
 #   CLOUD_TYPE         Cloud type.                               Default: SECURE
-#   DATACENTER         Data center id.                           Default: US-NE-1
-#   IMAGE_NETWORK_VOLUME_ID  Network volume to mount (the inference/image volume). REQUIRED
-#                      (no default) — must be set in the environment; `up` fails fast if unset.
+#   DATACENTER         Data center id. Empty = no constraint (the Global Volume is
+#                      region-independent, so any datacenter is valid). Default: unset
+#   IMAGE_NETWORK_VOLUME_ID  Volume to mount (the inference/image volume). REQUIRED (no
+#                      default) — must be set in the environment; `up` fails fast if unset.
+#                      Despite the var name (kept as-is — already set this way in .env),
+#                      this now holds a RunPod GLOBAL VOLUME id, not a regional network
+#                      volume id. See "POD CREATION GOES THROUGH GRAPHQL" above.
 #   VOLUME_MOUNT_PATH  Mount path for the volume.                Default: /workspace
 #   CONTAINER_DISK_GB  Container disk size in GB.                Default: 150
 #   PORTS              Exposed ports.                            Default: 8188/http,22/tcp
+#   RUNPOD_API_KEY     RunPod API key, used directly for the GraphQL create call (`up` only
+#                      — down/status/watch stay on runpodctl's own stored auth). REQUIRED
+#                      for `up`, no default; `up` fails fast if unset. Same var name
+#                      runpodctl itself recognizes, but runpodctl on this machine currently
+#                      authenticates via its own `~/.runpod/config.toml`, not this var, so
+#                      it likely needs to be added to `.env` separately.
 #   CREATE_RETRIES     Capacity-error retries on create.         Default: 3
 #   CREATE_RETRY_DELAY Seconds between create retries.           Default: 15
+#   HEALTH_CHECK_TIMEOUT   Seconds `up` polls a freshly-created pod for real uptime progress
+#                      before giving up, deleting it, and exiting nonzero.  Default: 180 (3m)
+#   HEALTH_CHECK_INTERVAL  Seconds between health-check polls.   Default: 15
 #   CHECKIN_INTERVAL   Seconds between `watch` confirmations.    Default: 1800 (30m)
 #   GRACE              Seconds to respond before `watch` deletes. Default: 180 (3m)
 #
-# External dependencies: runpodctl, jq.
+# External dependencies: runpodctl, jq, curl.
 
 set -euo pipefail
 
 POD_NAME="${POD_NAME:-visual-generation}"
-TEMPLATE_ID="${TEMPLATE_ID-}"
-IMAGE="${IMAGE:-runpod/comfyui:1.3.0-cuda12.8}"
+# Dash form (not :-) so `TEMPLATE_ID= ./scripts/pod up` (explicitly empty) still forces the
+# IMAGE fallback below — only a totally-unset var gets this default.
+TEMPLATE_ID="${TEMPLATE_ID-runpod-torch-v280}"
+IMAGE="${IMAGE:-runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404}"
 GPU_ID="${GPU_ID:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
 CLOUD_TYPE="${CLOUD_TYPE:-SECURE}"
-DATACENTER="${DATACENTER:-US-NE-1}"
+DATACENTER="${DATACENTER:-}"
 IMAGE_NETWORK_VOLUME_ID="${IMAGE_NETWORK_VOLUME_ID:-}"
 VOLUME_MOUNT_PATH="${VOLUME_MOUNT_PATH:-/workspace}"
 CONTAINER_DISK_GB="${CONTAINER_DISK_GB:-150}"
 PORTS="${PORTS:-8188/http,22/tcp}"
+RUNPOD_API_KEY="${RUNPOD_API_KEY:-}"
 CREATE_RETRIES="${CREATE_RETRIES:-3}"
 CREATE_RETRY_DELAY="${CREATE_RETRY_DELAY:-15}"
+HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-180}"
+HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-15}"
 CHECKIN_INTERVAL="${CHECKIN_INTERVAL:-1800}"
 GRACE="${GRACE:-180}"
 
 # --- helpers ---------------------------------------------------------------
 
 log() {
-  printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*"
+  printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*" >&2
 }
 
 usage() {
@@ -86,7 +139,8 @@ usage() {
 Usage: pod <up|down|status|watch>
 
   up      Ensure a running pod exists: reuse a RUNNING pod with a GPU, else create a
-          fresh one and verify it came up with gpuCount >= 1.
+          fresh one, verify it came up with gpuCount >= 1, then poll for real uptime
+          progress (deletes and fails if the container is stuck crash-looping).
   down    Delete ALL pods matching the target (running or exited). Never touches the
           network volume.
   status  Print id, name, desiredStatus, gpuCount, costPerHr for each matching pod
@@ -117,6 +171,10 @@ preflight() {
   if ! command -v jq >/dev/null 2>&1; then
     echo "error: jq not found on PATH. Install it with:" >&2
     echo "    brew install jq" >&2
+    exit 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl not found on PATH (needed for the GraphQL pod-create call)." >&2
     exit 1
   fi
 }
@@ -152,64 +210,180 @@ delete_pod() {
   log "deleted pod $1."
 }
 
-# True if the given create/error output looks like a transient capacity/host-full problem.
+# True if the given error text looks like a transient capacity/host-full problem. Takes
+# GraphQL error message text (from create_pod()'s curl call) or runpodctl's own stderr
+# (from delete/get, still runpodctl-based). "no longer any instances" is RunPod's own
+# well-known phrasing for a GraphQL capacity failure on podFindAndDeployOnDemand; the rest
+# of the pattern covers runpodctl's wording.
 is_capacity_error() {
   grep -qiE 'not enough free gpus|not enough resources|no longer any instances|no instances available|host (is )?full|insufficient (capacity|resources)' <<<"$1"
 }
 
-# Create a fresh pod with the verified deploy command, retrying on capacity errors.
-# Echoes the verified pod id on success; exits nonzero on non-capacity error or exhausted
-# retries.
+# Known-bad TEMPLATE_ID values that crash-loop against a Global Volume (baked
+# `rsync -a` entrypoint that requires chown, which the volume's FUSE layer rejects with
+# EPERM — see the TEMPLATE_ID knob comment above and the 2026-09-19 incident writeup in
+# runpod-setup-context.md). Add to this array if another such template id turns up.
+KNOWN_BAD_TEMPLATE_IDS=(cnne9dp3rt)
+
+# Refuse to create against a known-bad source, checked once before create_pod()'s retry
+# loop so a bad value fails immediately instead of burning a capacity-retry cycle.
+#
+# COVERAGE, STATED EXPLICITLY RATHER THAN IMPLIED: this can only catch what's actually
+# knowable at create time, and that differs by path:
+#   - TEMPLATE_ID path: matched against KNOWN_BAD_TEMPLATE_IDS by literal id ONLY. RunPod's
+#     GraphQL schema advertises a `myself { podTemplates { ... } }` query (confirmed to
+#     exist via https://graphql-spec.runpod.io/), which might resolve a template id to its
+#     underlying image, but this session could not confirm whether PodTemplate actually
+#     exposes an imageName-equivalent field, so that lookup is NOT implemented here rather
+#     than guessed at. Net effect: a renamed or re-created template with a different id but
+#     the same baked rsync entrypoint will NOT be caught by this check.
+#   - IMAGE path (TEMPLATE_ID empty): matched by substring against the actual image
+#     string, which unlike a template id IS fully known at create time — this reliably
+#     catches any tag/rename of the runpod/comfyui repo (e.g. any `runpod/comfyui:*`), but
+#     not a different repo name that happens to bundle the same rsync-onto-workspace
+#     entrypoint under a different label.
+guard_against_known_bad_source() {
+  local bad_id
+  if [[ -n "$TEMPLATE_ID" ]]; then
+    for bad_id in "${KNOWN_BAD_TEMPLATE_IDS[@]}"; do
+      if [[ "$TEMPLATE_ID" == "$bad_id" ]]; then
+        echo "" >&2
+        echo "!!! ERROR: TEMPLATE_ID='$TEMPLATE_ID' is a known-bad template for this Global" >&2
+        echo "    Volume — its baked entrypoint rsyncs onto /workspace with 'rsync -a', which" >&2
+        echo "    needs chown; the volume rejects chown (EPERM), so the container crash-loops" >&2
+        echo "    at full GPU cost. See the TEMPLATE_ID comment above and the incident writeup" >&2
+        echo "    in runpod-setup-context.md. Refusing to create." >&2
+        echo "    (This only checks the literal template id — a renamed/re-created template" >&2
+        echo "    with the same underlying image would NOT be caught here.)" >&2
+        exit 1
+      fi
+    done
+  elif grep -qi 'runpod/comfyui' <<<"$IMAGE"; then
+    echo "" >&2
+    echo "!!! ERROR: IMAGE='$IMAGE' is the runpod/comfyui image — its entrypoint rsyncs onto" >&2
+    echo "    /workspace with 'rsync -a', which needs chown; the Global Volume rejects chown" >&2
+    echo "    (EPERM), so the container crash-loops at full GPU cost. See the TEMPLATE_ID" >&2
+    echo "    comment above and the incident writeup in runpod-setup-context.md. Refusing to" >&2
+    echo "    create." >&2
+    exit 1
+  fi
+}
+
+# Build the GraphQL request body (query + variables) for podFindAndDeployOnDemand. Echoes
+# the JSON body. All field names/values below (beyond the ones this script already exposes
+# as env knobs) are copied verbatim from a captured, verified-working console request
+# (DeployOnDemand, 2026-09-19) — see the "POD CREATION GOES THROUGH GRAPHQL" header comment.
+# Built with jq (not string interpolation) so no value here needs manual quote-escaping.
+build_create_input() {
+  local source_key source_val
+  if [[ -n "$TEMPLATE_ID" ]]; then
+    source_key="templateId"
+    source_val="$TEMPLATE_ID"
+  else
+    source_key="imageName"
+    source_val="$IMAGE"
+  fi
+
+  local input_json
+  input_json="$(jq -n \
+    --arg cloudType "$CLOUD_TYPE" \
+    --arg gpuTypeId "$GPU_ID" \
+    --arg sourceKey "$source_key" \
+    --arg sourceVal "$source_val" \
+    --arg name "$POD_NAME" \
+    --arg ports "$PORTS" \
+    --arg volumeId "$IMAGE_NETWORK_VOLUME_ID" \
+    --arg mountPath "$VOLUME_MOUNT_PATH" \
+    --arg dataCenter "$DATACENTER" \
+    --argjson containerDiskInGb "$CONTAINER_DISK_GB" \
+    '{
+      cloudType: $cloudType,
+      gpuCount: 1,
+      gpuTypeId: $gpuTypeId,
+      containerDiskInGb: $containerDiskInGb,
+      ports: $ports,
+      name: $name,
+      # Companions required alongside volumeMounts per the captured request — the old
+      # scalar volume-attachment fields (volumeInGb/volumeKey) go unused when volumeMounts
+      # is present.
+      volumeInGb: 0,
+      volumeKey: null,
+      volumeMounts: [
+        { volumeId: $volumeId, volumeType: "OBJECT_STORE_VOLUME", mountPath: $mountPath }
+      ],
+      # Copied verbatim from the captured request; necessity unconfirmed beyond
+      # volumeMounts/volumeInGb/volumeKey above. minMemoryInGb/minVcpuCount read as a floor
+      # (any host meeting or exceeding it), so keeping the captured 31/8 here is harmless
+      # regardless of which GPU_ID is actually requested.
+      startSsh: true,
+      startJupyter: true,
+      globalNetwork: false,
+      minMemoryInGb: 31,
+      minVcpuCount: 8,
+      allowedCudaVersions: ["12.8","12.9","13.0","13.1","13.2","13.3","13.4"]
+    }
+    + { ($sourceKey): $sourceVal }
+    + (if $dataCenter != "" then { dataCenterIds: [$dataCenter] } else {} end)')"
+
+  jq -n --argjson input "$input_json" '{
+    query: "mutation podFindAndDeployOnDemand($input: PodFindAndDeployOnDemandInput) { podFindAndDeployOnDemand(input: $input) { id } }",
+    variables: { input: $input }
+  }'
+}
+
+# Create a fresh pod via the GraphQL podFindAndDeployOnDemand mutation (see header comment —
+# runpodctl cannot attach a Global Volume), retrying on capacity errors. Verification after
+# getting an id back goes through the existing runpodctl-based pod_get/delete_pod exactly as
+# before. Echoes the verified pod id on success; exits nonzero on non-capacity error or
+# exhausted retries.
 create_pod() {
-  local attempt=1 out rc id json status gpu
+  local attempt=1 body out rc errors id json status gpu
+  guard_against_known_bad_source
+
   while (( attempt <= CREATE_RETRIES )); do
-    local source_args=(--image "$IMAGE") source_desc="image $IMAGE"
-    if [[ -n "$TEMPLATE_ID" ]]; then
-      source_args=(--template-id "$TEMPLATE_ID")
-      source_desc="template $TEMPLATE_ID"
-    fi
+    local source_desc="image $IMAGE"
+    [[ -n "$TEMPLATE_ID" ]] && source_desc="template $TEMPLATE_ID"
     log "creating pod '$POD_NAME' from $source_desc (attempt $attempt/$CREATE_RETRIES)..."
 
+    body="$(build_create_input)"
+
     rc=0
-    out="$(runpodctl pod create \
-      --name "$POD_NAME" \
-      "${source_args[@]}" \
-      --gpu-id "$GPU_ID" \
-      --cloud-type "$CLOUD_TYPE" \
-      --data-center-ids "$DATACENTER" \
-      --network-volume-id "$IMAGE_NETWORK_VOLUME_ID" \
-      --volume-mount-path "$VOLUME_MOUNT_PATH" \
-      --container-disk-in-gb "$CONTAINER_DISK_GB" \
-      --ports "$PORTS" 2>&1)" || rc=$?
+    out="$(curl -sS --request POST \
+      --header 'content-type: application/json' \
+      --url "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" \
+      --data "$body" 2>&1)" || rc=$?
 
     if (( rc != 0 )); then
-      if is_capacity_error "$out"; then
+      echo "error: curl to RunPod GraphQL failed (transport error, not retried):" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+    fi
+
+    # A capacity failure (and any other GraphQL-level error) comes back as HTTP 200 with an
+    # "errors" array, not a nonzero curl exit code — check the response body, not $rc.
+    errors="$(jq -r '(.errors // []) | map(.message) | join("; ")' <<<"$out" 2>/dev/null || true)"
+    if [[ -n "$errors" ]]; then
+      if is_capacity_error "$errors"; then
         log "capacity error on create; retrying in ${CREATE_RETRY_DELAY}s..."
-        log "  (runpodctl: $(head -n1 <<<"$out"))"
+        log "  (GraphQL: $errors)"
         sleep "$CREATE_RETRY_DELAY"
         (( attempt++ ))
         continue
       fi
-      echo "error: pod create failed (non-capacity error):" >&2
+      echo "error: pod create failed (non-capacity GraphQL error):" >&2
+      echo "$errors" >&2
+      exit 1
+    fi
+
+    id="$(jq -r '.data.podFindAndDeployOnDemand.id // empty' <<<"$out" 2>/dev/null || true)"
+    if [[ -z "$id" ]]; then
+      echo "error: pod create returned no errors but no pod id either — unexpected response:" >&2
       printf '%s\n' "$out" >&2
       exit 1
     fi
 
-    # Parse the new pod id from create output (runpodctl prints something like
-    #: pod "<id>"). Fall back to resolving the newest matching pod by name.
-    id="$(grep -oE '[a-z0-9]{12,}' <<<"$out" | head -n1 || true)"
-    if [[ -z "$id" ]]; then
-      log "could not parse pod id from create output; resolving newest '$POD_NAME'..."
-      id="$(resolve_pod | tail -n1)"
-    fi
-    if [[ -z "$id" ]]; then
-      echo "error: pod create reported success but no pod id could be resolved:" >&2
-      printf '%s\n' "$out" >&2
-      exit 1
-    fi
-
-    # Single read to verify the GPU attached (create returns RUNNING + gpuCount inline,
-    # so no polling loop is needed).
+    # Single read to verify the GPU attached (matches the pre-GraphQL flow exactly — the
+    # id is all this function hands off; verification/delete stay on runpodctl).
     json="$(pod_get "$id")"
     status="$(jq -r '.desiredStatus' <<<"$json")"
     gpu="$(jq -r '.gpuCount' <<<"$json")"
@@ -228,19 +402,98 @@ create_pod() {
     (( attempt++ ))
   done
 
+  local dc_desc="${DATACENTER:-all datacenters}"
   echo "" >&2
-  echo "!!! ERROR: could not create a pod with a GPU after $CREATE_RETRIES attempt(s) — US-NE-1 capacity for '$GPU_ID' is exhausted. Try again later." >&2
+  echo "!!! ERROR: could not create a pod with a GPU after $CREATE_RETRIES attempt(s) — capacity for '$GPU_ID' in $dc_desc is exhausted. Try again later." >&2
   exit 1
+}
+
+# Poll a freshly-created pod's uptimeSeconds until it shows real progress (or
+# HEALTH_CHECK_TIMEOUT elapses), deleting it and failing loudly on timeout/restart rather
+# than leaving a stuck pod billing.
+#
+# WHY THIS EXISTS: `create_pod()`'s own check (desiredStatus == RUNNING && gpuCount >= 1) is
+# NOT sufficient — the 2026-09-19 crash-loop incident showed a pod can report RUNNING with a
+# GPU attached for its *entire* lifetime while the container inside restarts every ~15-20s
+# and never runs a single process (see the TEMPLATE_ID comment above and
+# runpod-setup-context.md). Pod-level desiredStatus doesn't reflect container-level health.
+#
+# WHAT SIGNAL THIS USES, AND WHY: `pod get -o json` exposes a top-level `uptimeSeconds`
+# field, confirmed via a live response on 2026-09-20 (not previously verified — an earlier
+# version of this function used `.runtime` instead, which turned out not to exist at all in
+# this account's `pod get` responses; `uptimeSeconds` does, and is a direct restart/uptime
+# signal rather than a guess). This function polls it every HEALTH_CHECK_INTERVAL: a drop
+# from one poll to the next means the container restarted (crash-loop) — fail immediately,
+# no need to wait out the rest of the timeout. Any nonzero reading that hasn't just dropped
+# means the container has stayed up for at least one full boot — declare healthy. If it
+# never leaves 0 for the whole timeout, that's zero uptime progress — same failure class,
+# different evidence. NOTE: this deliberately does NOT require anything to be listening on
+# the exposed ports (e.g. ComfyUI on 8188) — ComfyUI is installed/started separately by
+# scripts/comfyui-bootstrap after `up` succeeds, so gating on a port response here would
+# always time out. Only a fresh create is checked (see cmd_up) — a pod `up` reuses is
+# assumed already-verified from when it was created. This can't catch a restart that happens
+# AFTER this check passes; that's what scripts/pod watch's idle/reachability loop is for.
+wait_for_healthy_pod() {
+  local id="$1" waited=0 json uptime prev_uptime=-1 cost
+  log "waiting up to ${HEALTH_CHECK_TIMEOUT}s for pod $id's uptimeSeconds to show real progress"
+  log "  (catches a crash-looping container that create_pod()'s RUNNING/gpuCount check can't see)..."
+
+  while (( waited < HEALTH_CHECK_TIMEOUT )); do
+    json="$(pod_get "$id" 2>/dev/null || true)"
+    if [[ -z "$json" ]]; then
+      echo "error: pod $id disappeared during the health check (reclaimed externally?)." >&2
+      return 1
+    fi
+
+    uptime="$(jq -r '.uptimeSeconds // 0' <<<"$json" 2>/dev/null || echo 0)"
+
+    if (( prev_uptime >= 0 && uptime < prev_uptime )); then
+      echo "" >&2
+      echo "!!! WARNING: pod $id's uptimeSeconds dropped (${prev_uptime}s -> ${uptime}s) —" >&2
+      echo "    the container restarted. This is the signature of a crash-looping container" >&2
+      echo "    (e.g. the runpod/comfyui-template-on-Global-Volume incident — see TEMPLATE_ID" >&2
+      echo "    comment above). Deleting the pod rather than leaving it billing stuck." >&2
+      delete_pod "$id" || true
+      return 1
+    fi
+
+    if (( uptime > 0 )); then
+      log "pod $id uptimeSeconds=$uptime after ${waited}s — looks healthy."
+      return 0
+    fi
+
+    prev_uptime=$uptime
+    sleep "$HEALTH_CHECK_INTERVAL"
+    (( waited += HEALTH_CHECK_INTERVAL ))
+  done
+
+  cost="$(jq -r '.costPerHr // "?"' <<<"$json" 2>/dev/null || echo "?")"
+  echo "" >&2
+  echo "!!! WARNING: pod $id's uptimeSeconds stayed at 0 for the full ${HEALTH_CHECK_TIMEOUT}s —" >&2
+  echo "    zero uptime progress. A healthy boot normally shows nonzero uptime within 1-3 min;" >&2
+  echo "    this is the signature of a crash-looping container (e.g. the" >&2
+  echo "    runpod/comfyui-template-on-Global-Volume incident — see TEMPLATE_ID comment above)." >&2
+  echo "    Deleting the pod rather than leaving it billing at \$${cost}/hr stuck." >&2
+  delete_pod "$id" || true
+  return 1
 }
 
 # --- subcommands -----------------------------------------------------------
 
 cmd_up() {
-  local ids id json status gpu
+  local ids id json status gpu new_id
 
   if [[ -z "${IMAGE_NETWORK_VOLUME_ID:-}" ]]; then
-    echo "error: IMAGE_NETWORK_VOLUME_ID is unset. Set it to your RunPod network volume id, e.g.:" >&2
+    echo "error: IMAGE_NETWORK_VOLUME_ID is unset. Set it to your RunPod Global Volume id, e.g.:" >&2
     echo "    IMAGE_NETWORK_VOLUME_ID=<volume-id> pod up" >&2
+    exit 1
+  fi
+
+  if [[ -z "${RUNPOD_API_KEY:-}" ]]; then
+    echo "error: RUNPOD_API_KEY is unset. Pod creation now goes through RunPod's GraphQL" >&2
+    echo "  API directly (runpodctl can't attach a Global Volume — see header comment)," >&2
+    echo "  which needs the key explicitly, e.g.:" >&2
+    echo "    RUNPOD_API_KEY=<key> pod up" >&2
     exit 1
   fi
 
@@ -258,7 +511,11 @@ cmd_up() {
     fi
   done <<<"$ids"
 
-  create_pod >/dev/null
+  # Fresh creates get the health check (see wait_for_healthy_pod's comment for why the
+  # RUNNING/gpuCount check create_pod() already did isn't enough on its own). A reused pod
+  # above is assumed already-verified from whenever it was created.
+  new_id="$(create_pod)"
+  wait_for_healthy_pod "$new_id" || exit 1
 }
 
 cmd_down() {

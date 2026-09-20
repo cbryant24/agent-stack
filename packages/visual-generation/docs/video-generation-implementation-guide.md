@@ -30,9 +30,9 @@ with `WorkflowTemplate`/`slot_inference`, `ModelRegistry`, `canon`, `lora_guard`
    by masked edits).
 4. **Canon evolves from "pinned LoRA" to "pinned reference set"** (LoRA pinning stays for
    Z-Image drafts; reference-sheet pinning is added for Qwen keyframe edits).
-5. **Bake-off discipline:** new models validate on a separate pod + separate network volume
-   (`POD_NAME`/`NETWORK_VOLUME_ID` env overrides in `scripts/pod`) before anything touches the
-   production `gen-usne1` volume.
+5. **Bake-off discipline:** new models validate on a separate pod + separate volume
+   (`POD_NAME`/`IMAGE_NETWORK_VOLUME_ID` env overrides in `scripts/pod`) before anything
+   touches the production Global Volume (`stably_diffused`).
 
 ---
 

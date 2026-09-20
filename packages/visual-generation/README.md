@@ -45,15 +45,21 @@ The data + retrieval foundation:
 End-to-end, producing one image involves five distinct steps, each touching a
 different system. It's easy to lose track of which step you're on:
 
-1. **Spin up a RunPod pod** deploying the **`agent-stack` ComfyUI template** —
-   either `TEMPLATE_ID=<agent-stack-template-id> IMAGE_NETWORK_VOLUME_ID=<vol> ./scripts/pod up`
-   or manually in the RunPod web UI (Templates → `agent-stack` → Deploy). **Deploy the
-   template, not a bare image:** the template carries the start command that launches ComfyUI
-   on :8188 from the volume's `/workspace/runpod-slim/ComfyUI`; a bare `--image` pod schedules
-   with a GPU but nothing binds :8188 (404 on every path). `scripts/pod up` falls back to the
-   bare `IMAGE` when `TEMPLATE_ID` is unset, so **set `TEMPLATE_ID`** (grab the id from the
-   RunPod console → Templates → `agent-stack`; it's account-specific and not committed). This
-   is the only step that starts GPU billing — billing starts here, not when the agent connects.
+1. **Spin up a RunPod pod:** `IMAGE_NETWORK_VOLUME_ID=<vol> RUNPOD_API_KEY=<key> ./scripts/pod up`.
+   Leave `TEMPLATE_ID` at its default (`runpod-torch-v280`, a plain PyTorch template with no
+   baked ComfyUI) — **do not** set it to the old `agent-stack`/`cnne9dp3rt` ComfyUI template;
+   that template's image crash-loops the entire pod against this Global Volume (rsync/chown
+   failures — see `runpod-setup-context.md`'s Template warning for the incident). `pod up`
+   itself now refuses outright if it detects that known-bad template/image, so a stale
+   `TEMPLATE_ID` override will fail loudly rather than crash-loop silently.
+   `RUNPOD_API_KEY` is required — pod creation goes through RunPod's GraphQL API directly
+   (the `IMAGE_NETWORK_VOLUME_ID` volume is a Global Volume; `runpodctl` can't attach one —
+   see `scripts/pod`'s header comment and `runpod-setup-context.md`). This is the only step
+   that starts GPU billing — billing starts here, not when the agent connects.
+   ComfyUI itself isn't pre-installed on the volume — after the pod is up, run
+   `scripts/comfyui-bootstrap` on it over SSH (see `scripts/README.md`) before continuing;
+   `/object_info` returning 404 until you've done this is expected, not a bug (see
+   Troubleshooting below).
 2. **`model sync --endpoint <url>`** — the CLI queries the pod's ComfyUI
    `/object_info` endpoint and writes/updates `~/agent-data/visual-generation/models.json`,
    the local registry of checkpoints/LoRAs/VAEs available on that pod.
@@ -102,8 +108,9 @@ experts (t2v + i2v, high/low) in `diffusion_models/`, `umt5_xxl_fp8_e4m3fn_scale
 
 ### Getting started (manual run in ComfyUI)
 
-1. **Spin up the pod** (RTX PRO 6000, US-NE-1) so the `gen-usne1` network volume mounts
-   at `/workspace`. Billing starts here. ComfyUI serves on port 8188.
+1. **Spin up the pod** (RTX PRO 6000, any datacenter) so the Global Volume
+   (`stably_diffused`) mounts at `/workspace`. Billing starts here. ComfyUI serves
+   on port 8188 once `scripts/comfyui-bootstrap` has installed and started it.
 2. **Confirm the models are present** (they persist on the volume across pods):
    `ls -lh /workspace/runpod-slim/ComfyUI/models/{diffusion_models,text_encoders,vae,loras}/`.
 3. **Load the template:** ComfyUI → Browse Templates → Video → **Wan 2.2 14B Text to
@@ -127,17 +134,20 @@ between the 4-step path (`cfg 1`, steps 4, boundary 2 — fast/cheap) and the 20
 
 ### Using a seed image for I2V — get it onto the pod with scp, not the browser
 
-The I2V `Load Image` node needs the seed frame in `ComfyUI/input/`. **The browser upload
-through the RunPod proxy corrupts image files** (broken thumbnails, `PIL cannot identify`,
-500 errors). Do **not** use it. Instead copy the image directly with **scp over the
-direct-TCP SSH endpoint** (RunPod Connect → "SSH over exposed TCP — Supports SCP"; the
-`ssh.runpod.io` proxy is interactive-only and supports neither scp nor file-piping):
+The I2V `Load Image` node needs the seed frame in ComfyUI's input dir — **on the container
+disk, not the volume**: `scripts/comfyui-bootstrap` starts ComfyUI with `--input-directory`
+pointed at `/comfy-data/input` (kept off the Global Volume; see `runpod-setup-context.md`).
+**The browser upload through the RunPod proxy corrupts image files** (broken thumbnails,
+`PIL cannot identify`, 500 errors). Do **not** use it. Instead copy the image directly with
+**scp over the direct-TCP SSH endpoint** (RunPod Connect → "SSH over exposed TCP — Supports
+SCP"; the `ssh.runpod.io` proxy is interactive-only and supports neither scp nor
+file-piping):
 
 ```bash
 # from your Mac (IP/port change each time the pod is recreated — read them from Connect)
 scp -P <PORT> -i ~/.ssh/id_ed25519 "/path/to/seed.png" \
-  root@<IP>:/workspace/runpod-slim/ComfyUI/input/seed.png
-# verify on the pod: file .../input/seed.png  → "PNG image data"
+  root@<IP>:/comfy-data/input/seed.png
+# verify on the pod: file /comfy-data/input/seed.png  → "PNG image data"
 ```
 
 Then in ComfyUI press **R** and pick the file from the Load Image **dropdown** (not
@@ -149,16 +159,18 @@ seed mechanism (`/upload/image` + `VisualSource` lineage) so a prior still can s
 GPU availability churns, so you'll periodically lose a pod and start a new one. What
 carries over and what changes:
 
-- **Models, graphs, outputs persist** — they live on the `gen-usne1` network volume,
-  which survives pod stop *and* terminate and re-attaches to any new US-NE-1 pod. A new
-  pod does **not** require re-downloading anything. (Container disk is wiped; nothing you
-  care about lives there.)
+- **Models and ComfyUI's code persist** — they live on the Global Volume
+  (`stably_diffused`), which survives pod stop *and* terminate and re-attaches to a
+  new pod in any datacenter. A new pod does **not** require re-downloading models or
+  reinstalling ComfyUI — re-run `scripts/comfyui-bootstrap`, which detects the existing
+  install and just starts it. (Container disk is wiped, so the venv and any outputs left
+  there are gone; the bootstrap script rebuilds the venv fast.)
 - **The endpoint changes** — both the ComfyUI proxy URL (`https://<pod-id>-8188.proxy.runpod.net`)
   and the direct-TCP SSH IP/port are new per pod. Update them wherever you use them
   (`--endpoint` for the agent later; the scp `-P`/host; any `$EP` shell var). Read the
   current values from RunPod → pod → Connect.
-- **Datacenter is fixed** — the volume is locked to US-NE-1, so a replacement pod must be
-  US-NE-1 to mount it (that's why the RTX PRO 6000 there was chosen).
+- **Datacenter is no longer fixed** — the Global Volume is region-independent, so a
+  replacement pod can schedule in whichever datacenter has GPU capacity.
 - **Nothing to re-install or re-configure** beyond pointing at the new endpoint. If a
   "migrate pod data" prompt appears, it concerns the disposable container disk, not your
   volume — you don't need to wait on it for the models.
@@ -244,7 +256,7 @@ Orientation for a newcomer operating this agent:
 - **Pod realities:** a new pod = a new proxy URL (update `$EP`) AND a fresh
   ComfyUI that does NOT carry over a workflow you built in the browser — so
   export ([API format](#save-workflow-format-vs-export-api-format)) +
-  `workflow register` to make a graph permanent. Models on a network volume can
+  `workflow register` to make a graph permanent. Models on the Global Volume can
   load slowly/stall vs local container disk. See
   [RunPod pod lifecycle & costs](#runpod-pod-lifecycle--costs).
 
@@ -790,24 +802,27 @@ re-running `pod up` — a balance problem surfaces as `pod create failed … "Yo
 too low to rent a pod"` — and `pod status`, which will then show **no matching pod** (RunPod already
 deleted it, so there's no idle GPU charge). **Fix:** add funds in the RunPod console
 (Billing → add credit / enable auto-pay), then `pod up` again and re-poll readiness. Because a
-reclaimed pod is gone (not stopped), the network volume and everything on it are untouched — nothing
+reclaimed pod is gone (not stopped), the Global Volume and everything on it are untouched — nothing
 to re-download; the new pod re-attaches the volume and you get a fresh proxy URL. **Tell a
 balance-reclaim from a slow boot:** slow boot = pod still present in `pod status`; balance-reclaim =
 pod absent + the create-time balance error.
 
-**The pod shows `RUNNING` with a GPU, but `/object_info` returns 404 (or empty) on every path and
-never becomes ready — `runtime`/`portMappings` stay null, SSH (22) never exposes a host port.** This
-is **not** a slow boot or a balance reclaim — it's a **bare-image pod that never started ComfyUI**.
-`scripts/pod` creates from `--image` when `TEMPLATE_ID` is unset, and the bare
-`runpod/comfyui:1.3.0-cuda12.8` image does not reliably auto-start ComfyUI on :8188 (the launch
-command lives in the **`agent-stack` template**, which serves ComfyUI from the volume's
-`/workspace/runpod-slim/ComfyUI`). Two fresh hosts behaving identically confirms it's the create
-recipe, not a bad host. **Fix:** deploy the template — set
-`TEMPLATE_ID=<agent-stack-template-id> ./scripts/pod up` (id from RunPod console → Templates →
-`agent-stack`), or deploy it manually in the web UI. With the template, ComfyUI binds in ~1–3 min
-(a brief `403`, then a JSON `200` on `/object_info`). Distinguishing tell vs. the two symptoms
-above: bare-image = `404`/empty (nothing listening); slow-boot/reclaim = `403` (proxy up, app not
-bound yet).
+**`/object_info` returns 404 (or empty) right after `pod up` finishes.** As of the 2026-09
+Global Volume migration, **this is expected, not a bug** — ComfyUI is no longer baked into
+any image/template, so nothing serves :8188 until you separately run
+`scripts/comfyui-bootstrap` on the pod over SSH (see `scripts/README.md`). `pod up` itself
+now includes a health check (`wait_for_healthy_pod`, `HEALTH_CHECK_*` knobs) that polls the
+pod's `uptimeSeconds` for real progress — the new default template (`runpod-torch-v280`)
+starts sshd quickly on its own, so that check passing does **not** mean ComfyUI is up, only
+that the container itself isn't crash-looping. `/object_info` 404 until you've run the
+bootstrap script is the normal sequence.
+
+**⚠️ Do NOT "fix" a not-yet-serving pod by switching to the `agent-stack`/`cnne9dp3rt`
+ComfyUI template.** That was the old advice (pre-migration) and is now actively wrong — that
+template's image crash-loops the entire pod on this Global Volume (rsync/chown failures; see
+`runpod-setup-context.md`'s Template warning for the full incident). If `pod up` itself
+reports the pod unhealthy and deletes it, this is almost certainly why — check `TEMPLATE_ID`
+wasn't accidentally overridden to the old value.
 
 **The requested changes aren't landing — pose/staging/background directions get ignored, and
 background extras look like the main character.** This is the classic **over-strength LoRA**
@@ -1010,24 +1025,32 @@ host; `"6333:6333"` is the durable choice that survives both. (Don't hand-edit
 `infrastructure/docker-compose.yml` as part of an unrelated change — this entry just
 records what the binding should be.)
 
-### Setup-phase gotchas (volume, uploads, downloads) — learned 2026-06-19
+### Setup-phase gotchas (volume, uploads, downloads)
 
-These all surfaced standing up WAN 2.2 on the pod. Most trace back to **the network
-volume hitting its quota**, which fails in confusing, indirect ways.
+**Superseded as of the 2026-09 Global Volume migration** — the section below (learned
+2026-06-19, on the old fixed-size `gen-usne1` network volume) traced most of its errors to
+the volume hitting its quota. The current Global Volume (`stably_diffused`) is
+elastic/billed-on-stored-data, so "disk quota exceeded" doesn't apply anymore; what does
+apply instead is its FUSE (`fuse.geesefs`) backing being poor for frequent writes — see
+`runpod-setup-context.md`'s "Write-performance note" for the current picture, and
+`scripts/comfyui-bootstrap` for how output/input/temp/user/venv are kept off the volume to
+avoid it. Kept below for historical reference (still accurate for what it describes, just
+not the volume in use today):
 
 - **"Disk quota exceeded" is the root cause of a whole cluster of errors.** A full
   `/workspace` volume shows up as: scp transferring to 100% then `write/close remote:
   Failure`; a model file downloading as **0 bytes** (→ later `ValueError: cannot mmap an
   empty file` when ComfyUI loads it); `comfy.settings.json` getting **corrupted** (→
   "user settings file is corrupted" + a frontend **`TypeError: Load failed`** popup);
-  and image uploads failing. **Fix:** free space (delete a redundant model — e.g. an
-  unused `umt5_xxl_fp16` if the templates use `fp8`) and/or **resize the network volume**
-  (RunPod → Storage → `gen-usne1` → increase; volumes only grow). The 100 GB default is
-  too small for z-image + full WAN t2v+i2v 14B; 200 GB gives working room.
+  and image uploads failing. **Fix (old volume only):** free space (delete a redundant
+  model — e.g. an unused `umt5_xxl_fp16` if the templates use `fp8`) and/or resize the
+  volume (volumes only grow). The 100 GB default was too small for z-image + full WAN
+  t2v+i2v 14B; 200 GB gave working room.
 - **`TypeError: Load failed` after a *successful* run is a frontend glitch, not a
   generation failure.** Check the log: if it ends with `Prompt executed in N seconds` and
   the sampler bars hit 100%, the clip was produced and saved under `output/video/` — the
-  popup is just the browser failing to fetch the preview through the proxy.
+  popup is just the browser failing to fetch the preview through the proxy. (Still true
+  today, unrelated to the volume.)
 - **Browser image upload corrupts files; use scp over direct-TCP.** See
   [Video generation → seed image](#using-a-seed-image-for-i2v--get-it-onto-the-pod-with-scp-not-the-browser).
   Symptoms: broken thumbnails in Media Assets, `PIL UnidentifiedImageError`, "Invalid
@@ -1120,7 +1143,7 @@ OUTPUT, not a leftover template default.
 
 **Flaky "migration" pods.** stop/start can land a new host; repeated CLIP-load
 stalls on one pod = bad host/volume — deploy a clean fresh pod rather than
-nursing it, and prefer models on local disk over a network volume to avoid slow
+nursing it, and prefer models on local disk over the Global Volume to avoid slow
 CLIP loads. See [RunPod pod lifecycle & costs](#runpod-pod-lifecycle--costs).
 
 **Re-registering a workflow left two templates with the same name.**

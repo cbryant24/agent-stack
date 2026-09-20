@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+#
+# comfyui-bootstrap — install ComfyUI onto the RunPod Global Volume (if not already present)
+#                     and start it, listening on 127.0.0.1 only.
+#
+# RUN THIS ON THE POD, over SSH — not from the Mac. It operates on pod-local paths (the
+# mounted Global Volume, the container disk), not the RunPod API. Typical flow:
+#
+#   scp -P <PORT> -i ~/.ssh/id_ed25519 scripts/comfyui-bootstrap root@<IP>:/root/comfyui-bootstrap
+#   ssh <pod-id>@ssh.runpod.io -i ~/.ssh/id_ed25519 'bash /root/comfyui-bootstrap'
+#
+# (IP/port for scp come from RunPod's "SSH over exposed TCP" Connect option — see
+# packages/visual-generation/runpod-setup-context.md for the full transfer/SSH pattern.)
+#
+# WHY: the Global Volume (bizarre_moccasin_jaguar) carries only models/ after the 2026-09
+# rebuild — ComfyUI itself isn't installed. This script is IDEMPOTENT: safe to re-run on a
+# fresh pod against the already-populated volume — it detects an existing install and just
+# starts it.
+#
+# CRITICAL: ComfyUI's output/input/temp/user directories, and the Python venv, must NOT live
+# on the volume. The Global Volume is backed by object storage via a FUSE layer
+# (fuse.geesefs), documented by RunPod as POOR for frequent writes (~181 MB/s cold
+# sequential read is the measured large-file number — small-file read/write, e.g. a venv's
+# tens of thousands of files, is much worse and doesn't benefit from that figure at all).
+# This script routes all of that to the container disk instead, via ComfyUI's own
+# --output-directory / --input-directory / --temp-directory / --user-directory flags, and by
+# putting the venv itself under CONTAINER_DATA_DIR. Only the ComfyUI checkout (code) and
+# models/ live on the volume.
+#
+# POSIX LIMITS THIS SCRIPT WORKS AROUND (confirmed 2026-09-19 — see scripts/pod's TEMPLATE_ID
+# comment for the incident that surfaced this): the Global Volume has no real permission
+# bits — every file reports owner nobody:nogroup no matter what's requested, and an explicit
+# chown()/chmod() call against it fails with EPERM. It also doesn't support atomic rename
+# (mkstemp-then-rename), which is how git writes its index/objects and how `rsync -a`
+# defaults to writing files. install_comfyui() below is written around both: git clone
+# always targets a scratch dir on the container disk, never the volume directly, and the
+# copy onto the volume uses plain `cp -r` (no -p/-a — nothing that would try to preserve
+# ownership/permissions and trip the same EPERM). See install_comfyui()'s own comment for
+# the full reasoning, including why `mv` was considered and rejected.
+#
+# Env knobs (all overridable):
+#   WORKSPACE           Global Volume mount root.                 Default: /workspace
+#   COMFY_ROOT           ComfyUI install dir (ON the volume).       Default: $WORKSPACE/runpod-slim/ComfyUI
+#   CONTAINER_DATA_DIR  Ephemeral root, container disk.            Default: /comfy-data
+#   VENV_ROOT             Python venv dir (container disk, NOT the volume — rebuilt per pod;
+#                        the base image already has torch, so this is fast as long as the
+#                        venv is created with --system-site-packages, which this script
+#                        always does). Default: $CONTAINER_DATA_DIR/venv
+#   LISTEN_ADDR           Bind address.                              Default: 127.0.0.1
+#   PORT                   Bind port.                                 Default: 8188
+#   COMFYUI_REPO          Git remote to clone from.                  Default: https://github.com/comfyanonymous/ComfyUI.git
+#   COMFYUI_REF           Optional git ref/tag/commit to check out after clone.
+#                        Default: unset (tracks the default branch HEAD)
+#
+# External dependencies: git, python3.
+
+set -euo pipefail
+
+WORKSPACE="${WORKSPACE:-/workspace}"
+COMFY_ROOT="${COMFY_ROOT:-$WORKSPACE/runpod-slim/ComfyUI}"
+CONTAINER_DATA_DIR="${CONTAINER_DATA_DIR:-/comfy-data}"
+VENV_ROOT="${VENV_ROOT:-$CONTAINER_DATA_DIR/venv}"
+OUTPUT_DIR="$CONTAINER_DATA_DIR/output"
+INPUT_DIR="$CONTAINER_DATA_DIR/input"
+TEMP_DIR="$CONTAINER_DATA_DIR/temp"
+USER_DIR="$CONTAINER_DATA_DIR/user"
+LOG_DIR="$CONTAINER_DATA_DIR/logs"
+LISTEN_ADDR="${LISTEN_ADDR:-127.0.0.1}"
+PORT="${PORT:-8188}"
+COMFYUI_REPO="${COMFYUI_REPO:-https://github.com/comfyanonymous/ComfyUI.git}"
+COMFYUI_REF="${COMFYUI_REF:-}"
+
+log() {
+  printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*"
+}
+
+preflight() {
+  if [[ ! -d "$WORKSPACE" ]]; then
+    echo "error: $WORKSPACE does not exist — is the Global Volume mounted?" >&2
+    exit 1
+  fi
+  if [[ ! -d "$COMFY_ROOT/models" ]]; then
+    echo "error: $COMFY_ROOT/models not found. Expected the volume's pre-populated model" >&2
+    echo "  tree there — refusing to proceed against an unexpected layout." >&2
+    exit 1
+  fi
+  for bin in git python3; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      echo "error: $bin not found on PATH." >&2
+      exit 1
+    fi
+  done
+}
+
+# Only apt-get install ffmpeg if it's missing — matches the proven pattern from the sibling
+# Vast.ai bootstrap script (scripts/vast-comfy-bootstrap in av-generation) for the same
+# Wan-video node types (CreateVideo/SaveVideo).
+ensure_ffmpeg() {
+  if command -v ffmpeg >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    log "ffmpeg not found; installing..."
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+  fi
+}
+
+# True if $COMFY_ROOT looks like a complete, working ComfyUI checkout (main.py present, and
+# a plausible number of top-level entries alongside it). Used both to decide whether to skip
+# installing, and to verify a fresh install actually landed.
+comfyui_install_complete() {
+  [[ -f "$COMFY_ROOT/main.py" ]] || return 1
+  local entry_count
+  entry_count="$(find "$COMFY_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
+  (( entry_count >= 10 ))
+}
+
+# Remove everything under $COMFY_ROOT EXCEPT models/input/output/temp/user — used to clear
+# out a partial/broken prior install (e.g. leftovers from the 2026-09-19 rsync-crash-loop
+# incident, which got partway through writing .git/objects/* before dying) without ever
+# touching the populated models/ tree.
+clear_broken_comfy_root() {
+  [[ -d "$COMFY_ROOT" ]] || return 0
+  shopt -s dotglob nullglob
+  local entry base
+  for entry in "$COMFY_ROOT"/*; do
+    base="$(basename "$entry")"
+    case "$base" in
+      models|input|output|temp|user) continue ;;
+    esac
+    rm -rf "$entry"
+  done
+  shopt -u dotglob nullglob
+}
+
+# Idempotent, "install around" the existing models/ tree: never touch it, never clobber it.
+#
+# Why `cp -r`, not `mv`, for landing the clone on the volume: GNU mv's cross-device fallback
+# (rename() fails EXDEV, so it falls back to copy-then-unlink) still tries to preserve mode
+# and timestamps on the copy — the same class of metadata-write that made `rsync -a` fail
+# with EPERM on this volume (see header comment). Plain `cp -r`, with no -p/-a, does not
+# attempt to preserve source ownership/permissions at all — new files just get default mode
+# from umask via the process's own uid (root), which requires no separate chown/chmod
+# syscall and so doesn't trip the same failure.
+#
+# Idempotency check uses comfyui_install_complete() (main.py + plausible entry count), NOT
+# just "does .git exist" — a bare .git check was fooled by leftovers from the 2026-09-19
+# rsync-crash-loop incident (that entrypoint got partway through syncing .git/objects/* onto
+# the volume, under the OLD runpod/comfyui template, before dying repeatedly; it left behind
+# a .git dir with no main.py). If the checkout looks incomplete, clear_broken_comfy_root()
+# wipes everything except models/input/output/temp/user before re-cloning, rather than trying
+# to "resume" an untrusted partial state.
+#
+# Updating ComfyUI later: do NOT `git pull` inside $COMFY_ROOT once it's on the volume — git
+# needs atomic rename for its own object/index writes, which will fail there the same way
+# rsync did. To update, clear out $COMFY_ROOT down to just models/ (or point COMFY_ROOT at a
+# fresh path) and re-run this script so it re-clones to scratch and re-copies.
+install_comfyui() {
+  mkdir -p "$CONTAINER_DATA_DIR"
+
+  if comfyui_install_complete; then
+    log "ComfyUI already installed at $COMFY_ROOT — skipping install."
+  else
+    if [[ -e "$COMFY_ROOT" ]]; then
+      log "existing files at $COMFY_ROOT look incomplete/broken — clearing everything except" \
+          "models/input/output/temp/user before reinstalling..."
+      clear_broken_comfy_root
+    fi
+
+    log "installing ComfyUI into $COMFY_ROOT (models/ already present — installing around it)..."
+    # Scratch clone lives on the container disk (CONTAINER_DATA_DIR), NEVER on the volume —
+    # git's own writes need atomic rename, which the volume doesn't support.
+    local scratch
+    scratch="$(mktemp -d -p "$CONTAINER_DATA_DIR" comfyui-src.XXXXXX)"
+    git clone --filter=blob:none "$COMFYUI_REPO" "$scratch"
+    if [[ -n "$COMFYUI_REF" ]]; then
+      git -C "$scratch" checkout "$COMFYUI_REF"
+    fi
+
+    # Copy (never move — see function comment) everything from the scratch clone into
+    # COMFY_ROOT except models/ (already populated — never clobber it) and any stray
+    # input/output/temp/user dirs the checkout ships (those are redirected to the container
+    # disk anyway, so don't let empty copies land on the volume).
+    shopt -s dotglob
+    local entry base
+    for entry in "$scratch"/*; do
+      base="$(basename "$entry")"
+      case "$base" in
+        models|input|output|temp|user) continue ;;
+      esac
+      cp -r "$entry" "$COMFY_ROOT/$base"
+    done
+    shopt -u dotglob
+    rm -rf "$scratch"
+  fi
+
+  # Verify the install actually landed before going anywhere near start_comfyui() — fail
+  # loudly here rather than proceeding to a start that will just crash against a
+  # half-installed tree.
+  if ! comfyui_install_complete; then
+    echo "error: $COMFY_ROOT does not look like a complete ComfyUI install after installing" >&2
+    echo "  (main.py missing, or too few top-level entries — expected main.py, comfy/, web/," >&2
+    echo "  requirements.txt, ...)." >&2
+    exit 1
+  fi
+
+  if [[ ! -x "$VENV_ROOT/bin/python" ]]; then
+    log "creating venv at $VENV_ROOT (--system-site-packages, so it reuses the image's torch/CUDA)..."
+    python3 -m venv --system-site-packages "$VENV_ROOT"
+  fi
+  "$VENV_ROOT/bin/python" -m pip install --upgrade pip wheel
+  "$VENV_ROOT/bin/python" -m pip install -r "$COMFY_ROOT/requirements.txt"
+
+  ensure_ffmpeg
+}
+
+start_comfyui() {
+  mkdir -p "$OUTPUT_DIR" "$INPUT_DIR" "$TEMP_DIR" "$USER_DIR" "$LOG_DIR"
+
+  if pgrep -f "$COMFY_ROOT/main.py" >/dev/null 2>&1; then
+    log "ComfyUI already running — nothing to do."
+    return 0
+  fi
+
+  log "starting ComfyUI on $LISTEN_ADDR:$PORT (logs: $LOG_DIR/comfyui.log)..."
+  nohup "$VENV_ROOT/bin/python" "$COMFY_ROOT/main.py" \
+    --listen "$LISTEN_ADDR" --port "$PORT" \
+    --output-directory "$OUTPUT_DIR" \
+    --input-directory "$INPUT_DIR" \
+    --temp-directory "$TEMP_DIR" \
+    --user-directory "$USER_DIR" \
+    >>"$LOG_DIR/comfyui.log" 2>&1 &
+  disown
+
+  sleep 2
+  if ! pgrep -f "$COMFY_ROOT/main.py" >/dev/null 2>&1; then
+    echo "error: ComfyUI process exited immediately — check $LOG_DIR/comfyui.log" >&2
+    exit 1
+  fi
+  log "ComfyUI started (pid $(pgrep -f "$COMFY_ROOT/main.py" | head -n1))."
+}
+
+main() {
+  preflight
+  install_comfyui
+  start_comfyui
+}
+
+main "$@"

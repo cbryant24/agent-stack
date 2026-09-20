@@ -202,8 +202,11 @@ sidecars staged in `~/agent-data/visual-generation/lora/narrator/dataset/` (off-
       step as the narrator. All 6 checkpoints on Mac `~/Downloads/celeste-zimage-lora/` + `/mnt`.
       Identity was already resolving at step 1250; step-250 samples were still generic (expected).
 - [x] **Wired + pinned 2026-07-02:** step-1500 checkpoint uploaded to the pod volume as
-      `celeste-zimage.safetensors` (NOTE: ComfyUI lives at `/workspace/runpod-slim/ComfyUI/` on the
-      gen-usne1 network volume — that's why models survive pod cycles), `model sync`'d, manual
+      `celeste-zimage.safetensors` (NOTE: at the time, ComfyUI lived at
+      `/workspace/runpod-slim/ComfyUI/` on the `gen-usne1` regional network volume — that's why
+      models survived pod cycles. **This predates the 2026-09 Global Volume migration**; the
+      install path is the same (`/workspace/runpod-slim/ComfyUI/`), but the volume itself is now
+      the Global Volume `stably_diffused` — see `runpod-setup-context.md`), `model sync`'d, manual
       `identity_bearing: true`. **QKV sanity PASSED** (fixed-seed A/B, strength 0.05 vs 2.0 —
       night-and-day). Pinned `celeste-zimage.safetensors:2.0`; locked text trimmed to
       `"a young woman with pale cream felt skin, plain uncolored felt cheeks with no blush"`

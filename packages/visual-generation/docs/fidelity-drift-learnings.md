@@ -225,12 +225,16 @@ This is the heart of the doc. Each entry: **symptom → why it happens → what 
   background so it stays promptable, or favor plain-background frames.
 
 ### Operational gotchas (RunPod / ai-toolkit) — see also `character-lora-plan.md §Operational`
-- **Deploy the TEMPLATE, never the bare image — both pods.** A bare `--image` pod boots with a GPU
-  but never binds its port/SSH (`runtime`/`portMappings` null; training → SSH "pod not ready"
-  forever; inference → 404 on :8188). Training template: **`LORAS_TEMPLATE_ID=0fqzfjy6f3`** (Ostris
-  "AI Toolkit - ui - official"); inference: `TEMPLATE_ID=cnne9dp3rt`. `lora-train` now prefers
-  `LORAS_TEMPLATE_ID` (the two collide otherwise). With the right template, SSH is up ~2 min after
-  RUNNING.
+- **Training pod:** deploy the TEMPLATE, never the bare image. A bare `--image` pod boots with a
+  GPU but never binds its port/SSH (`runtime`/`portMappings` null; SSH "pod not ready" forever).
+  Training template: **`LORAS_TEMPLATE_ID=0fqzfjy6f3`** (Ostris "AI Toolkit - ui - official").
+  `lora-train` now prefers `LORAS_TEMPLATE_ID` (the two collide otherwise). With the right
+  template, SSH is up ~2 min after RUNNING.
+- **Inference pod — this changed 2026-09 (Global Volume migration): do NOT use
+  `TEMPLATE_ID=cnne9dp3rt`** (the old advice here) — that template's `runpod/comfyui` image
+  crash-loops on the Global Volume (rsync/chown failures against its FUSE mount; see
+  `runpod-setup-context.md`'s Template warning). `scripts/pod`'s new default (`runpod-torch-v280`)
+  plus `scripts/comfyui-bootstrap` replaces it.
 - **RunPod DNS is broken on boot** → HF downloads fail with a misleading `httpx "client has been
   closed"`. Fix `resolv.conf` first (`lora-train dns`), always.
 - **`training_folder: /mnt/output`** — the container disk is **wiped** on pod cycle; only the

@@ -28,7 +28,7 @@ The project knowledge base holds only this Project Instructions document.
 **Out of reach from chat** (Claude Code reaches them, this chat does not):
 
 - **Qdrant collections** — `visual_generation_memory`, `user_knowledge`, `tutorial_research` (and three others). Reachable only from Claude Code, via two paths: raw HTTP API under `op run` (exhaustive scroll/filter by payload — never confabulates, right tool for "what do we know across the whole KB" coverage audits, but no semantic similarity) and the agent CLIs (`recall`, `explain` — true Voyage-embedded semantic search plus synthesis, but top-k, so gaps can be papered over). In chat, ask the user or a Claude Code session to run these; don't guess their contents.
-- **The RunPod pod filesystem** — models, graphs, and outputs live on the `gen-usne1` volume, reachable only from a live pod session, not chat.
+- **The RunPod pod filesystem** — models and ComfyUI's install live on the Global Volume (`stably_diffused`), reachable only from a live pod session, not chat.
 
 **Secrets:** the repo's `.env` stores secrets as 1Password references (`op://…`), not literal keys. Claude never sees real API keys. Any command that embeds or writes to the store (`draft`, `generate`, `workflow register`, `fact ingest-docs`, `lesson add`) must run through `op run --env-file=".env" -- …` with an authenticated 1Password session.
 
@@ -59,7 +59,9 @@ The current frontier is **Phase 3A — the image-editor bake-off**: establishing
 - **Contender:** **FLUX.1 Kontext dev** (bf16) — one attempt only, no two-stage try yet; needs its own two-stage hero before any fair Sheet-2 comparison.
 - **Not done:** no editor verdict is reachable yet. Sheet-1 gate never formally scored; Sheet-2 Tests A/B1/B2/D never ran; depth/edge arm (InstantX Qwen ControlNet-Union + Depth Anything V2) never executed.
 - **Three open blockers on the draft hero:** the criterion-9 resolution floor (output ~944×1104, short edge under 1024), the user's identity call (stage-2 turn softened her face vs the attempt-07 profile), and a fresh-eyes gate review.
-- **Infra note:** bake-off runs on the **`qwen-eval` volume — never production `gen-usne1`**, on H100 SXM 80GB (RTX PRO 6000 capacity exhausted in US-NE-1). Sources staged pod-local only per opsec.
+- **Infra note:** bake-off runs on the **`qwen-eval` volume — never the production Global
+  Volume (`stably_diffused`)**, on H100 SXM 80GB (RTX PRO 6000 capacity exhausted in
+  US-NE-1). Sources staged pod-local only per opsec.
 
 **Next-session queue** (priority order, per the session log): (1) resolution pass on the draft hero — cheapest blocker; (2) formal Sheet-1 gate + identity call + fresh-eyes review; (3) Test A derivations from the approved hero; (4) narrator hero via the two-stage recipe using banked clause fixes; (5) Kontext two-stage hero; (6) depth/edge arm for Test D; (7) controlled photo shoot (front/¾/profile, even light) — no pod, durable root-cause fix for bad sources.
 
