@@ -51,6 +51,23 @@
 #   COMFYUI_REPO          Git remote to clone from.                  Default: https://github.com/comfyanonymous/ComfyUI.git
 #   COMFYUI_REF           Optional git ref/tag/commit to check out after clone.
 #                        Default: unset (tracks the default branch HEAD)
+#   STAGED_MODELS         If "1", start ComfyUI with --models-directory pointed at
+#                        STAGED_MODELS_DIR instead of the volume's models/ tree — part of the
+#                        staged-model-load A/B test, see runpod-setup-context.md's
+#                        "Staged-model-load A/B test" section and scripts/stage-models.
+#                        --models-directory fully replaces the base models dir ComfyUI
+#                        searches (confirmed in ComfyUI's own folder_paths.py — no default
+#                        path coexists alongside it), so this is unambiguous: the volume's
+#                        models/ tree is never registered as a search path when this is set.
+#                        Refuses to start if STAGED_MODELS_DIR doesn't exist or is empty —
+#                        run scripts/stage-models first.                Default: 0
+#   STAGED_MODELS_DIR     Destination the staged copy lives at (must match scripts/stage-models'
+#                        own default/override).            Default: $CONTAINER_DATA_DIR/staged-models
+#   RESTART                If "1" and ComfyUI is already running, stop it first instead of the
+#                        default no-op — needed to actually switch STAGED_MODELS on an
+#                        already-running pod (the plain idempotency guard would otherwise
+#                        silently leave the old instance running against the old models dir).
+#                        Default: 0
 #
 # External dependencies: git, python3.
 
@@ -69,6 +86,9 @@ LISTEN_ADDR="${LISTEN_ADDR:-127.0.0.1}"
 PORT="${PORT:-8188}"
 COMFYUI_REPO="${COMFYUI_REPO:-https://github.com/comfyanonymous/ComfyUI.git}"
 COMFYUI_REF="${COMFYUI_REF:-}"
+STAGED_MODELS="${STAGED_MODELS:-0}"
+STAGED_MODELS_DIR="${STAGED_MODELS_DIR:-$CONTAINER_DATA_DIR/staged-models}"
+RESTART="${RESTART:-0}"
 
 log() {
   printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*"
@@ -215,12 +235,69 @@ install_comfyui() {
   ensure_ffmpeg
 }
 
+# Describe which models directory a running ComfyUI pid was actually launched against, read
+# directly from /proc/<pid>/cmdline rather than assumed — so a mismatch between what you
+# intended (e.g. STAGED_MODELS=1) and what's actually running is visible, not silent.
+running_models_dir_desc() {
+  local pid="$1" cmdline
+  cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  if [[ "$cmdline" == *"--models-directory"* ]]; then
+    echo "staged ($STAGED_MODELS_DIR)"
+  else
+    echo "volume ($COMFY_ROOT/models)"
+  fi
+}
+
 start_comfyui() {
   mkdir -p "$OUTPUT_DIR" "$INPUT_DIR" "$TEMP_DIR" "$USER_DIR" "$LOG_DIR"
 
-  if pgrep -f "$COMFY_ROOT/main.py" >/dev/null 2>&1; then
-    log "ComfyUI already running — nothing to do."
-    return 0
+  local running_pid
+  running_pid="$(pgrep -f "$COMFY_ROOT/main.py" | head -n1 || true)"
+
+  if [[ -n "$running_pid" ]]; then
+    log "ComfyUI already running (pid $running_pid), models dir: $(running_models_dir_desc "$running_pid")"
+    if [[ "$RESTART" == "1" ]]; then
+      log "RESTART=1 set — stopping pid $running_pid before restarting..."
+      kill "$running_pid" 2>/dev/null || true
+      local waited=0
+      while kill -0 "$running_pid" 2>/dev/null && (( waited < 10 )); do
+        sleep 1
+        (( waited++ ))
+      done
+      if kill -0 "$running_pid" 2>/dev/null; then
+        echo "error: pid $running_pid did not exit within 10s of SIGTERM — kill it manually" >&2
+        exit 1
+      fi
+      log "stopped pid $running_pid."
+    else
+      log "ComfyUI already running — nothing to do. Set RESTART=1 to force a restart" \
+          "(e.g. to switch STAGED_MODELS)."
+      return 0
+    fi
+  fi
+
+  # Opt-in staged-model-load path (see the STAGED_MODELS header comment for the full
+  # rationale). --models-directory fully replaces the base models dir ComfyUI builds its
+  # per-type search paths from — confirmed in ComfyUI's own folder_paths.py — so this is
+  # unambiguous: passing it means the volume's models/ tree is simply never registered as a
+  # search path, not "checked second."
+  local models_dir_args=()
+  if [[ "$STAGED_MODELS" == "1" ]]; then
+    if [[ ! -d "$STAGED_MODELS_DIR" ]]; then
+      echo "error: STAGED_MODELS=1 but $STAGED_MODELS_DIR does not exist — run" >&2
+      echo "  scripts/stage-models first to populate it." >&2
+      exit 1
+    fi
+    local staged_count
+    staged_count="$(find "$STAGED_MODELS_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
+    if (( staged_count == 0 )); then
+      echo "error: STAGED_MODELS=1 but $STAGED_MODELS_DIR has no files — run" >&2
+      echo "  scripts/stage-models first to populate it." >&2
+      exit 1
+    fi
+    log "STAGED_MODELS=1 — starting against the staged copy at $STAGED_MODELS_DIR" \
+        "($staged_count files)."
+    models_dir_args=(--models-directory "$STAGED_MODELS_DIR")
   fi
 
   log "starting ComfyUI on $LISTEN_ADDR:$PORT (logs: $LOG_DIR/comfyui.log)..."
@@ -230,15 +307,18 @@ start_comfyui() {
     --input-directory "$INPUT_DIR" \
     --temp-directory "$TEMP_DIR" \
     --user-directory "$USER_DIR" \
+    "${models_dir_args[@]}" \
     >>"$LOG_DIR/comfyui.log" 2>&1 &
   disown
 
   sleep 2
-  if ! pgrep -f "$COMFY_ROOT/main.py" >/dev/null 2>&1; then
+  local new_pid
+  new_pid="$(pgrep -f "$COMFY_ROOT/main.py" | head -n1 || true)"
+  if [[ -z "$new_pid" ]]; then
     echo "error: ComfyUI process exited immediately — check $LOG_DIR/comfyui.log" >&2
     exit 1
   fi
-  log "ComfyUI started (pid $(pgrep -f "$COMFY_ROOT/main.py" | head -n1))."
+  log "ComfyUI started (pid $new_pid), models dir: $(running_models_dir_desc "$new_pid")."
 }
 
 main() {

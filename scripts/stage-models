@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+#
+# stage-models — copy a named set of model files from the RunPod Global Volume onto the
+#                pod's container disk, timing every file, so the copy can be measured
+#                independently of the model-load-time question it exists to help answer.
+#
+# RUN THIS ON THE POD, over SSH — not from the Mac. It operates on pod-local paths (the
+# mounted Global Volume, the container disk), matching comfyui-bootstrap's operating model:
+#
+#   scp -P <PORT> -i ~/.ssh/id_ed25519 scripts/stage-models root@<IP>:/root/stage-models
+#   ssh root@<IP> -p <PORT> -i ~/.ssh/id_ed25519 'bash /root/stage-models wan-t2v'
+#
+# WHY THIS EXISTS: cold model loads off the Global Volume are the dominant per-session cost
+# (Z-Image-Turbo ~8min, Wan 2.2 T2V ~39min — see runpod-setup-context.md's "Cold vs. warm
+# model-load times"), yet a plain sequential read off the same volume measures ~181 MB/s —
+# far above the ~15-41 MB/s those loads actually achieved. Suspected cause: safetensors
+# loading is mmap-based, so a cold load becomes many page-fault-driven small reads over the
+# volume's FUSE layer (fuse.geesefs) — close to worst case for object storage, even though
+# the volume can deliver bytes fast under a plain sequential read like this script does. This
+# script is the "copy first" half of testing that hypothesis; see comfyui-bootstrap's
+# STAGED_MODELS knob for the other half (making ComfyUI actually load the copy), and
+# runpod-setup-context.md's "Staged-model-load A/B test" section for the full measurement
+# protocol and the decision thresholds fixed before running it.
+#
+# READ-ONLY AGAINST THE VOLUME: this script only ever reads from $WORKSPACE and writes under
+# $STAGED_MODELS_DIR (container disk). It never writes, renames, touches ownership/permission
+# bits on, or deletes anything under $WORKSPACE.
+#
+# Sets (positional arg): zimage, wan-t2v, wan-i2v, all. File lists are derived verbatim from
+# runpod-setup-context.md's "Currently installed" section — not guessed. If a listed file is
+# missing on the volume, that means the volume's actual contents have drifted from that
+# document, and this script fails loudly naming the missing file rather than silently
+# skipping it.
+#
+# Env knobs (all overridable):
+#   WORKSPACE           Global Volume mount root.                 Default: /workspace
+#   COMFY_ROOT           ComfyUI install dir (source models live under $COMFY_ROOT/models/).
+#                        Default: $WORKSPACE/runpod-slim/ComfyUI
+#   CONTAINER_DATA_DIR  Ephemeral root, container disk (matches comfyui-bootstrap's var of
+#                        the same name/default).                   Default: /comfy-data
+#   STAGED_MODELS_DIR   Destination root for the staged copy, on the container disk.
+#                        Default: $CONTAINER_DATA_DIR/staged-models
+#
+# External dependencies: stat, df, cp (GNU coreutils, as shipped in the pod's Ubuntu image).
+
+set -euo pipefail
+
+WORKSPACE="${WORKSPACE:-/workspace}"
+COMFY_ROOT="${COMFY_ROOT:-$WORKSPACE/runpod-slim/ComfyUI}"
+CONTAINER_DATA_DIR="${CONTAINER_DATA_DIR:-/comfy-data}"
+STAGED_MODELS_DIR="${STAGED_MODELS_DIR:-$CONTAINER_DATA_DIR/staged-models}"
+
+log() {
+  printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*"
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: stage-models <zimage|wan-t2v|wan-i2v|all>
+
+Copies a named set of model files from the Global Volume ($COMFY_ROOT/models/) onto the
+container disk ($STAGED_MODELS_DIR), timing each file. Read-only against the volume.
+
+  zimage   Z-Image-Turbo: unet + qwen_3_4b text encoder + ae.safetensors VAE (~19.1 GiB)
+  wan-t2v  Wan 2.2 T2V: high/low noise experts + umt5_xxl encoder + wan_2.1_vae +
+           t2v lightx2v LoRAs (~34 GiB)
+  wan-i2v  Wan 2.2 I2V: high/low noise experts + umt5_xxl encoder + wan_2.1_vae +
+           i2v lightx2v LoRAs (~34 GiB, encoder/VAE shared with wan-t2v)
+  all      Every file above, deduped (~83.5 GiB)
+
+Env knobs (see header for full list / defaults):
+  WORKSPACE, COMFY_ROOT, CONTAINER_DATA_DIR, STAGED_MODELS_DIR
+EOF
+  exit 2
+}
+
+# --- manifest ----------------------------------------------------------------
+# Paths are relative to $COMFY_ROOT/models/. Derived verbatim from runpod-setup-context.md's
+# "Currently installed" section (2026-09-19 verification) — do not guess filenames here.
+
+ZIMAGE_FILES=(
+  "unet/z_image_turbo_bf16.safetensors"
+  "text_encoders/qwen_3_4b.safetensors"
+  "vae/ae.safetensors"
+)
+
+WAN_T2V_FILES=(
+  "diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
+  "diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+  "text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+  "vae/wan_2.1_vae.safetensors"
+  "loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors"
+  "loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors"
+)
+
+# NOTE: i2v LoRA filenames use "_v1_", not t2v's "_v1.1_" — confirmed in
+# runpod-setup-context.md, not a typo here.
+WAN_I2V_FILES=(
+  "diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
+  "diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"
+  "text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+  "vae/wan_2.1_vae.safetensors"
+  "loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"
+  "loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+)
+
+# Echo the relative-path list for a set name (one per line). "all" concatenates the three
+# sets; duplicates (the shared umt5_xxl encoder + wan_2.1_vae between wan-t2v/wan-i2v) are
+# harmless in the copy loop (idempotent skip) and are deduped separately for the size
+# preflight below.
+files_for_set() {
+  case "$1" in
+    zimage)  printf '%s\n' "${ZIMAGE_FILES[@]}" ;;
+    wan-t2v) printf '%s\n' "${WAN_T2V_FILES[@]}" ;;
+    wan-i2v) printf '%s\n' "${WAN_I2V_FILES[@]}" ;;
+    all)     printf '%s\n' "${ZIMAGE_FILES[@]}" "${WAN_T2V_FILES[@]}" "${WAN_I2V_FILES[@]}" ;;
+    *)       usage ;;
+  esac
+}
+
+# --- preflight -----------------------------------------------------------------
+
+# Sum the real (stat'd, never hardcoded) sizes of a deduped file list and compare against
+# free space on the container disk. Refuses clearly, with both numbers, if it won't fit.
+preflight_space() {
+  local rel src total_bytes=0 avail_bytes needed_gib avail_gib disk_size
+
+  mkdir -p "$CONTAINER_DATA_DIR"
+  disk_size="$(df -h "$CONTAINER_DATA_DIR" | awk 'NR==2 {print $2}')"
+  log "container disk size: $disk_size"
+
+  while IFS= read -r rel; do
+    src="$COMFY_ROOT/models/$rel"
+    if [[ ! -f "$src" ]]; then
+      echo "error: expected model file missing on the volume: $rel" >&2
+      echo "  (the volume's contents have drifted from runpod-setup-context.md's manifest —" >&2
+      echo "  confirm what's actually there before proceeding)." >&2
+      exit 1
+    fi
+    total_bytes=$(( total_bytes + $(stat -c%s "$src") ))
+  done < <(files_for_set "$1" | sort -u)
+
+  avail_bytes="$(df --output=avail -B1 "$CONTAINER_DATA_DIR" | tail -n1 | tr -d ' ')"
+  needed_gib="$(awk -v b="$total_bytes" 'BEGIN { printf "%.1f", b / 1073741824 }')"
+  avail_gib="$(awk -v b="$avail_bytes" 'BEGIN { printf "%.1f", b / 1073741824 }')"
+
+  log "set '$1' needs ${needed_gib} GiB; ${avail_gib} GiB available on the container disk."
+
+  if (( total_bytes > avail_bytes )); then
+    echo "error: not enough free space on the container disk for set '$1'" \
+         "(needs ${needed_gib} GiB, ${avail_gib} GiB available)." >&2
+    exit 1
+  fi
+}
+
+# --- copy loop -----------------------------------------------------------------
+
+stage_set() {
+  local rel src dst dst_dir src_size dst_size start end elapsed mb_s
+  local total_bytes=0 total_start total_end total_elapsed
+
+  total_start="$(date +%s.%N)"
+
+  while IFS= read -r rel; do
+    src="$COMFY_ROOT/models/$rel"
+    dst="$STAGED_MODELS_DIR/$rel"
+    dst_dir="$(dirname "$dst")"
+    src_size="$(stat -c%s "$src")"
+
+    if [[ -f "$dst" ]]; then
+      dst_size="$(stat -c%s "$dst")"
+      if [[ "$dst_size" == "$src_size" ]]; then
+        log "already staged, skip: $rel"
+        continue
+      fi
+    fi
+
+    mkdir -p "$dst_dir"
+    start="$(date +%s.%N)"
+    cp "$src" "$dst"
+    end="$(date +%s.%N)"
+
+    elapsed="$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.2f", e - s }')"
+    mb_s="$(awk -v b="$src_size" -v t="$elapsed" 'BEGIN { if (t > 0) printf "%.1f", (b / 1048576) / t; else print "inf" }')"
+    log "staged: $rel — $(awk -v b="$src_size" 'BEGIN { printf "%.2f GiB", b / 1073741824 }') — ${elapsed}s — ${mb_s} MB/s"
+
+    total_bytes=$(( total_bytes + src_size ))
+  done < <(files_for_set "$1")
+
+  total_end="$(date +%s.%N)"
+  total_elapsed="$(awk -v s="$total_start" -v e="$total_end" 'BEGIN { printf "%.2f", e - s }')"
+  log "total for set '$1': $(awk -v b="$total_bytes" 'BEGIN { printf "%.2f GiB", b / 1073741824 }')" \
+      "copied in ${total_elapsed}s"
+}
+
+main() {
+  local set_name="${1:-}"
+  [[ -n "$set_name" ]] || usage
+  case "$set_name" in
+    zimage|wan-t2v|wan-i2v|all) ;;
+    *) usage ;;
+  esac
+
+  preflight_space "$set_name"
+  stage_set "$set_name"
+}
+
+main "$@"

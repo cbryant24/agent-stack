@@ -10,6 +10,7 @@ These stay current and describe the system as it is today:
 - [ai-director-agent-system.md](ai-director-agent-system.md) — AI director agent design
 - [decisions-mode-spec.md](decisions-mode-spec.md) — decisions-mode specification
 - [naming-conventions.md](naming-conventions.md) — canonical file & folder naming/placement conventions
+- [coraline-failure-conclusions.md](../packages/visual-generation/docs/coraline-failure-conclusions.md) — visual-generation post-mortem (summary of record) for the celeste-you-dangerous attempt
 
 ## [templates/](templates/)
 

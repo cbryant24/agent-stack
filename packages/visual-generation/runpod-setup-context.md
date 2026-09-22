@@ -323,6 +323,86 @@ pays the full cold-load cost again the first time each model is used on it — c
 for Z-Image, ~39 min for Wan, per pod, at ~$2.09/hr. Factor this in before spinning up a pod
 for a quick one-off test.
 
+## Staged-model-load A/B test (hypothesis: FUSE mmap pattern, not raw throughput, is the cost)
+
+The cold-load numbers above are suspiciously slow given the volume's own measured
+throughput: a plain sequential read off it hits ~181 MB/s, but the actual cold loads above
+only achieved ~15-41 MB/s effective. Suspected cause: `safetensors` loading is mmap-based, so
+a cold load becomes many page-fault-driven small reads over the volume's FUSE layer
+(`fuse.geesefs`) — close to worst case for object storage, even though the volume delivers
+bytes fast under a plain sequential read. `scripts/stage-models` + `comfyui-bootstrap`'s
+`STAGED_MODELS` knob exist to test this: copy the models to the container disk first (a
+sequential read, matching the fast measured rate), then have ComfyUI load from there instead
+of the volume, and see whether that turns ~39 minutes into roughly copy-time-plus-seconds.
+Confidence in the hypothesis is moderate and was explicitly unmeasured until this test exists
+to measure it.
+
+**Mechanism, confirmed from ComfyUI's own source (`cli_args.py` / `folder_paths.py`), not
+assumed:** `--models-directory <dir>` fully replaces the base models directory every default
+per-type search path is built from — no default path coexists alongside it. Passing it means
+the volume's `models/` tree is never registered as a search path at all, so there's no way
+for ComfyUI to silently fall back to it.
+
+**Decide the bar before running, not after — the 2339s Wan baseline above came from a
+different pod on a different day, and storage variance is already evidently high (the 3.4x
+anomaly noted above, between two identically-sized files in that same run). A single run is
+only decisive if the effect is large; the hypothesis predicts roughly a 10x improvement, which
+clears that noise easily — but fix the threshold now, not after seeing the number:**
+
+- **Total (copy time + first-gen time) under ~10 min → adopt staging** as the default path.
+- **10–25 min → inconclusive; rerun once** before deciding either way.
+- **Over ~25 min → reject** the hypothesis, at least for this volume/pod combination.
+
+**Baseline `fast_disk=` value — cite the existing one, don't re-measure it.** ComfyUI's own
+load-time log line (`Model storage policy: fast_disk=False paths=[...]`) only prints during
+an actual model load; a plain install (protocol step 1 below) never triggers one. The only way
+to capture a fresh baseline would be to run a full volume-backed generation first — don't do
+that here: it costs ~39 minutes on its own, and it would warm the page cache for the exact
+files `stage-models` is about to copy, inflating the "cold" copy-timing measurement that
+follows. Use the value already confirmed against the volume on 2026-09-20 — **`fast_disk=False`**
+(see the table above) — as the baseline instead.
+
+**Protocol:**
+
+1. Fresh pod, run `comfyui-bootstrap` normally (`STAGED_MODELS` unset) to install ComfyUI.
+   **Do not run a generation against this volume-backed install** — see the baseline note
+   above for why.
+2. `./stage-models wan-t2v` — record the printed per-file and total copy time/throughput.
+3. `RESTART=1 STAGED_MODELS=1 bash comfyui-bootstrap` — `RESTART=1` is required here, because
+   step 1 already left ComfyUI running against the volume, and the startup script's own
+   idempotency guard would otherwise silently leave that instance running instead of
+   switching to the staged path (it logs which models dir a running instance is actually
+   using, specifically so this kind of mismatch is visible rather than assumed). Confirm via
+   **both** of the following that it's genuinely reading from the staged copy, not the
+   volume:
+   - ComfyUI's own load-time log line should now show a `$CONTAINER_DATA_DIR/staged-models/...`
+     path instead of `$WORKSPACE/runpod-slim/ComfyUI/models/...` — also record its
+     `fast_disk=` value here for comparison against the `False` baseline; a change in that
+     value is itself a real finding, not noise, since ComfyUI appears to pick a different
+     loading strategy based on it.
+   - Independent kernel-level cross-check, since a log line is still just a string ComfyUI
+     chose to print: **run this DURING the load, while the GPU sits at 0% utilization — not
+     after generation completes**, since whether ComfyUI keeps the `safetensors` mmap open
+     after transferring weights to VRAM is unconfirmed, and a post-generation check could
+     show nothing and look like a failure when it isn't one.
+     ```
+     grep -i safetensors /proc/$(pgrep -f main.py)/maps | awk '{print $NF}' | sort -u
+     ```
+4. Run the pinned Wan lightx2v T2V workflow (`workflows/wan2.2-t2v-14B-lightx2v-api.json`),
+   record `Prompt executed in Xs`.
+5. Compare `(stage-models copy time) + (step 4's first-gen time)` against the 2339s baseline
+   and the decision thresholds above.
+6. Record whether the 3.4x anomaly (two identically-sized Wan diffusion files loading at 395s
+   vs. 1351s in the original measurement) reproduces under local loading. If it disappears,
+   that's real evidence the anomaly was a FUSE effect specifically, not something inherent to
+   ComfyUI's dynamic-VRAM loading system.
+
+**Caveat, so the result isn't misread later:** `/proc/sys/vm/drop_caches` is read-only inside
+the container (no permission to actually drop page cache), so the staged files will be served
+partly warm from page cache immediately after `stage-models` copies them. This is **not a
+confound** — real usage stages then loads immediately after, so whatever page-cache benefit
+exists is representative of actual use, not an artifact of the test.
+
 ---
 
 ## Why this GPU and datacenter were chosen

@@ -193,6 +193,57 @@ user` and reinstalls from scratch, rather than trusting the partial state.
 | `LISTEN_ADDR` / `PORT` | `127.0.0.1` / `8188` | ComfyUI bind address/port. |
 | `COMFYUI_REPO`         | `https://github.com/comfyanonymous/ComfyUI.git` | Git remote to install from. |
 | `COMFYUI_REF`           | *(unset)* | Optional tag/commit to pin; tracks the default branch HEAD otherwise. |
+| `STAGED_MODELS`         | `0` | If `1`, start ComfyUI with `--models-directory` pointed at `STAGED_MODELS_DIR` instead of the volume's `models/` tree — part of the staged-model-load A/B test, see [runpod-setup-context.md](../packages/visual-generation/runpod-setup-context.md) and `stage-models` below. Refuses to start if `STAGED_MODELS_DIR` doesn't exist or is empty. |
+| `STAGED_MODELS_DIR`     | `$CONTAINER_DATA_DIR/staged-models` | Where the staged copy lives (must match `stage-models`' own default/override). |
+| `RESTART`               | `0` | If `1` and ComfyUI is already running, stop it first instead of the default no-op — needed to actually switch `STAGED_MODELS` on an already-running pod. |
 
 See the header comment in the script for the full rationale (why the venv and ComfyUI's
-output/input/temp/user dirs must stay off the volume).
+output/input/temp/user dirs must stay off the volume). Whenever a running instance is found
+(restarting or not), the script logs which models directory it was actually launched against
+(read from `/proc/<pid>/cmdline`, not assumed) — so a stale `STAGED_MODELS` mismatch is
+visible rather than silent.
+
+## `stage-models` — copy models onto the container disk (A/B test tooling)
+
+`stage-models` copies a named set of model files from the Global Volume onto the container
+disk, timing every file — the "copy first" half of testing whether the volume's slow
+effective cold-load rate is a FUSE/mmap access-pattern problem rather than a raw-throughput
+one. See [runpod-setup-context.md](../packages/visual-generation/runpod-setup-context.md)'s
+"Staged-model-load A/B test" section for the hypothesis, the decision thresholds fixed before
+running it, and the full protocol. **Run it on the pod, over SSH — not on the Mac** (same
+operating model as `comfyui-bootstrap`):
+
+```sh
+scp -P <PORT> -i ~/.ssh/id_ed25519 scripts/stage-models root@<IP>:/root/stage-models
+ssh root@<IP> -p <PORT> -i ~/.ssh/id_ed25519 'bash /root/stage-models wan-t2v'
+```
+
+**Read-only against the volume** — it only ever reads from `$WORKSPACE` and writes under
+`$STAGED_MODELS_DIR` on the container disk; nothing under `$WORKSPACE` is ever written,
+renamed, or deleted. Idempotent: re-running skips any file already staged at the correct size.
+
+```
+./stage-models <zimage|wan-t2v|wan-i2v|all>
+```
+
+| Set | Contents | Approx. size |
+|---|---|---|
+| `zimage`  | Z-Image-Turbo: unet + qwen_3_4b text encoder + ae.safetensors VAE | ~19.1 GiB |
+| `wan-t2v` | Wan 2.2 T2V: high/low noise experts + umt5_xxl encoder + wan_2.1_vae + t2v lightx2v LoRAs | ~34 GiB |
+| `wan-i2v` | Wan 2.2 I2V: high/low noise experts + umt5_xxl encoder + wan_2.1_vae + i2v lightx2v LoRAs (encoder/VAE shared with `wan-t2v`) | ~34 GiB |
+| `all`     | Every file above, deduped | ~83.5 GiB |
+
+File lists are derived verbatim from `runpod-setup-context.md`'s "Currently installed"
+section — if a listed file is missing on the volume, the script fails loudly naming it rather
+than silently skipping it (a signal the volume's actual contents have drifted from that doc).
+
+| Variable | Default | Controls |
+|----------|---------|----------|
+| `WORKSPACE`          | `/workspace` | Global Volume mount root. |
+| `COMFY_ROOT`          | `$WORKSPACE/runpod-slim/ComfyUI` | Source models live under `$COMFY_ROOT/models/`. |
+| `CONTAINER_DATA_DIR` | `/comfy-data` | Ephemeral root, container disk (matches `comfyui-bootstrap`'s var of the same name/default). |
+| `STAGED_MODELS_DIR`  | `$CONTAINER_DATA_DIR/staged-models` | Destination for the staged copy. |
+
+Before copying, it `stat`s every file's real size (never hardcoded) and refuses clearly, with
+both numbers, if the set won't fit on the container disk's free space — and always prints the
+container disk's total size regardless.

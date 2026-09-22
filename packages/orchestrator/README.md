@@ -13,8 +13,8 @@ section of `docs/ai-director-agent-system.md` for the system-level spec and
 ## Status
 
 **Phase 2 first build slice + Phase 3 sub-agent surface + diagnose-only diagnostics.** Chat +
-knowledge retrieval + live code/doc access + 8 of the 9 sibling agents (all except
-`yt-intelligence-pipeline`) wrapped as tools (tutorial-research, music-curation,
+knowledge retrieval + live code/doc access + 8 of 10 sibling CLI agents (`yt-intelligence-pipeline`
+and `video-clipping` are not wrapped) as tools (tutorial-research, music-curation,
 voiceover-direction, concept-script, visual-generation, technique-research, edit-brief,
 feedback-iteration) —
 free / non-side-effecting ops only, so the autonomous loop never triggers paid generation —
@@ -69,8 +69,9 @@ async with AsyncSqliteSaver.from_conn_string("agent-stack.db") as saver:
   space per call, with the 1.25× `user_knowledge` boost; domains: `tutorial_research`,
   `music_curation_memory`, `voiceover_direction_memory`, `visual_generation_memory`,
   `langgraph_mechanics`); `read_file` + `grep` over the repo (also how the orchestrator
-  answers system-introspection questions); and in-process sub-agent tools wrapping 8 of the 9
-  sibling agents (all except `yt-intelligence-pipeline`) — each with a derived child budget,
+  answers system-introspection questions); and in-process sub-agent tools wrapping 8 of 10
+  sibling CLI agents (`yt-intelligence-pipeline` and `video-clipping` are not wrapped) — each
+  with a derived child budget,
   recorded delegation, and output truncation. Only **FREE / non-side-effecting** ops are
   wrapped; the costly paid ops (visual-generation `generate` = GPU/RunPod spend,
   voiceover-direction TTS = ElevenLabs money) are deliberately kept out of the autonomous tool
