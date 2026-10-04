@@ -94,6 +94,24 @@ def test_images_from_history_extracts_descriptors() -> None:
     assert len(imgs) == 2
 
 
+def test_videos_from_history_extracts_descriptors() -> None:
+    # ComfyUI's SaveVideo node reports under "videos", not "images" — a distinct key,
+    # same {filename, subfolder, type} shape.
+    record = {
+        "outputs": {
+            "80": {"videos": [{"filename": "video_00001_.mp4", "subfolder": "video", "type": "output"}]},
+            "11": {"images": [{"filename": "should-not-appear.png"}]},
+        }
+    }
+    vids = ComfyUIClient.videos_from_history(record)
+    assert vids == [{"filename": "video_00001_.mp4", "subfolder": "video", "type": "output"}]
+
+
+def test_videos_from_history_empty_when_no_video_outputs() -> None:
+    record = {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}
+    assert ComfyUIClient.videos_from_history(record) == []
+
+
 # ── view (/view) ─────────────────────────────────────────────────────────────
 
 

@@ -288,6 +288,8 @@ class VisualResult(BaseModel):
     identity_bearing: bool = False
     settings_recipe: dict[str, Any] = Field(default_factory=dict)
     rationale: str | None = None
+    # Spec values the template had no slot for — requested but not applied to the render.
+    unmapped: list[str] = Field(default_factory=list)
     gpu_cost_usd: float = 0.0
     session_cost_running_usd: float = 0.0
 

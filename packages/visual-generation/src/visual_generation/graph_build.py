@@ -23,6 +23,8 @@ _SETTING_SLOTS = {
     "scheduler": "scheduler",
     "denoise": "denoise",
     "flux_guidance": "flux_guidance",
+    "length": "length",  # video frame count (WAN 2.2; 4n+1 rule)
+    "fps": "fps",  # video playback rate (WAN 2.2's CreateVideo)
 }
 
 

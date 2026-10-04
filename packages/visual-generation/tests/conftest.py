@@ -90,3 +90,51 @@ def flux_template(flux_graph: dict):
         slot_map=inferred.slot_map,
         required_models=inferred.required_models,
     )
+
+
+# The real, verified-working WAN 2.2 exported API graphs (not test fixtures — the
+# actual registration artifacts in packages/visual-generation/workflows/), used so
+# slot-inference tests exercise the real MoE two-stage topology, not a stand-in.
+WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
+
+
+@pytest.fixture
+def wan_t2v_graph() -> dict:
+    import json
+    return json.loads((WORKFLOWS_DIR / "wan2.2-t2v-14B-lightx2v-api.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def wan_i2v_graph() -> dict:
+    import json
+    return json.loads((WORKFLOWS_DIR / "wan2.2-i2v-14B-lightx2v-api.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def wan_t2v_template(wan_t2v_graph: dict):
+    from visual_generation.models import WorkflowTemplate
+    from visual_generation.slot_inference import infer_slots
+
+    inferred = infer_slots(wan_t2v_graph)
+    return WorkflowTemplate(
+        name="wan2.2-t2v",
+        descriptor="WAN 2.2 text-to-video",
+        graph=wan_t2v_graph,
+        slot_map=inferred.slot_map,
+        required_models=inferred.required_models,
+    )
+
+
+@pytest.fixture
+def wan_i2v_template(wan_i2v_graph: dict):
+    from visual_generation.models import WorkflowTemplate
+    from visual_generation.slot_inference import infer_slots
+
+    inferred = infer_slots(wan_i2v_graph)
+    return WorkflowTemplate(
+        name="wan2.2-i2v",
+        descriptor="WAN 2.2 image-to-video",
+        graph=wan_i2v_graph,
+        slot_map=inferred.slot_map,
+        required_models=inferred.required_models,
+    )

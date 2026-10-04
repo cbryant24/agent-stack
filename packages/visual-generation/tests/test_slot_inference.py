@@ -170,3 +170,69 @@ def test_txt2img_graph_has_no_image_slots(flux_graph: dict) -> None:
     sm = infer_slots(flux_graph).slot_map
     assert "init_image" not in sm
     assert "mask" not in sm
+
+
+# ── WAN 2.2 MoE two-stage video graphs (real exported API files) ─────────────
+
+
+def test_wan_t2v_seed_resolves_to_the_add_noise_enable_sampler(wan_t2v_graph: dict) -> None:
+    # Node "78" (low-noise finisher, add_noise: disable) appears before node "81"
+    # (high-noise initial pass, add_noise: enable) in the file's key order — a naive
+    # "first sampler found" pick would target 78's inert noise_seed. The real seed
+    # lives on 81 (research-signals handoff: `81.noise_seed`).
+    sm = infer_slots(wan_t2v_graph).slot_map
+    assert sm["seed"] == {"node_id": "81", "input_key": "noise_seed"}
+
+
+def test_wan_t2v_prompts_resolve_despite_two_samplers(wan_t2v_graph: dict) -> None:
+    sm = infer_slots(wan_t2v_graph).slot_map
+    assert sm["positive"] == {"node_id": "89", "input_key": "text"}
+    assert sm["negative"] == {"node_id": "72", "input_key": "text"}
+
+
+def test_wan_t2v_dims_and_fps_resolve_through_the_sampler_chain(wan_t2v_graph: dict) -> None:
+    # Node 78's latent_image points at node 81's OUTPUT, not the empty-latent node
+    # directly — dimension tracing must follow that hop to reach node "74"
+    # (EmptyHunyuanLatentVideo) for width/height/length; fps lives on CreateVideo "88",
+    # which is unreachable from the sampler trace at all (a standalone scan).
+    sm = infer_slots(wan_t2v_graph).slot_map
+    assert sm["width"] == {"node_id": "74", "input_key": "width"}
+    assert sm["height"] == {"node_id": "74", "input_key": "height"}
+    assert sm["length"] == {"node_id": "74", "input_key": "length"}
+    assert sm["fps"] == {"node_id": "88", "input_key": "fps"}
+
+
+def test_wan_t2v_has_no_init_image_slot(wan_t2v_graph: dict) -> None:
+    # T2V is txt2img-shaped once chain-followed to EmptyHunyuanLatentVideo — no seed frame.
+    sm = infer_slots(wan_t2v_graph).slot_map
+    assert "init_image" not in sm
+
+
+def test_wan_i2v_seed_resolves_correctly(wan_i2v_graph: dict) -> None:
+    # I2V's add_noise:enable sampler ("129:86") happens to be first in file order —
+    # confirm the fix doesn't disturb the already-correct case.
+    sm = infer_slots(wan_i2v_graph).slot_map
+    assert sm["seed"] == {"node_id": "129:86", "input_key": "noise_seed"}
+
+
+def test_wan_i2v_init_image_resolves_through_wan_image_to_video(wan_i2v_graph: dict) -> None:
+    # latent_image -> WanImageToVideo("129:98").start_image -> LoadImage("97").
+    sm = infer_slots(wan_i2v_graph).slot_map
+    assert sm["init_image"] == {"node_id": "97", "input_key": "image"}
+
+
+def test_wan_i2v_dims_and_fps_resolve_off_wan_image_to_video(wan_i2v_graph: dict) -> None:
+    sm = infer_slots(wan_i2v_graph).slot_map
+    assert sm["width"] == {"node_id": "129:98", "input_key": "width"}
+    assert sm["height"] == {"node_id": "129:98", "input_key": "height"}
+    assert sm["length"] == {"node_id": "129:98", "input_key": "length"}
+    assert sm["fps"] == {"node_id": "129:94", "input_key": "fps"}
+
+
+def test_wan_i2v_steps_cfg_are_switch_wired_so_not_inferred(wan_i2v_graph: dict) -> None:
+    # I2V routes steps/cfg/boundary through ComfySwitchNodes (the 4-step vs 20-step
+    # toggle) — they're links, not literals, on the sampler, so recipe-locked `quick`
+    # correctly gets nothing to (mis)write here; the graph's baked toggle state rules.
+    sm = infer_slots(wan_i2v_graph).slot_map
+    assert "steps" not in sm
+    assert "cfg" not in sm

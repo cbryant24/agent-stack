@@ -124,6 +124,26 @@ class ComfyUIClient:
                 )
         return images
 
+    @staticmethod
+    def videos_from_history(record: dict[str, Any]) -> list[dict[str, str]]:
+        """Extract video output descriptors from a history record.
+
+        ComfyUI's `SaveVideo` node reports under the `"videos"` output key (not
+        `"images"`) — same {filename, subfolder, type} shape, so `view()` fetches
+        the bytes the same way regardless of media kind.
+        """
+        videos: list[dict[str, str]] = []
+        for node_output in (record.get("outputs") or {}).values():
+            for vid in node_output.get("videos", []) or []:
+                videos.append(
+                    {
+                        "filename": vid.get("filename", ""),
+                        "subfolder": vid.get("subfolder", ""),
+                        "type": vid.get("type", "output"),
+                    }
+                )
+        return videos
+
     async def view(
         self, filename: str, *, subfolder: str = "", type: str = "output"
     ) -> bytes:

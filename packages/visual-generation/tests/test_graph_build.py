@@ -158,3 +158,21 @@ def test_sourceless_build_unaffected(flux_template) -> None:
     graph, _unmapped = build_prompt_graph(spec, flux_template)
     for node in graph.values():
         assert "init_image" not in node.get("inputs", {})
+
+
+# ── video settings (length / fps) against the real WAN template ──────────────
+
+
+def test_length_and_fps_land_on_the_wan_t2v_graph(wan_t2v_template) -> None:
+    spec = VisualSpec(
+        prompt="a red fox running through snow",
+        seed=7,
+        settings={"length": 49, "fps": 24},
+        workflow_ref="wan2.2-t2v",
+    )
+    graph, unmapped = build_prompt_graph(spec, wan_t2v_template)
+    assert graph["74"]["inputs"]["length"] == 49
+    assert graph["88"]["inputs"]["fps"] == 24
+    # Seed lands on the add_noise:enable sampler (node 81), not node 78.
+    assert graph["81"]["inputs"]["noise_seed"] == 7
+    assert "length" not in unmapped and "fps" not in unmapped

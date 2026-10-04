@@ -470,3 +470,148 @@ def test_plan_warns_on_incoherent_denoise(tmp_path: Path) -> None:
     plan = plan_generation_sync(path, all_sections=True, gpu_rate=3.0, store=store, memory_store=MagicMock())
 
     assert any("coherence" in w for w in plan.plans[0].warnings)
+
+
+# ── seed: the recorded seed is the submitted seed ────────────────────────────
+
+
+def _seed_batch_file(tmp_path: Path, **spec_overrides) -> Path:
+    from visual_generation.batch_file import write_batch
+    from visual_generation.models import GenerationBatch
+
+    path = tmp_path / "seed.batch.md"
+    write_batch(
+        GenerationBatch(project="proj", specs=[_spec(heading="wolf", **spec_overrides)]), path
+    )
+    return path
+
+
+def _plan_from_batch(path: Path, template) -> GenerationPlan:
+    return plan_generation_sync(
+        path, all_sections=True, gpu_rate=3.0, store=_plan_store(template, costs=[]),
+        memory_store=MagicMock(),
+    )
+
+
+def _submitted_seed(template: WorkflowTemplate, graph: dict) -> int:
+    target = template.slot_map["seed"]
+    return graph[target["node_id"]]["inputs"][target["input_key"]]
+
+
+def _spend_plan(plan: GenerationPlan, tmp_path: Path) -> tuple[_FakeComfy, MagicMock]:
+    fake = _FakeComfy()
+    store = _store()
+    spend_generation_sync(
+        plan, endpoint="x", gpu_rate=3.0, store=store, client=fake,
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+    return fake, store
+
+
+def test_random_seed_strategy_writes_the_rolled_seed_into_the_graph(tmp_path: Path, flux_template) -> None:
+    template_seed = _submitted_seed(flux_template, flux_template.graph)
+    path = _seed_batch_file(tmp_path, seed=None, seed_strategy="random")
+
+    fake, store = _spend_plan(_plan_from_batch(path, flux_template), tmp_path)
+
+    gen = store.upsert_generation.call_args[0][0]
+    submitted = _submitted_seed(flux_template, fake.submitted[0])
+    assert submitted == gen.seed          # what was recorded is what ran
+    assert submitted != template_seed     # not the template's own baked seed
+
+
+def test_random_seed_strategy_overrides_a_pinned_seed_in_graph_and_record(tmp_path: Path, flux_template) -> None:
+    # "random" is the directive (draft_redraft_analysis: fresh int at render time), so a
+    # leftover spec.seed must not win in the graph while the record claims the roll.
+    path = _seed_batch_file(tmp_path, seed=42, seed_strategy="random")
+
+    fake, store = _spend_plan(_plan_from_batch(path, flux_template), tmp_path)
+
+    gen = store.upsert_generation.call_args[0][0]
+    assert _submitted_seed(flux_template, fake.submitted[0]) == gen.seed
+    assert gen.seed != 42
+
+
+def test_fixed_seed_is_submitted_and_recorded_exactly(tmp_path: Path, flux_template) -> None:
+    path = _seed_batch_file(tmp_path, seed=123456789, seed_strategy="fixed")
+
+    fake, store = _spend_plan(_plan_from_batch(path, flux_template), tmp_path)
+
+    gen = store.upsert_generation.call_args[0][0]
+    assert _submitted_seed(flux_template, fake.submitted[0]) == 123456789
+    assert gen.seed == 123456789
+
+
+def test_two_plans_of_a_random_spec_get_different_seeds(tmp_path: Path, flux_template) -> None:
+    path = _seed_batch_file(tmp_path, seed=None, seed_strategy="random")
+
+    first = _plan_from_batch(path, flux_template).plans[0]
+    second = _plan_from_batch(path, flux_template).plans[0]
+
+    assert first.resolved_seed != second.resolved_seed
+    assert _submitted_seed(flux_template, first.graph) == first.resolved_seed
+    assert _submitted_seed(flux_template, second.graph) == second.resolved_seed
+
+
+# ── unmapped values: surfaced on the plan/result; a missing seed slot skips ───
+
+
+def _template_without(template: WorkflowTemplate, slot: str) -> WorkflowTemplate:
+    slot_map = {k: v for k, v in template.slot_map.items() if k != slot}
+    return template.model_copy(update={"slot_map": slot_map})
+
+
+def test_spec_whose_template_has_no_seed_slot_is_skipped_with_a_reason(tmp_path: Path, flux_template) -> None:
+    template = _template_without(flux_template, "seed")
+    path = _seed_batch_file(tmp_path, seed=7, seed_strategy="fixed")
+
+    plan = _plan_from_batch(path, template)
+
+    assert plan.plans == []
+    spec_id = plan.skipped[0]
+    assert "no seed slot" in plan.skip_reason(spec_id)
+    assert template.name in plan.skip_reason(spec_id)
+
+    # Spend drains nothing and reports the same reason (no GPU, nothing submitted).
+    fake, store = _spend_plan(plan, tmp_path)
+    assert fake.submitted == []
+    store.upsert_generation.assert_not_called()
+
+
+def test_random_strategy_on_a_template_with_no_seed_slot_is_also_skipped(tmp_path: Path, flux_template) -> None:
+    template = _template_without(flux_template, "seed")
+    path = _seed_batch_file(tmp_path, seed=None, seed_strategy="random")
+
+    plan = _plan_from_batch(path, template)
+
+    assert plan.plans == []
+    assert len(plan.skipped) == 1
+
+
+def test_spend_reports_the_skip_reason_not_the_no_template_message(tmp_path: Path, flux_template) -> None:
+    template = _template_without(flux_template, "seed")
+    path = _seed_batch_file(tmp_path, seed=7)
+    plan = _plan_from_batch(path, template)
+
+    result = spend_generation_sync(
+        plan, endpoint="x", gpu_rate=3.0, store=_store(), client=_FakeComfy(),
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+
+    assert result.skipped == plan.skipped
+    assert any("no seed slot" in r for r in result.skip_reasons)
+    assert not any("no resolvable workflow template" in r for r in result.skip_reasons)
+
+
+def test_unmapped_values_ride_on_the_plan_and_the_result(tmp_path: Path, flux_template) -> None:
+    # Flux has no negative slot → advisory: the spec still renders, and the miss is visible.
+    path = _seed_batch_file(tmp_path, negative_prompt="blurry")
+    plan = _plan_from_batch(path, flux_template)
+
+    assert plan.plans[0].unmapped == ["negative"]
+
+    result = spend_generation_sync(
+        plan, endpoint="x", gpu_rate=3.0, store=_store(), client=_FakeComfy(),
+        ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
+    )
+    assert result.results[0].unmapped == ["negative"]

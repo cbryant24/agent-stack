@@ -10,6 +10,9 @@ Usage:
     visual-generation generate <batch.md> (--section <id> | --all) --endpoint <url>
         [--gpu-rate N] [--max-session-cost N] [--yes]
     visual-generation report <gen_id> --reaction <X> [--rating N] [--notes ...] [--context ...]
+    visual-generation quick "<prompt>" --endpoint <url>
+        [--video] [--image <seed.png>] [--template N] [--negative-prompt ...] [--seed N]
+        [--width N] [--height N] [--length N] [--fps N] [--out PATH] [--yes]
     visual-generation review-pending
     visual-generation chain show <root_id>
     visual-generation batch list <batch.md>
@@ -27,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -35,6 +39,7 @@ from visual_generation.batch_file import read_batch, remove_spec, write_batch
 from visual_generation.comfyui_client import ComfyUIClient, ComfyUIError
 from visual_generation.constants import (
     DEFAULT_GPU_RATE_USD_PER_HR,
+    DEFAULT_POLL_TIMEOUT_SEC,
     EXPLAIN_LEVELS,
     IMG2IMG_TEMPLATE_NAME,
     INPAINT_TEMPLATE_NAME,
@@ -63,6 +68,12 @@ from visual_generation.lora_guard import strength_warnings
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
 from visual_generation.models import LoraRef, TechniqueLesson, VisualSource, WorkflowTemplate
+from visual_generation.quick import (
+    QuickSeedUnmapped,
+    QuickSourceError,
+    QuickTemplateNotFound,
+    quick_generate_sync,
+)
 from visual_generation.report import report_sync
 from visual_generation.research import register_delegate_handlers, render_research, research_sync
 from visual_generation.slot_inference import infer_slots
@@ -96,6 +107,23 @@ def _echo_lora_strength_warnings(stack: list[LoraRef], *, indent: str = "") -> N
         click.echo(f"{indent}⚠ LoRA strength advisories:")
         for w in warns:
             click.echo(f"{indent}  • {w}")
+
+
+def _echo_unmapped_warning(
+    unmapped: list[str], template_name: str, *, label: str = "", indent: str = ""
+) -> None:
+    """Warn that requested values have no slot in the template and never reach the render.
+
+    Advisory only: the render still runs, just without these values. (A missing seed
+    slot is not advisory — plan/quick refuse before this is reached.)
+    """
+    if not unmapped:
+        return
+    where = f"{label}: " if label else ""
+    click.echo(
+        f"{indent}⚠ {where}template '{template_name}' has no slot for: {', '.join(unmapped)} "
+        "— these will NOT affect the render."
+    )
 
 
 # ── model (registry sync from ComfyUI /object_info) ──────────────────────────
@@ -666,8 +694,8 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
 
     if not plan.plans:
         click.echo("Nothing to generate.", err=True)
-        if plan.skipped:
-            click.echo(f"Skipped (no resolvable workflow template): {', '.join(plan.skipped)}", err=True)
+        for sid in plan.skipped:
+            click.echo(plan.skip_reason(sid), err=True)
         raise SystemExit(1)
 
     ledger = GpuLedger()
@@ -684,7 +712,9 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
     if remaining is not None:
         click.echo(f"  Declared budget:    ${remaining:.4f} remaining after this gate")
     if plan.skipped:
-        click.echo(f"  Skipped (no template): {', '.join(plan.skipped)}")
+        click.echo("  Skipped:")
+        for sid in plan.skipped:
+            click.echo(f"      • {plan.skip_reason(sid)}")
     plan_warnings = [w for sp in plan.plans for w in sp.warnings]
     if plan_warnings:
         click.echo("  ⚠ Refinement advisories:")
@@ -692,6 +722,7 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
             click.echo(f"      • {w}")
     for sp in plan.plans:
         _echo_lora_strength_warnings(sp.spec.lora_stack, indent="  ")
+        _echo_unmapped_warning(sp.unmapped, sp.template.name, label=sp.spec.spec_id, indent="  ")
     if max_session_cost is not None:
         click.echo(f"  Hard ceiling:       ${max_session_cost:.2f} (--max-session-cost)")
         if est > max_session_cost:
@@ -775,6 +806,142 @@ def report(gen_id: str, reaction: str, rating: int | None,
         raise SystemExit(1)
     rating_str = f" ★{rating}" if rating is not None else ""
     click.echo(f"Recorded: {gen_id} → {reaction}{rating_str}")
+
+
+# ── quick (one-off generation — no batch file, no canon, no memory write) ────
+
+
+@cli.command()
+@click.argument("prompt")
+@click.option("--endpoint", required=True, help="ComfyUI endpoint URL (the pod you spun up).")
+@click.option("--video", is_flag=True, default=False,
+              help="Generate a WAN 2.2 video clip instead of a still image.")
+@click.option("--image", "image_path", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="Seed image for image-to-video (WAN I2V). Requires --video.")
+@click.option("--template", "template_name", default=None,
+              help="Registered workflow template name (default: picked from --video/--image).")
+@click.option("--negative-prompt", default=None)
+@click.option("--seed", type=int, default=None, help="Fixed seed; default random.")
+@click.option("--width", type=int, default=None)
+@click.option("--height", type=int, default=None)
+@click.option("--length", type=int, default=None, help="Video frame count (must be 4n+1). Video only.")
+@click.option("--fps", type=int, default=None, help="Video playback rate. Video only.")
+@click.option("--model", "model_name", default=None, help="Checkpoint/unet override. Stills only.")
+@click.option("--steps", type=int, default=None, help="Stills only — WAN's recipe is locked.")
+@click.option("--cfg", type=float, default=None, help="Stills only — WAN's recipe is locked.")
+@click.option("--sampler", default=None, help="Stills only — WAN's recipe is locked.")
+@click.option("--scheduler", default=None, help="Stills only — WAN's recipe is locked.")
+@click.option("--lora", "loras", multiple=True, help="NAME[:STRENGTH], repeatable. Stills only.")
+@click.option("--out", "out_path", type=click.Path(), default=None,
+              help="Save here instead of the default adhoc assets folder.")
+@click.option("--gpu-rate", type=float, default=None,
+              help=f"GPU $/hr for the printed cost estimate (default: {DEFAULT_GPU_RATE_USD_PER_HR}).")
+@click.option("--timeout", "poll_timeout", type=float, default=None,
+              help="Seconds to wait for the render (default: longer for --video — cold model loads are slow).")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the spend confirmation.")
+def quick(
+    prompt: str,
+    endpoint: str,
+    video: bool,
+    image_path: str | None,
+    template_name: str | None,
+    negative_prompt: str | None,
+    seed: int | None,
+    width: int | None,
+    height: int | None,
+    length: int | None,
+    fps: int | None,
+    model_name: str | None,
+    steps: int | None,
+    cfg: float | None,
+    sampler: str | None,
+    scheduler: str | None,
+    loras: tuple[str, ...],
+    out_path: str | None,
+    gpu_rate: float | None,
+    poll_timeout: float | None,
+    yes: bool,
+) -> None:
+    """One-off generation straight from PROMPT to a registered ComfyUI workflow.
+
+    Skips drafting, canon, batch files, and generation memory — nothing about this
+    render is recorded to Qdrant. The only Qdrant touch is a read-only lookup of the
+    registered workflow template. For production/character-locked shots, or per-run
+    control over WAN's settings, use `draft`/`generate` instead.
+    """
+    if image_path and not video:
+        raise click.UsageError("--image requires --video (WAN image-to-video).")
+
+    still_only = {"--model": model_name, "--steps": steps, "--cfg": cfg,
+                  "--sampler": sampler, "--scheduler": scheduler}
+    used_still_only = [name for name, val in still_only.items() if val is not None]
+    if video and used_still_only:
+        raise click.UsageError(
+            f"{', '.join(used_still_only)} not supported with --video — WAN's recipe is "
+            "locked to the proven 4-step lightx2v settings (see the package README)."
+        )
+
+    lora_stack = [_parse_lora(tok) for tok in loras]
+    if video and lora_stack:
+        raise click.UsageError(
+            "--lora not supported with --video — WAN's LoRA stack is baked into the template."
+        )
+    _echo_lora_strength_warnings(lora_stack)
+
+    settings: dict[str, Any] = {}
+    if steps is not None:
+        settings["steps"] = steps
+    if cfg is not None:
+        settings["cfg"] = cfg
+    if sampler is not None:
+        settings["sampler"] = sampler
+    if scheduler is not None:
+        settings["scheduler"] = scheduler
+
+    rate = gpu_rate if gpu_rate is not None else DEFAULT_GPU_RATE_USD_PER_HR
+    timeout = poll_timeout if poll_timeout is not None else (1200.0 if video else DEFAULT_POLL_TIMEOUT_SEC)
+
+    kind = "video" if video else "image"
+    click.echo(f"── Quick {kind} generation ── (no batch file, no canon, no memory write)")
+    click.echo(f"  Endpoint: {endpoint}")
+    if video:
+        click.echo("  ⚠ Video renders take a few minutes and cost noticeably more GPU time than a still.")
+    if not yes:
+        click.confirm(f"Submit 1 {kind} generation to this endpoint?", abort=True)
+
+    try:
+        result = quick_generate_sync(
+            prompt,
+            endpoint=endpoint,
+            video=video,
+            template_name=template_name,
+            negative_prompt=negative_prompt,
+            seed=seed,
+            width=width,
+            height=height,
+            length=length,
+            fps=fps,
+            image_path=image_path,
+            model=model_name,
+            settings=settings,
+            lora_stack=lora_stack,
+            out_path=out_path,
+            gpu_rate=rate,
+            poll_timeout=timeout,
+        )
+    except (QuickTemplateNotFound, QuickSourceError, QuickSeedUnmapped) as exc:
+        raise click.ClickException(str(exc)) from exc
+    except ComfyUIError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    # quick resolves the template inside the library call, so this lands after the
+    # render (no pre-spend gate exists here); a missing seed slot already raised above.
+    _echo_unmapped_warning(result.unmapped, result.template_name)
+    click.echo(f"\nSaved:     {result.asset_path}")
+    click.echo(f"Template:  {result.template_name}")
+    click.echo(f"Seed:      {result.seed}")
+    click.echo(f"Elapsed:   {result.elapsed_sec:.1f}s  (≈${result.estimated_cost_usd:.4f} at ${rate:.2f}/hr)")
+    click.echo("\nNot recorded to visual_generation_memory — quick generations are memory-free.")
 
 
 # ── Inspect (review-pending / chain show / recall) — pure reads ───────────────

@@ -30,6 +30,12 @@ _INPAINT_LATENT_CLASSES = {"SetLatentNoiseMask"}  # wraps an encoded latent + a 
 _IMAGE_LOAD_CLASSES = {"LoadImage"}
 _MASK_LOAD_CLASSES = {"LoadImageMask", "LoadImage"}
 
+# WAN 2.2's image-to-video seed-frame node: takes a LoadImage as `start_image` and
+# outputs positive/negative/latent, standing in for an empty-latent + VAEEncode pair.
+_VIDEO_IMAGE_INPUT_CLASSES = {"WanImageToVideo"}
+_VIDEO_LATENT_CLASSES = {"EmptyHunyuanLatentVideo"}
+_VIDEO_OUTPUT_CLASS = "CreateVideo"
+
 # Sampler-bound slots: semantic name → the sampler input_key holding the literal.
 # `seed` differs between KSampler ("seed") and KSamplerAdvanced ("noise_seed").
 _SAMPLER_SCALAR_SLOTS = {
@@ -87,6 +93,28 @@ def _slot(node_id: str, input_key: str) -> dict[str, Any]:
     return {"node_id": node_id, "input_key": input_key}
 
 
+def _follow_latent_chain(
+    graph: dict[str, Any], link: Any
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Follow a `latent_image` link through any chained sampler nodes to its source.
+
+    A MoE two-stage graph (WAN 2.2's high-noise -> low-noise `KSamplerAdvanced`
+    handoff) has the second-stage sampler's `latent_image` point at the first
+    sampler's *output*, not the empty-latent/seed-image node — so a single-hop
+    trace from an arbitrarily-picked sampler can land back on another sampler
+    instead of the real source. This follows the chain until it reaches a
+    non-sampler node. A non-chained graph resolves in one hop, unchanged.
+    """
+    visited: set[str] = set()
+    nid, node = _source(graph, link)
+    while node is not None and node.get("class_type") in _SAMPLER_CLASSES:
+        if nid is None or nid in visited:
+            break
+        visited.add(nid)
+        nid, node = _source(graph, node.get("inputs", {}).get("latent_image"))
+    return nid, node
+
+
 def _resolve_cond(
     graph: dict[str, Any],
     link: Any,
@@ -137,22 +165,26 @@ def _infer_image_input_slots(
       img2img : latent_image ← VAEEncode(pixels ← LoadImage)
       inpaint : latent_image ← VAEEncodeForInpaint(pixels ← LoadImage, mask ← *)
                 latent_image ← SetLatentNoiseMask(samples ← VAEEncode…, mask ← *)
+      WAN I2V : latent_image ← WanImageToVideo(start_image ← LoadImage)
+                (chained through a MoE sampler handoff first, if present)
     An empty-latent (txt2img) or an unrecognized source yields (None, None, []) — no
     image slots, behavior unchanged. Partial recognition is reported as a note, never
     guessed (manual declaration in `workflow register` is the fallback).
     """
-    nid, node = _source(graph, latent_link)
+    nid, node = _follow_latent_chain(graph, latent_link)
     if node is None:
         return None, None, []
     class_type = node.get("class_type")
-    if class_type in _LATENT_CLASSES:
-        return None, None, []  # txt2img — no image input
+    if class_type in _LATENT_CLASSES or class_type in _VIDEO_LATENT_CLASSES:
+        return None, None, []  # txt2img / T2V — no image input
 
     inputs = node.get("inputs", {})
     pixels_link: Any = None
     mask_link: Any = None
 
-    if class_type in _VAE_ENCODE_CLASSES:
+    if class_type in _VIDEO_IMAGE_INPUT_CLASSES:
+        pixels_link = inputs.get("start_image")
+    elif class_type in _VAE_ENCODE_CLASSES:
         pixels_link = inputs.get("pixels")
         mask_link = inputs.get("mask")  # present on VAEEncodeForInpaint
     elif class_type in _INPAINT_LATENT_CLASSES:
@@ -238,10 +270,24 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
         s_inputs = sampler.get("inputs", {})
         s_class = sampler.get("class_type")
 
-        # seed (class-dependent key)
+        # seed (class-dependent key). A MoE two-stage graph (e.g. WAN 2.2's
+        # high-noise -> low-noise KSamplerAdvanced handoff) chains two sampler nodes;
+        # the traced sampler may be the low-noise finisher (add_noise: disable), whose
+        # own noise_seed is inert. When that's the case, the *actual* seed lives on the
+        # sibling KSamplerAdvanced with add_noise: enable — use that node instead.
         seed_key = "noise_seed" if s_class == "KSamplerAdvanced" else "seed"
-        if seed_key in s_inputs and not _is_link(s_inputs[seed_key]):
-            slot_map["seed"] = _slot(sampler_id, seed_key)
+        seed_node_id, seed_node = sampler_id, sampler
+        if s_class == "KSamplerAdvanced" and s_inputs.get("add_noise") == "disable":
+            for nid, node in graph.items():
+                if (
+                    node.get("class_type") == "KSamplerAdvanced"
+                    and node.get("inputs", {}).get("add_noise") == "enable"
+                ):
+                    seed_node_id, seed_node = nid, node
+                    break
+        seed_inputs = seed_node.get("inputs", {}) if seed_node is not None else {}
+        if seed_node_id is not None and seed_key in seed_inputs and not _is_link(seed_inputs[seed_key]):
+            slot_map["seed"] = _slot(seed_node_id, seed_key)
 
         for slot_name, input_key in _SAMPLER_SCALAR_SLOTS.items():
             if input_key in s_inputs and not _is_link(s_inputs[input_key]):
@@ -310,9 +356,14 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
                         slot_map["flux_guidance"] = _slot(nid, "guidance")
                     break
 
-        # dimensions — trace latent_image, fall back to any empty-latent node.
-        dim_id, dim_node = _source(graph, s_inputs.get("latent_image"))
-        if dim_node is None or dim_node.get("class_type") not in _LATENT_CLASSES:
+        # dimensions — trace latent_image (following any chained MoE sampler handoff
+        # first), fall back to any empty-latent node.
+        dim_id, dim_node = _follow_latent_chain(graph, s_inputs.get("latent_image"))
+        if dim_node is None or (
+            dim_node.get("class_type") not in _LATENT_CLASSES
+            and dim_node.get("class_type") not in _VIDEO_LATENT_CLASSES
+            and dim_node.get("class_type") not in _VIDEO_IMAGE_INPUT_CLASSES
+        ):
             for nid, node in graph.items():
                 if node.get("class_type") in _LATENT_CLASSES:
                     dim_id, dim_node = nid, node
@@ -323,6 +374,8 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
                 slot_map["width"] = _slot(dim_id, "width")
             if "height" in d_inputs and not _is_link(d_inputs["height"]):
                 slot_map["height"] = _slot(dim_id, "height")
+            if "length" in d_inputs and not _is_link(d_inputs["length"]):
+                slot_map["length"] = _slot(dim_id, "length")
 
         # image input (img2img / inpaint) — trace latent_image to a VAE-encoded
         # upload. Empty-latent topologies return nothing here (txt2img unchanged).
@@ -335,13 +388,17 @@ def infer_slots(graph: dict[str, Any]) -> InferredSlots:
             slot_map["mask"] = mask_slot
         result.notes.extend(image_notes)
 
-    # checkpoint / unet loaders
+    # checkpoint / unet loaders / video fps (CreateVideo — not sampler-reachable)
     for nid, node in graph.items():
         ct = node.get("class_type")
         if ct == "CheckpointLoaderSimple" and "checkpoint" not in slot_map:
             slot_map["checkpoint"] = _slot(nid, "ckpt_name")
         elif ct == "UNETLoader" and "unet" not in slot_map:
             slot_map["unet"] = _slot(nid, "unet_name")
+        elif ct == _VIDEO_OUTPUT_CLASS and "fps" not in slot_map:
+            fps = node.get("inputs", {}).get("fps")
+            if not _is_link(fps):
+                slot_map["fps"] = _slot(nid, "fps")
 
     # LoRA loaders → lora_0, lora_1, … in graph-stable (node-id-sorted) order.
     lora_ids = sorted(

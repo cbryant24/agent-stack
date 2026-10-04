@@ -8,8 +8,8 @@ KI-4, KI-8 and the batch-file regex.
 Paths are relative to `packages/visual-generation/src/visual_generation/` unless they start
 with `packages/` or `docs/`. Tests are in `packages/visual-generation/tests/`.
 
-**Verdict: Gate 0 is not met.** Item 1 is still open on the `generate` path, in both `HEAD`
-and the working tree. All 13 items are open. Phase 5 stays blocked.
+**Verdict at audit time: Gate 0 was not met.** Items 1 and 2 have since been fixed in the working tree
+(2026-10-04, uncommitted, see below); items 3–13 are still open. Phase 5 needs those two fixes committed.
 
 **HEAD vs uncommitted.** Of the files cited, `generate.py`, `chains.py`, `retrieval.py`,
 `canon.py`, `gpu_tracker.py`, `batch_file.py`, `models.py` and `draft.py` are clean — those
@@ -20,7 +20,14 @@ here are identical in `HEAD`.
 
 ## 1. Item 1 — random seed never written to the graph
 
-**Open.** No regression test.
+**Fixed 2026-10-04 (uncommitted, working tree).** `plan_generation` resolves the seed first and builds the graph from it
+(`generate.py:339-341`); `random` overrides a leftover `spec.seed`, so graph and record agree. Regression tests in
+`test_generate.py`: `test_random_seed_strategy_writes_the_rolled_seed_into_the_graph`,
+`test_random_seed_strategy_overrides_a_pinned_seed_in_graph_and_record`, `test_fixed_seed_is_submitted_and_recorded_exactly`,
+`test_two_plans_of_a_random_spec_get_different_seeds` (the first three failed before the fix; the fixed-seed test already
+passed). Existing records are untouched (open question 6).
+
+The trace below is the defect as audited, before the fix.
 
 Trace of the `generate` path (all in `HEAD`):
 
@@ -58,7 +65,7 @@ A fix for `generate` is to resolve the seed before building the graph, as `quick
 
 | # | Item | Status | Evidence | Regression test |
 |---|---|---|---|---|
-| 2 | `unmapped` never shown to the user | **Open** | Collected at `generate.py:327` and stored at `:337`; never read again. No reference in `cli.py`. `quick.py:151` discards it as `_unmapped`. | None for surfacing. `test_graph_build.py:38`, `:55` only prove values are collected. |
+| 2 | `unmapped` never shown to the user | **Fixed 2026-10-04 (uncommitted)** | Gate prints it per spec before the confirm (`cli.py:725`, helper `cli.py:112`). Missing seed slot skips the spec with a reason (`generate.py:342-349`; `GenerationPlan.skip_reason` `:116`). `quick` prints it (`cli.py:939`) and raises `QuickSeedUnmapped` (`quick.py:160`). Carried on `VisualResult.unmapped` (`generate.py:514`) and `QuickResult.unmapped` (`quick.py:74`). Warn-only for every other value. | `test_cli_turn.py::test_cli_generate_gate_warns_on_unmapped_values_before_the_confirm`, `::test_cli_generate_prints_the_reason_when_every_spec_is_skipped`; `test_generate.py::test_spec_whose_template_has_no_seed_slot_is_skipped_with_a_reason`, `::test_random_strategy_on_a_template_with_no_seed_slot_is_also_skipped`, `::test_spend_reports_the_skip_reason_not_the_no_template_message`, `::test_unmapped_values_ride_on_the_plan_and_the_result`; `test_quick.py::test_quick_returns_unmapped_values_on_the_result`, `::test_quick_refuses_when_the_template_has_no_seed_slot`; `test_cli_quick.py::test_quick_warns_when_a_requested_value_has_no_slot`, `::test_quick_unmapped_seed_is_a_clean_cli_error`. |
 | 3 | Template-baked LoRAs apply on empty stacks | **Open** | `graph_build.py:112-117` only writes for LoRAs in the spec's stack; nothing neutralizes a loader when the stack is empty. Baked in: `packages/visual-generation/workflows/z-image-turbo-lora-api.json` node `30:48` → `narrator-zimage.safetensors` @ 1.0; `z-image-turbo-inpaint-lora-api.json` node `75` → `celeste-zimage-coraline-v2.safetensors` @ 1.0. | None |
 | 4 | Canon pin beyond the loader count dropped silently | **Open** | Extra LoRAs fall into `unmapped` (`graph_build.py:113`), which is never shown (item 2). | `test_graph_build.py:55` asserts the drop is collected, not that it is reported. |
 | 5 | Template default resolution 1152×896 | **Open** | `packages/visual-generation/workflows/z-image-turbo-lora-api.json:72-73`. Applies whenever the spec has no width/height (`graph_build.py:94-97`). | None |

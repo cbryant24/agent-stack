@@ -103,6 +103,8 @@ class GenerationPlan:
     project: str | None
     plans: list[SpecPlan] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)  # spec ids skipped (no template, etc.)
+    # spec id → plain-language reason; a skipped id with no entry means "no template".
+    skip_reasons: dict[str, str] = field(default_factory=dict)
     per_run_estimate_usd: float = 0.0
     estimate_source: str = "default"
     gpu_rate_usd_per_hr: float = DEFAULT_GPU_RATE_USD_PER_HR
@@ -110,6 +112,12 @@ class GenerationPlan:
     @property
     def estimated_session_cost_usd(self) -> float:
         return self.per_run_estimate_usd * len(self.plans)
+
+    def skip_reason(self, spec_id: str) -> str:
+        return self.skip_reasons.get(spec_id) or (
+            f"Skipped {spec_id}: no resolvable workflow template (set workflow_ref to a "
+            "registered template)"
+        )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -317,6 +325,7 @@ async def plan_generation(
 
     plans: list[SpecPlan] = []
     skipped: list[str] = []
+    skip_reasons: dict[str, str] = {}
     for spec in targets:
         template = (
             await store.get_template_by_name(spec.workflow_ref) if spec.workflow_ref else None
@@ -324,7 +333,21 @@ async def plan_generation(
         if template is None:
             skipped.append(spec.spec_id)
             continue
-        graph, unmapped = build_prompt_graph(spec, template)
+        # Resolve the seed BEFORE building the graph, so the seed recorded on the
+        # generation is the seed submitted. The graph builder only writes a seed the
+        # spec carries; "random" must override any leftover spec.seed.
+        resolved_seed = _resolve_seed(spec)
+        build_spec = spec if resolved_seed == spec.seed else spec.model_copy(update={"seed": resolved_seed})
+        graph, unmapped = build_prompt_graph(build_spec, template)
+        if "seed" in unmapped:
+            # The render can't honor the requested seed — the recorded seed would be fiction.
+            skipped.append(spec.spec_id)
+            skip_reasons[spec.spec_id] = (
+                f"Skipped {spec.spec_id}: workflow template '{template.name}' has no seed "
+                "slot, so the requested seed can't be applied — use a template with a "
+                "sampler seed, or register it again so the seed slot is inferred"
+            )
+            continue
         warnings: list[str] = []
         if spec.source is not None:
             warnings = await _plan_source_advisories(spec, graph, template.slot_map, store)
@@ -333,7 +356,7 @@ async def plan_generation(
                 spec=spec,
                 template=template,
                 graph=graph,
-                resolved_seed=_resolve_seed(spec),
+                resolved_seed=resolved_seed,
                 unmapped=unmapped,
                 warnings=warnings,
             )
@@ -346,6 +369,7 @@ async def plan_generation(
         project=batch.project,
         plans=plans,
         skipped=skipped,
+        skip_reasons=skip_reasons,
         per_run_estimate_usd=per_run,
         estimate_source=source,
         gpu_rate_usd_per_hr=gpu_rate,
@@ -388,11 +412,7 @@ async def spend_generation(
     wall_time_sec = 0.0
     results: list[VisualResult] = []
     skipped = list(plan.skipped)
-    skip_reasons: list[str] = [
-        f"Skipped {sid}: no resolvable workflow template (set workflow_ref to a "
-        "registered template)"
-        for sid in plan.skipped
-    ]
+    skip_reasons: list[str] = [plan.skip_reason(sid) for sid in plan.skipped]
     tracker_ref: BudgetTracker | None = None
 
     try:
@@ -491,6 +511,7 @@ async def spend_generation(
                             identity_bearing=identity,
                             settings_recipe=_settings_recipe(sp),
                             rationale=sp.spec.rationale,
+                            unmapped=list(sp.unmapped),
                             gpu_cost_usd=per_run_cost,
                             session_cost_running_usd=running_cost,
                         )

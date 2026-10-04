@@ -125,7 +125,10 @@ def test_cli_draft_mask_without_source_is_a_usage_error(monkeypatch: pytest.Monk
 
 def _fake_plan() -> SimpleNamespace:
     return SimpleNamespace(
-        plans=[SimpleNamespace(warnings=[], spec=VisualSpec(spec_id="spec-1", prompt="p"))],
+        plans=[SimpleNamespace(
+            warnings=[], unmapped=[], template=SimpleNamespace(name="flux-txt2img"),
+            spec=VisualSpec(spec_id="spec-1", prompt="p"),
+        )],
         skipped=[],
         per_run_estimate_usd=0.05,
         estimate_source="default",
@@ -187,6 +190,44 @@ def test_cli_generate_prints_skip_reasons(monkeypatch: pytest.MonkeyPatch, tmp_p
     )
     assert out.exit_code == 0, out.output
     assert "no init_image slot" in out.output  # the plain-language reason, not a bare id
+
+
+def test_cli_generate_gate_warns_on_unmapped_values_before_the_confirm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    batch = tmp_path / "p.batch.md"
+    batch.write_text("<!-- vg-batch: {} -->\n\n## s\n\nbody\n", encoding="utf-8")
+    plan = _fake_plan()
+    plan.plans[0].unmapped = ["negative", "lora_0"]
+    monkeypatch.setattr("visual_generation.cli.plan_generation_sync", lambda *a, **k: plan)
+    monkeypatch.setattr("visual_generation.cli.spend_generation_sync", lambda *a, **k: _fake_result())
+
+    # Declined at the gate: the warning must already be on screen, and nothing is spent.
+    out = CliRunner().invoke(
+        cli, ["generate", str(batch), "--all", "--endpoint", "http://pod:8188"], input="n\n"
+    )
+    assert out.exit_code != 0
+    assert "spec-1" in out.output and "negative, lora_0" in out.output
+    assert "will NOT affect the render" in out.output
+    assert out.output.index("negative, lora_0") < out.output.index("Spend ~$")
+
+
+def test_cli_generate_prints_the_reason_when_every_spec_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    batch = tmp_path / "p.batch.md"
+    batch.write_text("<!-- vg-batch: {} -->\n\n## s\n\nbody\n", encoding="utf-8")
+    plan = _fake_plan()
+    plan.plans = []
+    plan.skipped = ["spec-9"]
+    plan.skip_reason = lambda sid: f"Skipped {sid}: template 'wan' has no seed slot"
+    monkeypatch.setattr("visual_generation.cli.plan_generation_sync", lambda *a, **k: plan)
+
+    out = CliRunner().invoke(
+        cli, ["generate", str(batch), "--all", "--endpoint", "http://pod:8188", "--yes"]
+    )
+    assert out.exit_code == 1
+    assert "spec-9" in out.output and "no seed slot" in out.output
 
 
 def test_cli_generate_gate_can_be_declined(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

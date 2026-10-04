@@ -231,3 +231,14 @@ ASSETS_SUBDIR = "assets"          # non-identity assets
 IDENTITY_SUBDIR = "identity"       # secured, isolated identity-bearing assets
 GPU_LEDGER_FILENAME = "gpu_ledger.json"
 DEFAULT_ASSET_EXT = "png"
+
+# ── `quick` — one-off generation, bypassing batch/canon/memory (stills + WAN video) ──
+QUICK_PROJECT = "adhoc"
+DEFAULT_QUICK_IMAGE_TEMPLATE = "visual-workflow"
+WAN_T2V_TEMPLATE_NAME = "wan2.2-t2v"
+WAN_I2V_TEMPLATE_NAME = "wan2.2-i2v"
+# WAN 2.2 lightx2v-4step baseline recipe (research-signals handoff, captured 2026-06-19).
+DEFAULT_WAN_WIDTH = 832
+DEFAULT_WAN_HEIGHT = 480
+DEFAULT_WAN_LENGTH = 33  # frame count; must be 4n+1
+DEFAULT_WAN_FPS = 16

@@ -267,7 +267,7 @@ itself kept changing.
 
 | # | Value that ran | Where it came from | Why it is wrong | Status |
 |---|---|---|---|---|
-| D2-1 | **The template's baked seed** (`1065558432276088` t2i, `719249596297021` inpaint/img2img) in place of every "random" seed | **Bug:** `graph_build.py:89-90` writes only `spec.seed`. `_resolve_seed` (`generate.py:133-136`) runs, but its value is only *recorded* (`generate.py:162,469`). | Every "random" re-roll reuses the same noise. The recorded seed is fictional, so "reproduce seed X" can't work. A redraft that re-pins `parent.seed` (`chains.py:336-337`) pins the fictional value and runs a *different* seed from the parent. **Explicitly fixed seeds were applied correctly** (v3g/v3f seeds, 123, 42, 7 and 778899 all appear in the rendered graphs). | **Open** |
+| D2-1 | **The template's baked seed** (`1065558432276088` t2i, `719249596297021` inpaint/img2img) in place of every "random" seed | **Bug:** `graph_build.py:89-90` writes only `spec.seed`. `_resolve_seed` (`generate.py:133-136`) runs, but its value is only *recorded* (`generate.py:162,469`). | Every "random" re-roll reuses the same noise. The recorded seed is fictional, so "reproduce seed X" can't work. A redraft that re-pins `parent.seed` (`chains.py:336-337`) pins the fictional value and runs a *different* seed from the parent. **Explicitly fixed seeds were applied correctly** (v3g/v3f seeds, 123, 42, 7 and 778899 all appear in the rendered graphs). | **Fixed 2026-10-04** (§9 item 1) |
 | D2-2 | 1152×896 (template default) and 832×1152 (current:19) | template latent default; LLM | 1152×896 stalls this workflow (`z-image-turbo-craft.md:167`). The project rule is 1024². Any spec without width and height inherits the bad default. | **Open.** The template default is still 1152×896. |
 | D2-3 | `euler` sampler in the final batch and one composite plate, `res_multistep` elsewhere | the drafter's example JSON (`chains.py:67`) | Euler isn't wrong for Z-Image; the official guidance says Euler works well (`z-image-turbo-craft.md:929`). But it changed an uncontrolled variable mid-project with no recorded reason, so the Phase-E renders can't be compared with the earlier ones. | **Open** (drafter example) |
 | D2-4 | LoRA strength 1.5–2.0 | canon pins @2.0 overriding the LLM (`39f7971`), plus Base-trained LoRAs that under-apply on Turbo | Overrides the prompt and copies identity onto extras (B6). | Canon now pins 1.0. There is no range check (warn-only at ≥1.5, `lora_guard.py`). |
@@ -275,7 +275,7 @@ itself kept changing.
 | D2-6 | Stale LoRAs (old `celeste-zimage-coraline-turbo` in the unify pass; `-2500` named in rationales) | registry, retrieval, parent inheritance | B9 | **Open** |
 | D2-7 | Template-baked LoRAs on empty stacks | `z-image-turbo-lora-api.json:146`, inpaint template | B11 | **Open** (latent) |
 | D2-8 | `DEFAULT_DENOISE = 0.5` for source specs, `settings: {}` falling back to template defaults, `ModelSamplingAuraFlow shift 3` with no slot | `constants.py:213`, `generate.py:148-156`, `chains.py:318` (refinement wipes settings) | These values apply silently. Inpaint and img2img specs record only denoise, so steps, cfg and sampler are whatever the template holds, and the batch file doesn't show them. | **Open** |
-| D2-9 | Dropped values (LoRAs beyond the loader count, settings with no slot) | `graph_build.py:82-84,110-115` | Collected into `unmapped`, then **never printed** by `cli.py`. The user believes a value ran when it didn't. | **Open** |
+| D2-9 | Dropped values (LoRAs beyond the loader count, settings with no slot) | `graph_build.py:82-84,110-115` | Collected into `unmapped`, then **never printed** by `cli.py`. The user believes a value ran when it didn't. | **Fixed 2026-10-04** (§9 item 2; warn-only except a missing seed slot) |
 | D2-10 | Negation phrases as positive tokens | canon `locked` text, LLM prose | Official guidance is guidance 0 for Turbo, so there is no working negative (model card: "Guidance should be 0 for the Turbo models"). Negations therefore can't work as intended, and they add the very concept they try to exclude. | Canon injection removed; the LLM still writes them — **open** |
 | D2-11 | Style words "smooth … matte clay-resin … satin sheen", with the style subject **forbidding** "stitched seams" and "visible fabric weave" | the style canon | Pushes away from LAIKA's tactile imperfection and toward CGI (evidence doc §4.5). Also contradicts itself: Celeste forbids "lacquered sheen" while the style block asks for "soft lacquered gloss". | Superseded by the bake-off material spec ("painted resin", `ad10796`); the old canon JSON still holds it |
 | D2-12 | SDXL-era advice (CFG 7 / 3.5, DPM++ 2M Karras, 30 steps) | LLM rationale (v1:4, v1:9) | Wrong model family. It wasn't applied (recorded cfg was 1.0), but it shows A1. | Open (A1) |
@@ -342,8 +342,20 @@ itself kept changing.
 
 **Still open.** Fix these before any further generation, on any model:
 
-1. Random seed never written to the graph: `generate.py:327-336`, `graph_build.py:89-90` (D2-1).
-2. `unmapped` never shown to the user (D2-9).
+1. ~~Random seed never written to the graph~~ **Fixed 2026-10-04 (uncommitted)** (D2-1). `plan_generation` now resolves the seed
+   before building the graph (`generate.py:339-341`), so the recorded seed is the submitted seed; `random` overrides a leftover
+   `spec.seed`. Tests: `test_generate.py::test_random_seed_strategy_writes_the_rolled_seed_into_the_graph`,
+   `::test_random_seed_strategy_overrides_a_pinned_seed_in_graph_and_record`, `::test_fixed_seed_is_submitted_and_recorded_exactly`,
+   `::test_two_plans_of_a_random_spec_get_different_seeds`. Records made before this fix still carry seeds that never ran.
+2. ~~`unmapped` never shown to the user~~ **Fixed 2026-10-04 (uncommitted)** (D2-9). The `generate` cost gate prints it per spec
+   before the confirm (`cli.py:725`, helper `cli.py:112`); a spec whose template has no seed slot is skipped with a reason
+   (`generate.py:342-349`); `quick` prints it (`cli.py:939`) and refuses on a missing seed slot (`quick.py:160`); the list rides on
+   `VisualResult.unmapped` (`generate.py:514`) and `QuickResult.unmapped` (`quick.py:74`). Tests:
+   `test_cli_turn.py::test_cli_generate_gate_warns_on_unmapped_values_before_the_confirm`,
+   `test_generate.py::test_spec_whose_template_has_no_seed_slot_is_skipped_with_a_reason`,
+   `::test_unmapped_values_ride_on_the_plan_and_the_result`, `test_quick.py::test_quick_returns_unmapped_values_on_the_result`,
+   `::test_quick_refuses_when_the_template_has_no_seed_slot`, `test_cli_quick.py::test_quick_warns_when_a_requested_value_has_no_slot`.
+   Other dropped values (LoRAs beyond the loader count, etc.) now warn but still do not block.
 3. LoRAs baked into the templates apply on empty stacks (B11).
 4. Canon pin dropped beyond the loader count, silently (B10).
 5. Template default resolution 1152×896 (D2-2).
