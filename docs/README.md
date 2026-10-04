@@ -25,6 +25,11 @@ Per-phase implementation handoffs and research-signal notes — point-in-time re
 of what was built and what was learned. Includes the per-agent `*-handoff.md` files,
 dated handoffs, and the `*research-signals*` notes.
 
+## [audit/](audit/)
+
+Point-in-time factual audits with `file:line` evidence (2026-10-04, agent-shell Phase 0):
+`orchestrator-audit.md`, `visual-generation-tool-surface.md`, `execution-truth-status.md`.
+
 ## [v2-refinements/](v2-refinements/)
 
 Per-agent backlogs of deferred refinements for a future v2 (`*-v2-refinements.md`),
