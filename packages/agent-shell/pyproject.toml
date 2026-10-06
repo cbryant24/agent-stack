@@ -1,0 +1,53 @@
+[project]
+name = "agent-shell"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = [
+    "agent-runtime",
+    "click>=8.0",
+    "pydantic>=2.0",
+    "prompt-toolkit>=3.0",
+    "rich>=13.0",
+]
+
+[project.scripts]
+agent-shell = "agent_shell.cli:cli"
+
+[dependency-groups]
+dev = ["import-linter>=2.0"]
+
+[tool.uv.sources]
+agent-runtime = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_shell"]
+
+[tool.importlinter]
+root_package = "agent_shell"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "agent_shell imports no agent package or LLM SDK"
+type = "forbidden"
+source_modules = ["agent_shell"]
+forbidden_modules = [
+    "anthropic", "openai", "langchain", "langchain_core", "langchain_anthropic",
+    "langgraph", "claude_agent_sdk", "agents",
+    "orchestrator", "music_curation", "voiceover_direction", "concept_script",
+    "visual_generation", "technique_research", "tutorial_research", "edit_brief",
+    "feedback_iteration", "video_clipping", "yt_intelligence_pipeline",
+]
+allow_indirect_imports = true
+
+[tool.mypy]
+python_version = "3.12"
+explicit_package_bases = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["agent_runtime", "agent_runtime.*"]
+ignore_missing_imports = true

@@ -13,7 +13,7 @@ agent-stack/
 ├── pyproject.toml          # uv workspace root + pytest config
 ├── README.md               # per-agent CLI usage (see §5 — note drift in §6)
 ├── .env / .env.example     # API keys & paths (op:// 1Password refs; not committed)
-├── packages/               # 12 workspace members (see §3)
+├── packages/               # 13 workspace members (see §3)
 ├── infrastructure/
 │   └── docker-compose.yml  # Qdrant (6333/6334) + Jaeger (16686/4318) ONLY
 ├── scripts/
@@ -44,6 +44,7 @@ Runtime data lives **outside the repo**: `~/agent-data/` (sources, audio, stills
 | `feedback-iteration` | NL feedback on an `edit-brief.md` → state-preserving, anchor-addressed, in-place revision + version trail; timing recomputed in code (LLM never emits a number); proposes durable `editing_preference` lessons to `user_knowledge`. Stateless | `feedback-iteration` | anthropic | [README](packages/feedback-iteration/README.md) |
 | `orchestrator` | **Hub.** Conversational LangGraph ReAct meta-agent; wraps 8 of 10 sibling CLI agents as tools (free/non-side-effecting ops only); `yt-intelligence-pipeline` and `video-clipping` are not wrapped | `orchestrator` | langgraph, langgraph-checkpoint-sqlite, langchain-anthropic, + those 8 agents | [README](packages/orchestrator/README.md) |
 | `video-clipping` | Long-form video → highlight clips against a director spec. Free ffmpeg + PySceneDetect pre-pass gates paid stages; faster-whisper transcript, Claude vision+decide per candidate, Voyage intra- and opt-in cross-run dedupe, ffmpeg cut. Auto-persists `run` / `segment` / `lesson` points to `video_clipping_memory` (idempotent uuid5 ids; failures never fail the run); `clip explain` answers grounded questions over that memory | `clip` | pyyaml, scenedetect, faster-whisper | [README](packages/video-clipping/README.md) |
+| `agent-shell` | Provider-neutral chat shell core: tool contract + effect classes, approval gate (GPU/memory/destructive), dry-run, audit log, resumable sessions, REPL. **No LLM SDK** (import-linter enforced); engines arrive in Phase 2, so only a scripted `FakeEngine` today. Plan: `docs/agent-shell/` | `agent-shell demo` | click, prompt-toolkit, rich | [README](packages/agent-shell/README.md) |
 
 **`agent-runtime`** (shared lib, no CLI): config, OTel tracing, budget tracking, delegation, Qdrant memory + Voyage embeddings, knowledge/`docs_ingest`, reporting, diagnostics, registry. → [README](packages/agent-runtime/README.md). All Python is **≥3.12**.
 
