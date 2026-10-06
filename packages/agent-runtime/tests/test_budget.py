@@ -340,3 +340,53 @@ class TestBudgetTrackerJSONLEmission:
         finally:
             os.environ.pop("AGENT_DATA_DIR", None)
             reset_config()
+
+
+class TestEstimateCost:
+    def test_known_model(self) -> None:
+        from agent_runtime.budget import estimate_cost
+
+        # sonnet-4-6: $3 in / $15 out per 1M
+        assert estimate_cost("claude-sonnet-4-6", 1_000_000, 100_000) == pytest.approx(3.0 + 1.5)
+
+    def test_unknown_model_is_none_not_zero(self) -> None:
+        from agent_runtime.budget import estimate_cost
+
+        assert estimate_cost("gpt-9-imaginary", 1000, 1000) is None
+
+    def test_add_llm_cost_still_prices_unknown_models_at_zero(self) -> None:
+        """Other agents rely on this; only the strict lookup changed."""
+
+        async def run() -> None:
+            async with BudgetTracker(BudgetEnvelope(max_depth=0), "t") as t:
+                t.add_llm_cost("gpt-9-imaginary", 1000, 1000)
+                assert t.consumption.cost_usd == 0.0
+
+        asyncio.run(run())
+
+    def test_default_cache_multipliers_for_anthropic_rows(self) -> None:
+        from agent_runtime.budget import estimate_cost
+
+        # 1M prompt tokens: 400k cache read (0.1x), 100k cache write (1.25x), 500k plain; $3 input
+        got = estimate_cost("claude-sonnet-4-6", 1_000_000, 0, 400_000, 100_000)
+        assert got == pytest.approx(0.5 * 3 + 0.4 * 0.3 + 0.1 * 3.75)
+
+    def test_explicit_cache_prices_win(self) -> None:
+        from agent_runtime.budget import estimate_cost
+
+        # opus-5-5: $4 in, $0.20 read, $5 write
+        got = estimate_cost("claude-opus-5-5", 1_000_000, 0, 500_000, 0)
+        assert got == pytest.approx(0.5 * 4 + 0.5 * 0.2)
+
+    def test_openai_cache_write_costs_the_same_as_input(self) -> None:
+        from agent_runtime.budget import estimate_cost
+
+        assert estimate_cost("gpt-5", 1_000_000, 0, 0, 1_000_000) == pytest.approx(1.25)
+
+    def test_cached_tokens_never_make_the_plain_part_negative(self) -> None:
+        from agent_runtime.budget import estimate_cost
+
+        assert estimate_cost("gpt-5", 100, 0, 500, 0) is not None
+
+    def test_every_row_has_input_and_output(self) -> None:
+        assert all({"input", "output"} <= set(row) for row in _PRICING.values())

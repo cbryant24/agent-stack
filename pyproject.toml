@@ -13,7 +13,11 @@ dev = [
     "mypy>=1.10",
     "ipython>=8.0",
     "pytest-asyncio>=1.4.0",
+    "agent-shell[langgraph]",
 ]
+
+[tool.uv.sources]
+agent-shell = { workspace = true }
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"

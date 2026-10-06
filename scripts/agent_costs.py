@@ -7,10 +7,12 @@ containing one `llm_call` event per LLM call (model + input/output tokens + cost
 and a `run_end` summary (status + consumption). This reads them and reports
 per-turn and aggregate cost. Standard library only — no deps.
 
-NOTE ON GRANULARITY: one trace = one run_id = one conversational *turn*
-(run_turn creates a fresh BudgetTracker per turn). Traces don't record the
-chat thread id, so this reports per-turn, not per-chat-session. To roll up by
-session you'd add thread_id to the run_end metadata in agent.py first.
+NOTE ON GRANULARITY: one trace = one run_id. For the orchestrator that is one
+conversational *turn*; for agent-shell REPL sessions it is one *segment* of a session
+(a start..close; a resumed session has several) and run_end carries `summary.turns`
+and `providers`. Every trace's run_end carries `envelope.session_id`, so --by-session
+rolls both kinds up per chat session (orchestrator traces count one turn each; shell
+traces count their `summary.turns`).
 
 Usage:
     python3 agent_costs.py                         # orchestrator, all dates, per-turn table
@@ -44,6 +46,8 @@ def parse_run(trace_path: Path) -> dict | None:
         "date": trace_path.parent.parent.parent.name,
         "ts": None,
         "session_id": None,
+        "turns": 1,
+        "providers": [],
         "status": "?",
         "model": "",
         "llm_calls": 0,
@@ -89,6 +93,10 @@ def parse_run(trace_path: Path) -> dict | None:
             summ = md.get("summary") or {}
             if "cost_usd" in summ:
                 rec["cost_summary"] = float(summ["cost_usd"])
+            if summ.get("turns") is not None:
+                rec["turns"] = int(summ["turns"])
+            if md.get("providers"):
+                rec["providers"] = list(md["providers"])
             if summ.get("tool_calls") is not None:
                 rec["tool_calls"] = int(summ["tool_calls"])
             if summ.get("llm_calls") is not None:
@@ -161,17 +169,21 @@ def print_by_session(runs: list[dict]) -> None:
     by_sess: dict[str, list[dict]] = defaultdict(list)
     for r in runs:
         by_sess[r["session_id"] or "(unknown)"].append(r)
-    hdr = f"{'SESSION':<28}{'TURNS':>6}{'PARTIAL':>9}{'LLM':>6}{'TOOLS':>7}{'IN_TOK':>12}{'OUT_TOK':>11}{'COST':>11}"
+    hdr = (
+        f"{'SESSION':<28}{'TURNS':>6}{'PARTIAL':>9}{'LLM':>6}{'TOOLS':>7}"
+        f"{'IN_TOK':>12}{'OUT_TOK':>11}{'COST':>11}  PROVIDERS"
+    )
     print(hdr)
     print("-" * len(hdr))
     # Sort sessions by their earliest turn.
     for sess in sorted(by_sess, key=lambda s: min(r["ts"] or "" for r in by_sess[s])):
         rs = by_sess[sess]
+        providers = ",".join(sorted({p for r in rs for p in r["providers"]}))
         print(
-            f"{sess[:26]:<28}{len(rs):>6}{sum(r['status']=='partial' for r in rs):>9}"
+            f"{sess[:26]:<28}{sum(r['turns'] for r in rs):>6}{sum(r['status']=='partial' for r in rs):>9}"
             f"{sum(r['llm_calls'] for r in rs):>6}{sum(r['tool_calls'] for r in rs):>7}"
             f"{_fmt(sum(r['in_tok'] for r in rs)):>12}{_fmt(sum(r['out_tok'] for r in rs)):>11}"
-            f"{'$'+format(sum(r['cost'] for r in rs),'.4f'):>11}"
+            f"{'$'+format(sum(r['cost'] for r in rs),'.4f'):>11}  {providers}"
         )
     print("-" * len(hdr))
     print(f"{len(by_sess)} sessions")

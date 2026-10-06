@@ -121,7 +121,7 @@ The session API (`start`, `send`, `events`, `confirm`) has no terminal code in i
 - The session API is exercised by a test front end with no terminal, proving the REPL is not required.
 - The demo streams text, shows a confirm panel, honors dry-run, and resumes a session.
 - `uv run ruff` and `uv run mypy` are clean for the new package (do not add to the 73-error baseline).
-- No `claude-agent-sdk`, `openai-agents`, `langchain` or `langgraph` dependency.
+- No `claude-agent-sdk`, `openai-agents`, `langchain` or `langgraph` in the core `dependencies` (Phase 2 adds LangGraph as the optional `agent-shell[langgraph]` extra).
 
 ## Risks
 

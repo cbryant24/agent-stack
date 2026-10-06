@@ -13,6 +13,14 @@ dependencies = [
 [project.scripts]
 agent-shell = "agent_shell.cli:cli"
 
+[project.optional-dependencies]
+langgraph = [
+    "langgraph==1.2.1",
+    "langchain-core==1.4.0",
+    "langchain-anthropic==1.4.3",
+    "langchain-openai==1.2.2",
+]
+
 [dependency-groups]
 dev = ["import-linter>=2.0"]
 
@@ -36,12 +44,19 @@ type = "forbidden"
 source_modules = ["agent_shell"]
 forbidden_modules = [
     "anthropic", "openai", "langchain", "langchain_core", "langchain_anthropic",
-    "langgraph", "claude_agent_sdk", "agents",
+    "langchain_openai", "langgraph", "claude_agent_sdk", "agents",
     "orchestrator", "music_curation", "voiceover_direction", "concept_script",
     "visual_generation", "technique_research", "tutorial_research", "edit_brief",
     "feedback_iteration", "video_clipping", "yt_intelligence_pipeline",
 ]
 allow_indirect_imports = true
+# The one module that may import the LangChain / LangGraph stack.
+ignore_imports = [
+    "agent_shell.engine.langgraph_engine -> langgraph",
+    "agent_shell.engine.langgraph_engine -> langchain_core",
+    "agent_shell.engine.langgraph_engine -> langchain_anthropic",
+    "agent_shell.engine.langgraph_engine -> langchain_openai",
+]
 
 [tool.mypy]
 python_version = "3.12"

@@ -47,7 +47,7 @@ class Executor:
         with span(f"shell.tool.{spec.name}"):
             args, result, decision, cost = await self._run(spec, raw_args)
         self.audit.record(
-            tool=spec.name, effect=spec.effect.value, args=args, decision=decision,
+            kind="tool_call", tool=spec.name, effect=spec.effect.value, args=args, decision=decision,
             dry_run=self._dry_run(), is_error=result.is_error, summary=result.text[:300],
             cost_usd=cost, provider=self._provider(), model=self._model(),
         )

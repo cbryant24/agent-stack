@@ -20,6 +20,7 @@ class RuntimeConfig(BaseSettings):
     openai_api_key: str | None = Field(
         default=None, validation_alias="PRODUCTION_AGENTS_OPENAI_API_KEY"
     )
+    chat_openai_api_key: str | None = Field(default=None, validation_alias="CHAT_OPENAI_API_KEY")
     default_llm_provider: str = Field(
         default="anthropic", validation_alias="PRODUCTION_AGENTS_DEFAULT_LLM_PROVIDER"
     )

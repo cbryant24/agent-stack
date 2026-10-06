@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from agent_runtime.config import reset_config
 from agent_runtime.models import BudgetEnvelope
 from agent_shell.config import ChatConfig, ShellSettings
 from agent_shell.engine.fake import FakeEngine, Step
@@ -16,11 +18,34 @@ from agent_shell.testing import Counter, make_tool
 from agent_shell.tools.registry import EffectClass, ToolSpec
 
 
+LIVE = os.environ.get("AGENT_SHELL_LIVE") == "1"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "live: calls a real provider (costs money); run with AGENT_SHELL_LIVE=1 under `op run`"
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if LIVE:
+        return
+    skip = pytest.mark.skip(reason="live provider test: set AGENT_SHELL_LIVE=1 (under op run)")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
-def fake_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("VOYAGE_API_KEY", "pa-test")
+def fake_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    """Fake keys for every test, except live ones, which must see the real environment."""
+    if not LIVE:
+        monkeypatch.setenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setenv("VOYAGE_API_KEY", "pa-test")
     monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path / "data"))
+    reset_config()
+    yield
+    reset_config()
 
 
 @pytest.fixture

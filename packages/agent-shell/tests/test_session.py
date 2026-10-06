@@ -19,22 +19,11 @@ from agent_shell.engine.fake import Call, FakeEngine, Say
 from agent_shell.guard.gate import AutoConfirmer, Decision
 from agent_shell.proposals import Proposal, walk_proposals
 from agent_shell.session.api import ConfirmRequested, Session, SessionEvent
-from agent_shell.testing import Counter
+from agent_shell.testing import Counter, drain
 
 pytestmark = pytest.mark.asyncio
 
 Make = Callable[..., Session]
-
-
-async def drain(session: Session, text: str, answer: Decision | None = None) -> list[SessionEvent]:
-    """A front end with no terminal: consume events, answer confirmations."""
-    out: list[SessionEvent] = []
-    async for ev in session.send(text):
-        out.append(ev)
-        if isinstance(ev, ConfirmRequested):
-            assert session.pending_confirmation == ev.request
-            session.confirm(answer or Decision(kind="accept"))
-    return out
 
 
 def kinds(events: list[SessionEvent]) -> list[str]:
@@ -126,7 +115,7 @@ async def test_interrupt_during_a_pending_confirm_rejects_it(make_session: Make,
 
 async def test_engine_failure_is_a_turn_end_not_a_crash(make_session: Make) -> None:
     class Bad(FakeEngine):
-        async def send(self, handle: Any, user_text: str) -> Any:  # type: ignore[override]
+        async def send(self, handle: Any, user_text: str, history: Any = None) -> Any:  # type: ignore[override]
             raise ValueError("engine down")
             yield  # pragma: no cover
 

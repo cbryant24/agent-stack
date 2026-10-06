@@ -10,12 +10,12 @@ Labels: **[Verified]** = read in the bundle. **[Unverified]** = file not in the 
 |---|---|---|
 | 1 | Do not move the orchestrator to its own repo and do not extend it. Freeze it, then retire it (Phase 7). | High |
 | 2 | Build a new workspace package `agent-shell` (provider-neutral REPL core). Each agent opts in with a `chat` subcommand and a tool pack inside its own package, starting with `visual-generation chat` (alias `visual-agent`). | High |
-| 3 | Engine: neutral tool registry + `Engine` interface, with a Claude Agent SDK adapter and an OpenAI Agents SDK adapter. Ollama excluded. | High |
+| 3 | Engine: neutral tool registry + `Engine` interface, with one LangGraph engine that runs on Claude or OpenAI models (`langchain-anthropic` / `langchain-openai`). The Claude Agent SDK and OpenAI Agents SDK stay possible later adapters. Ollama excluded. | High |
 | 4 | Approval gates run in our own tool executor, so they behave the same under both providers. | High |
 | 5 | Only the owning agent writes to its Qdrant collection. New write paths (`record_evaluation`) are store functions inside `visual-generation`; chat tools only call them. | High |
 | 6 | The REPL does not wrap `generate` until the execution-truth defects are fixed and Gate 0 passes. | High |
 | 7 | Pod lifecycle wraps the existing `scripts/pod` (create/delete model). No new RunPod client in v1. | Medium-high |
-| 8 | This reverses a recorded design decision (LangGraph over the Claude Agent SDK) and implements a deferred one (runtime conversational mode). Both are documented in §5. | High |
+| 8 | LangGraph is kept as the engine; the orchestrator is retired for its design (read-only, no gates, stale prompt, no streaming), not its framework. This implements a deferred decision (runtime conversational mode). Both are documented in §5 and `docs/adr/0001-agent-shell.md`. | High |
 
 ## 2. What the orchestrator is [Verified]
 
@@ -60,21 +60,23 @@ Labels: **[Verified]** = read in the bundle. **[Unverified]** = file not in the 
 | Use Typer | Repo convention is Click. Use Click. |
 | Classify feedback as prompt / implementation / outcome | Use the evaluation charter's three score layers and the retrospective's conditioning-first rule (Phase 4). |
 | Separate `<agent>-tools` and app packages | No new package per agent. Each agent gets a `chat/` module and a `chat` subcommand, as the runtime v2-refinement already specified. |
-| LangChain can be removed with the orchestrator | Only `langgraph` and its SQLite checkpointer can. The other agents and `yt-intelligence-pipeline` reason through `langchain-anthropic`. |
+| LangChain can be removed with the orchestrator | No. `langgraph` stays too, because the shell engine is built on it; only the SQLite checkpointer (`langgraph-checkpoint-sqlite`) goes. Phase 0 found only `orchestrator` and `yt-intelligence-pipeline` import LangChain at all. |
 | `agent-stack.db` is the orchestrator's | It is the planned shared relational store (migration ledger). |
 | "Bake-off queue, Phase 3B, Phase 5" | Those names are not in the bundle (the Consolidated Audit was not included). The matching sequence is the 12-step progression in `project-instructions.md` and Gates 0-6 in `evaluation-charter.md`. |
 
 ## 5. How this fits decisions already recorded in the repo
 
-### It reverses "LangGraph over the Claude Agent SDK"
+### It keeps "LangGraph over the Claude Agent SDK" and fixes why it fell short
 
 `ai-director-agent-system.md` records that the Agent SDK was evaluated for the orchestrator and LangGraph was chosen for two reasons: explicit control over the loop, and provider portability.
 
-- **Provider portability was not delivered.** `build_app` constructs `ChatAnthropic` directly. The new `Engine` interface delivers it: two adapters, switchable per session.
-- **Explicit control moves, it is not lost.** The SDK owns the model loop. Our executor owns everything the hand-rolled graph existed to control: the budget guard before each tool, tracing per tool call, and the approval gate.
-- **If you still want to own the loop itself**, the fallback is a third adapter: a hand-rolled loop on the raw Messages / Responses APIs. It replaces one file.
+- **The framework choice stands.** The shell's engine is a small LangGraph model/tools graph.
+- **Provider portability was not delivered by the orchestrator** (`build_app` constructs `ChatAnthropic` directly). It is delivered now: the engine builds `ChatAnthropic` or `ChatOpenAI` from provider + model, and the neutral transcript is rebuilt into messages each turn, so a provider or model switch keeps the whole history.
+- **Explicit control is kept and moved into the executor.** The budget guard, tracing per tool call and the approval gate live in `agent_shell`'s executor, not in LangGraph interrupts, so they behave identically whatever runs the model.
+- **What is retired is the orchestrator's design**, not its framework: read-only tools, no approval step, a stale prompt, no streaming, one vendor.
+- **The Claude Agent SDK and OpenAI Agents SDK remain possible adapters** behind the `Engine` protocol; a hand-rolled loop on the raw APIs is another. Each replaces one file.
 
-Record the reversal as `docs/adr/0001-agent-shell.md` and update the "Technology" paragraph of the orchestrator spec when Phase 7 lands.
+Recorded as `docs/adr/0001-agent-shell.md`. Phase 7 removes the `orchestrator` package and keeps `langgraph`.
 
 ### It implements the deferred "Conversational query mode"
 

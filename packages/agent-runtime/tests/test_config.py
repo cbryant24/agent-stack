@@ -80,3 +80,16 @@ class TestGetConfig:
         reset_config()
         b = get_config()
         assert a is not b
+
+
+class TestChatOpenAIKey:
+    def test_defaults_to_none(self, fake_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CHAT_OPENAI_API_KEY", raising=False)
+        assert RuntimeConfig(_env_file=None).chat_openai_api_key is None  # type: ignore[call-arg]
+
+    def test_read_from_chat_env_var(self, fake_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CHAT_OPENAI_API_KEY", "sk-chat")
+        monkeypatch.setenv("PRODUCTION_AGENTS_OPENAI_API_KEY", "sk-shared")
+        cfg = RuntimeConfig(_env_file=None)  # type: ignore[call-arg]
+        assert cfg.chat_openai_api_key == "sk-chat"
+        assert cfg.openai_api_key == "sk-shared"

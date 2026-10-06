@@ -8,19 +8,20 @@ from pydantic import BaseModel
 from ulid import ULID
 
 from agent_shell.audit.log import AuditLog
+from agent_shell.audit.trace import SessionTrace
 from agent_shell.config import ChatConfig, ShellSettings
 from agent_shell.engine.base import (
     Engine,
     EngineEvent,
     SessionHandle,
     SessionRef,
-    TextDelta,
     ToolCallFinished,
     TurnCost,
     TurnEnd,
 )
 from agent_shell.guard.gate import ConfirmRequest, Confirmer, Decision, Gate, SessionBudgets
 from agent_shell.proposals import Proposal
+from agent_shell.session.recorder import TurnRecorder
 from agent_shell.session.store import SessionStore
 from agent_shell.tools.executor import Executor
 from agent_shell.tools.registry import Registry
@@ -101,6 +102,7 @@ class Session:
         self.registry = Registry()
         self.audit: AuditLog | None = None
         self.executor: Executor | None = None
+        self.trace: SessionTrace | None = None
         self.handle: SessionHandle | None = None
         self._turn: asyncio.Task[None] | None = None
         self._interrupted = False
@@ -121,6 +123,11 @@ class Session:
             dry_run=lambda: self.dry_run,
         )
         self.store.create(self.session_id, self.config.agent_name, self.engine.provider, self.engine.model)
+        self.trace = SessionTrace(self.settings.agent_data_dir, self.config.agent_name, self.session_id)
+        await self._start_engine()
+
+    async def _start_engine(self) -> None:
+        assert self.executor is not None and self.trace is not None
         ref = SessionRef(
             session_id=self.session_id,
             transcript=self.store.messages(self.session_id),
@@ -129,6 +136,29 @@ class Session:
         self.handle = await self.engine.start(
             self.config.system_prompt, [self.executor.bind(t) for t in self.registry], ref
         )
+        if self.engine.provider not in self.trace.providers:
+            self.trace.providers.append(self.engine.provider)
+
+    async def switch_engine(self, engine: Engine) -> None:
+        """Move this session to another engine (provider or model), keeping its history.
+
+        History is the neutral transcript, so nothing is summarised or lost. This is not the end
+        of the session: `on_session_end` does not fire and no proposals are produced.
+        """
+        if self.handle is None or self.audit is None:
+            raise RuntimeError("session not started")
+        await self.interrupt()
+        old = self.engine
+        if self.handle.native_handle:
+            self.store.set_handle(self.session_id, old.provider, self.handle.native_handle)
+        await old.close(self.handle)
+        self.engine = engine
+        self.audit.record(
+            kind="provider_switch", from_provider=old.provider, from_model=old.model,
+            to_provider=engine.provider, to_model=engine.model,
+        )
+        self.store.touch(self.session_id, engine.provider, engine.model)
+        await self._start_engine()
 
     async def close(self) -> list[Proposal]:
         if self.handle is None:
@@ -138,6 +168,9 @@ class Session:
             self.store.set_handle(self.session_id, self.engine.provider, self.handle.native_handle)
         self.store.touch(self.session_id, self.engine.provider, self.engine.model)
         await self.engine.close(self.handle)
+        if self.trace is not None:
+            self.trace.end()
+            self.trace = None
         proposals: list[Proposal] = []
         if self.config.on_session_end:
             proposals = list(self.config.on_session_end(self.store.messages(self.session_id)))
@@ -162,35 +195,70 @@ class Session:
 
     async def _produce(self, text: str, queue: asyncio.Queue[Any]) -> None:
         assert self.handle is not None
+        history = self.store.messages(self.session_id)
         self.store.add_message(self.session_id, "user", text)
-        reply: list[str] = []
+        recorder = TurnRecorder(self.store, self.session_id)
+        if self.trace is not None:
+            self.trace.turns += 1
         try:
             if self.budgets.repl.exhausted:
                 await queue.put(TurnEnd(reason="budget_exhausted", detail="repl budget spent"))
                 return
-            async for ev in self.engine.send(self.handle, text):
-                await queue.put(ev)
-                if isinstance(ev, TextDelta):
-                    reply.append(ev.text)
-                elif isinstance(ev, ToolCallFinished):
-                    self.store.add_message(self.session_id, "tool", f"{ev.name}: {ev.result.text}")
-                elif isinstance(ev, TurnCost):
-                    self.budgets.repl.charge(ev.cost_usd)
-                    if self.budgets.repl.exhausted:
-                        await self.engine.interrupt(self.handle)
-                        await queue.put(TurnEnd(reason="budget_exhausted", detail="repl budget spent"))
+            events = self.engine.send(self.handle, text, history)
+            try:
+                async for ev in events:
+                    if await self._handle_event(ev, queue, recorder):
                         return
+            finally:
+                # close the engine's generator now, so it stops its own work (e.g. a graph that
+                # would otherwise run ahead) before this turn is reported as over
+                aclose = getattr(events, "aclose", None)
+                if aclose is not None:
+                    await aclose()
         except asyncio.CancelledError:
             await self.engine.interrupt(self.handle)
             await queue.put(TurnEnd(reason="interrupted"))
         except Exception as e:  # noqa: BLE001 - surface engine failures as a turn end
             await queue.put(TurnEnd(reason="error", detail=f"{type(e).__name__}: {e}"))
         finally:
-            if reply:
-                self.store.add_message(self.session_id, "assistant", "".join(reply).strip())
+            recorder.finish()
             if self.handle.native_handle:
                 self.store.set_handle(self.session_id, self.engine.provider, self.handle.native_handle)
             await queue.put(_DONE)
+
+    async def _handle_event(
+        self, ev: EngineEvent, queue: asyncio.Queue[Any], recorder: TurnRecorder
+    ) -> bool:
+        """Forward and record one engine event. True means the turn must stop (budget spent)."""
+        assert self.handle is not None
+        await queue.put(ev)
+        recorder.on_event(ev)
+        if isinstance(ev, ToolCallFinished) and self.trace is not None:
+            self.trace.tool_call(ev.name)
+        if isinstance(ev, TurnCost):
+            self._record_cost(ev)
+            self.budgets.repl.charge(ev.cost_usd)
+            if self.budgets.repl.exhausted:
+                await self.engine.interrupt(self.handle)
+                await queue.put(TurnEnd(reason="budget_exhausted", detail="repl budget spent"))
+                return True
+        return False
+
+    def _record_cost(self, ev: TurnCost) -> None:
+        provider = self.engine.provider
+        model = ev.model or self.engine.model
+        if self.audit is not None:
+            self.audit.record(
+                kind="turn_cost", provider=provider, model=model,
+                input_tokens=ev.input_tokens, output_tokens=ev.output_tokens,
+                cache_read_tokens=ev.cache_read_tokens, cache_write_tokens=ev.cache_write_tokens,
+                cost_usd=ev.cost_usd,
+            )
+        if self.trace is not None:
+            self.trace.llm_call(
+                model, ev.input_tokens, ev.output_tokens, ev.cost_usd, provider=provider,
+                cache_read_tokens=ev.cache_read_tokens, cache_write_tokens=ev.cache_write_tokens,
+            )
 
     def confirm(self, decision: Decision) -> None:
         if self._broker is None:
@@ -212,5 +280,5 @@ class Session:
             except asyncio.CancelledError:
                 pass
 
-    def transcript(self) -> list[dict[str, str]]:
+    def transcript(self) -> list[dict[str, Any]]:
         return self.store.messages(self.session_id)

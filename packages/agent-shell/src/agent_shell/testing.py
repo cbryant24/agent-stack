@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from agent_shell.guard.gate import Decision
+from agent_shell.session.api import ConfirmRequested, Session, SessionEvent
 from agent_shell.tools.registry import EffectClass, ToolResult, ToolSpec
 
 
@@ -32,3 +34,14 @@ def make_tool(
         name=name, description=name, input_model=Args, effect=effect, handler=handler,
         preview=lambda a: f"preview {a.text}", estimate_cost=lambda a: est,
     )
+
+
+async def drain(session: Session, text: str, answer: Decision | None = None) -> list[SessionEvent]:
+    """A front end with no terminal: consume events, answer confirmations."""
+    out: list[SessionEvent] = []
+    async for ev in session.send(text):
+        out.append(ev)
+        if isinstance(ev, ConfirmRequested):
+            assert session.pending_confirmation == ev.request
+            session.confirm(answer or Decision(kind="accept"))
+    return out

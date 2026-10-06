@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -14,7 +16,8 @@ CREATE TABLE IF NOT EXISTS agent_shell_sessions (
 );
 CREATE TABLE IF NOT EXISTS agent_shell_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
-    role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL
+    role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
+    meta TEXT
 );
 CREATE INDEX IF NOT EXISTS agent_shell_messages_session ON agent_shell_messages(session_id);
 CREATE TABLE IF NOT EXISTS agent_shell_handles (
@@ -48,7 +51,14 @@ class SessionStore:
         self._db = sqlite3.connect(db_path)
         self._db.row_factory = sqlite3.Row
         self._db.executescript(_SCHEMA)
+        self._migrate()
         self._db.commit()
+
+    def _migrate(self) -> None:
+        """Databases made by the first shell version lack the `meta` column."""
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(agent_shell_messages)")}
+        if "meta" not in cols:
+            self._db.execute("ALTER TABLE agent_shell_messages ADD COLUMN meta TEXT")
 
     def close(self) -> None:
         self._db.close()
@@ -72,19 +82,36 @@ class SessionStore:
         r = self._db.execute("SELECT 1 FROM agent_shell_sessions WHERE id=?", (session_id,))
         return r.fetchone() is not None
 
-    def add_message(self, session_id: str, role: str, content: str) -> None:
+    def add_message(
+        self, session_id: str, role: str, content: str, meta: dict[str, Any] | None = None
+    ) -> int:
+        """Append a message. `meta` carries tool_calls (assistant) or tool_call_id/name/is_error (tool)."""
+        cur = self._db.execute(
+            "INSERT INTO agent_shell_messages (session_id, role, content, created_at, meta) "
+            "VALUES (?,?,?,?,?)",
+            (session_id, role, content, _now(), json.dumps(meta) if meta else None),
+        )
+        self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    def update_meta(self, message_id: int, meta: dict[str, Any]) -> None:
         self._db.execute(
-            "INSERT INTO agent_shell_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
-            (session_id, role, content, _now()),
+            "UPDATE agent_shell_messages SET meta=? WHERE id=?", (json.dumps(meta), message_id)
         )
         self._db.commit()
 
-    def messages(self, session_id: str) -> list[dict[str, str]]:
+    def messages(self, session_id: str) -> list[dict[str, Any]]:
         rows = self._db.execute(
-            "SELECT role, content FROM agent_shell_messages WHERE session_id=? ORDER BY id",
+            "SELECT role, content, meta FROM agent_shell_messages WHERE session_id=? ORDER BY id",
             (session_id,),
         ).fetchall()
-        return [{"role": r["role"], "content": r["content"]} for r in rows]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            msg: dict[str, Any] = {"role": r["role"], "content": r["content"]}
+            if r["meta"]:
+                msg.update(json.loads(r["meta"]))
+            out.append(msg)
+        return out
 
     def set_handle(self, session_id: str, provider: str, handle: str) -> None:
         self._db.execute(

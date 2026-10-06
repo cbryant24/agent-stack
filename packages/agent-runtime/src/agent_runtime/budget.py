@@ -11,14 +11,65 @@ from agent_runtime.models import BudgetConsumption, BudgetEnvelope, TraceEvent
 from agent_runtime.reporting.notifications import notify_budget_threshold
 from agent_runtime.tracing.decorators import record_llm_call
 
-# Pricing table: USD per 1M tokens, sourced 2026-05-26 from Anthropic docs
+# Pricing table: USD per 1M tokens.
+# The first five Claude rows were sourced 2026-05-26 and are NOT re-verified: on 2026-10-06 the
+# official page listed opus-4-7 / opus-4-6 at $5/$25 and haiku-4-5 at $1/$5. Left as-is because
+# other agents' cost reports depend on them (see estimate_cost for the strict lookup).
+# Rows below the marker were sourced 2026-10-06 from the official Anthropic and OpenAI pricing
+# pages. Optional "cache_read" / "cache_write" override the defaults used by estimate_cost
+# (0.1x and 1.25x of input, Anthropic's standard multipliers).
 _PRICING: dict[str, dict[str, float]] = {
     "claude-opus-4-8":   {"input":  5.00, "output": 25.00},
     "claude-opus-4-7":   {"input": 15.00, "output": 75.00},
     "claude-opus-4-6":   {"input": 15.00, "output": 75.00},
     "claude-sonnet-4-6": {"input":  3.00, "output": 15.00},
     "claude-haiku-4-5":  {"input":  0.80, "output":  4.00},
+    # --- sourced 2026-10-06 ---
+    "claude-fable-5-1":  {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_read": 0.25},
+    "claude-opus-5-5":   {"input":  4.00, "output": 20.00, "cache_write":  5.00, "cache_read": 0.20},
+    "claude-sonnet-5-5": {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_read": 0.20},
+    # OpenAI, standard tier, models with no long-context surcharge only. Cache writes cost the
+    # same as input. Models priced differently above 272K tokens (gpt-6*, gpt-5.5, gpt-5.4)
+    # are deliberately absent until the long-context rate is modelled.
+    "gpt-5.6-sol":       {"input": 4.00, "output": 20.00, "cache_read": 0.40,  "cache_write": 4.00},
+    "gpt-5.6-terra":     {"input": 2.00, "output": 12.00, "cache_read": 0.20,  "cache_write": 2.00},
+    "gpt-5.6-luna":      {"input": 0.20, "output":  1.20, "cache_read": 0.02,  "cache_write": 0.20},
+    "gpt-5.4-mini":      {"input": 0.75, "output":  4.50, "cache_read": 0.075, "cache_write": 0.75},
+    "gpt-5.4-nano":      {"input": 0.20, "output":  1.25, "cache_read": 0.02,  "cache_write": 0.20},
+    "gpt-5.2":           {"input": 1.75, "output": 14.00, "cache_read": 0.175, "cache_write": 1.75},
+    "gpt-5.1":           {"input": 1.25, "output": 10.00, "cache_read": 0.125, "cache_write": 1.25},
+    "gpt-5":             {"input": 1.25, "output": 10.00, "cache_read": 0.125, "cache_write": 1.25},
+    "gpt-5-mini":        {"input": 0.25, "output":  2.00, "cache_read": 0.025, "cache_write": 0.25},
+    "gpt-5-nano":        {"input": 0.05, "output":  0.40, "cache_read": 0.005, "cache_write": 0.05},
 }
+
+_DEFAULT_CACHE_READ_MULT = 0.1
+_DEFAULT_CACHE_WRITE_MULT = 1.25
+
+
+def estimate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float | None:
+    """Strict cost lookup: USD, or None when `model` has no price row.
+
+    `input_tokens` is the total prompt size including cached tokens (the convention of
+    LangChain's usage_metadata). Unlike `BudgetTracker.add_llm_cost`, an unknown model is
+    reported rather than priced at $0, so a caller can refuse to run it.
+    """
+    prices = _PRICING.get(model)
+    if prices is None:
+        return None
+    inp, out = prices["input"], prices["output"]
+    cache_read = prices.get("cache_read", inp * _DEFAULT_CACHE_READ_MULT)
+    cache_write = prices.get("cache_write", inp * _DEFAULT_CACHE_WRITE_MULT)
+    plain = max(input_tokens - cache_read_tokens - cache_write_tokens, 0)
+    total = plain * inp + cache_read_tokens * cache_read + cache_write_tokens * cache_write
+    return (total + output_tokens * out) / 1_000_000
+
 
 _current_tracker: ContextVar[BudgetTracker | None] = ContextVar(
     "current_tracker", default=None

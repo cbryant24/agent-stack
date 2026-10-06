@@ -27,7 +27,7 @@ from agent_shell.engine.base import (
 )
 from agent_shell.guard.gate import ConfirmRequest, Decision, DecisionKind
 from agent_shell.proposals import ProposalReport, walk_proposals
-from agent_shell.repl.commands import COMMANDS, ReplContext, handle_slash
+from agent_shell.repl.commands import COMMANDS, EngineFactory, ReplContext, handle_slash
 from agent_shell.session.api import ConfirmRequested, Session
 
 _KEYS: dict[str, DecisionKind] = {"y": "accept", "n": "reject", "e": "edit", "d": "defer"}
@@ -116,11 +116,12 @@ class ShellApp:
         console: Console | None = None,
         prompt: PromptSession[str] | None = None,
         engines: Mapping[str, Engine] | None = None,
+        engine_factory: EngineFactory | None = None,
     ) -> None:
         self.session = session
         self.console = console or Console()
         self.prompt = prompt or self._make_prompt()
-        self.ctx = ReplContext(session, engines)
+        self.ctx = ReplContext(session, engines, engine_factory)
         self.prompter = PromptConfirmer(self.console, self.prompt)
 
     def _make_prompt(self) -> PromptSession[str]:

@@ -28,6 +28,8 @@ class TurnCost(BaseModel):
     cost_usd: float
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     model: str = ""
 
 
@@ -43,7 +45,7 @@ class SessionRef(BaseModel):
     """What an engine gets to resume: the neutral transcript plus its own native handle."""
 
     session_id: str
-    transcript: list[dict[str, str]] = Field(default_factory=list)
+    transcript: list[dict[str, Any]] = Field(default_factory=list)
     native_handle: str | None = None
 
 
@@ -60,7 +62,14 @@ class Engine(Protocol):
         self, system_prompt: str, tools: list[ToolSpec], session: SessionRef | None
     ) -> SessionHandle: ...
 
-    def send(self, handle: SessionHandle, user_text: str) -> AsyncIterator[EngineEvent]: ...
+    def send(
+        self, handle: SessionHandle, user_text: str, history: list[dict[str, Any]]
+    ) -> AsyncIterator[EngineEvent]:
+        """Run one turn. `history` is the neutral transcript before `user_text`.
+
+        Engines that keep native history may ignore it.
+        """
+        ...
 
     async def interrupt(self, handle: SessionHandle) -> None: ...
 

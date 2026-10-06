@@ -81,6 +81,14 @@ dependencies = [
     { name = "rich" },
 ]
 
+[package.optional-dependencies]
+langgraph = [
+    { name = "langchain-anthropic" },
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+    { name = "langgraph" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "import-linter" },
@@ -90,10 +98,15 @@ dev = [
 requires-dist = [
     { name = "agent-runtime", editable = "packages/agent-runtime" },
     { name = "click", specifier = ">=8.0" },
+    { name = "langchain-anthropic", marker = "extra == 'langgraph'", specifier = "==1.4.3" },
+    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = "==1.4.0" },
+    { name = "langchain-openai", marker = "extra == 'langgraph'", specifier = "==1.2.2" },
+    { name = "langgraph", marker = "extra == 'langgraph'", specifier = "==1.2.1" },
     { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "rich", specifier = ">=13.0" },
 ]
+provides-extras = ["langgraph"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "import-linter", specifier = ">=2.0" }]
@@ -105,6 +118,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "agent-shell", extra = ["langgraph"] },
     { name = "ipython" },
     { name = "mypy" },
     { name = "pytest" },
@@ -116,6 +130,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "agent-shell", extras = ["langgraph"], editable = "packages/agent-shell" },
     { name = "ipython", specifier = ">=8.0" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "pytest", specifier = ">=8.0" },
@@ -1346,6 +1361,20 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-openai"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "openai" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f7/1b/c506c7f41156d3a6b4582b4c487f480001b8741deecc6e2d4931fdf4cf2c/langchain_openai-1.2.2.tar.gz", hash = "sha256:8698ffcee9a086e91ab6d207f0026181a03effcbf86bf9aee1808ee35af69dcc", size = 1147539, upload-time = "2026-05-21T22:08:31.123Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/8e/7406c99afacafc8c2ce0fa4152f9f8b9598c93ceb291959821abd053b982/langchain_openai-1.2.2-py3-none-any.whl", hash = "sha256:7da39a3c70cbafa93853456199e39a264dc70651be79b12ac49b4f6a448bce2d", size = 99631, upload-time = "2026-05-21T22:08:29.527Z" },
+]
+
+[[package]]
 name = "langchain-protocol"
 version = "0.0.15"
 source = { registry = "https://pypi.org/simple" }
@@ -2106,6 +2135,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/0f/c338cb5500a522c7e671a3bb1276f4562404fbecce8a0e274565aa968484/onnxruntime-1.29.0-cp314-cp314-win_arm64.whl", hash = "sha256:e417ef8628dcce310d2d53023e750ea298ec14d4341ae6dc3a572bfd9bc7fa97", size = 14124294, upload-time = "2026-08-17T22:54:31.015Z" },
     { url = "https://files.pythonhosted.org/packages/b8/e7/61064289a9a1301b25c1f0f574fe98aba31c2d388db3c1dbec664f78621f/onnxruntime-1.29.0-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:11264bb58f7b7cf6af835ab10d36838d73680580820fd6f51d90124a1ca8f449", size = 20826174, upload-time = "2026-08-17T22:54:34.283Z" },
     { url = "https://files.pythonhosted.org/packages/60/21/d0c04b561b46e9bff89b5f500fb7415b8ca0669f7902204f76ab06bb0c7e/onnxruntime-1.29.0-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:1ea91cef3b971506e51ae9c37c16d027774ec64994a524ec1bdfb027d68a9832", size = 23138547, upload-time = "2026-08-17T22:54:37.491Z" },
+]
+
+[[package]]
+name = "openai"
+version = "2.54.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/9a/8c75e8c8a5b407a0586faeb2afac91674ff955c191ecc1d6d3b6669f6788/openai-2.54.0.tar.gz", hash = "sha256:e3e6f8bc1ba30ddf381ace1a14340eed381cb984a1a59bd0f34b5be3b5d49cfa", size = 1100285, upload-time = "2026-08-11T18:46:59.035Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/a8/bb76c7356de8ad57f59d5ff993d434df0607f07f08bcc9c9a5c275e399c0/openai-2.54.0-py3-none-any.whl", hash = "sha256:89089789197ccdb87f173a03145ed1598d00795220c93e96cf712b1cbf5e5f2b", size = 1660351, upload-time = "2026-08-11T18:46:56.684Z" },
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # Phase 7 — Retire the orchestrator
 
-**Goal:** remove the LangGraph orchestrator and its dependencies without losing the parts that work.
+**Goal:** remove the orchestrator package and its now-unused dependencies without losing the parts that work. LangGraph itself stays: `agent-shell`'s engine uses it (ADR 0001).
 
 **Depends on:** the replacement covering what you actually use. Steps 1-2 can happen right after Phase 0; removal waits for Phase 6.
 
@@ -30,9 +30,9 @@
 
 1. Move the kept components and their tests.
 2. Remove `packages/orchestrator` from the workspace members.
-3. Remove `langgraph` and `langgraph-checkpoint-sqlite` if the Phase 0 usage map shows no other member imports them. Keep `langchain-anthropic` and `langchain-core`: the design docs state every agent's chains run on them, and `yt-intelligence-pipeline` also needs LangSmith.
+3. Remove `langgraph-checkpoint-sqlite` if no other member imports it. **Keep `langgraph`**: the `agent-shell[langgraph]` extra depends on it. Keep `langchain-anthropic`, `langchain-openai` and `langchain-core` too (the shell engine uses them; `yt-intelligence-pipeline` also needs LangSmith). Move the extra's `langgraph` pin out of the orchestrator's `pyproject.toml` only after the orchestrator is gone, and confirm `uv lock` moves no pin.
 4. Remove `ORCHESTRATOR_ANTHROPIC_API_KEY` from config and `.env.example` once nothing reads it, or rename it for the REPL apps.
-5. Update the root README, `CLAUDE.md`, `AGENTS.md`, `docs/architecture.md` and `docs/ai-director-agent-system.md`: the orchestrator sections, the "Technology — LangGraph (chosen over the Claude Agent SDK)" paragraph, the tech-stack and build-order tables, and the "Deferred but open" LangGraph entry. Fix the "8 of 9 / 8 of 10" and "42 / 59 tests" drift while there.
+5. Update the root README, `CLAUDE.md`, `AGENTS.md`, `docs/architecture.md` and `docs/ai-director-agent-system.md`: the orchestrator sections, the "Technology — LangGraph (chosen over the Claude Agent SDK)" paragraph (LangGraph is kept; point to ADR 0001), the tech-stack and build-order tables, and the "Deferred but open" LangGraph entry. Fix the "8 of 9 / 8 of 10" and "42 / 59 tests" drift while there.
 6. Mark "Conversational query mode" in `agent-runtime-v2-refinements.md` as landed, pointing to `agent-shell`, as that item asks.
 7. Move `docs/v2-refinements/orchestrator-v2-refinements.md` items: the re-embed remediation and other agents' handlers go to the diagnostics pack backlog; the per-session ceiling item is closed (the shell has session budgets).
 
@@ -47,7 +47,7 @@
 ## Risks
 
 - **Hidden consumers.** Grep for `from orchestrator` and `orchestrator.` across the workspace before removal. music-curation's remediation handler is registered from `orchestrator/tools.py`; that registration must move first.
-- **Removing shared LangChain dependencies.** Only LangGraph is orchestrator-only. Verify with the usage map before removing anything.
+- **Removing shared dependencies.** Only `langgraph-checkpoint-sqlite` is orchestrator-only now. `langgraph` and the LangChain packages are used by the shell engine. Verify with the usage map before removing anything.
 - **MCP plans.** The orchestrator spec deferred "MCP (wrapping agents and exposing the orchestrator)". `agent_shell.mcp_export` replaces that item; note it in the docs update.
 
 ## Claude Code prompt

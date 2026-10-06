@@ -50,6 +50,7 @@ class FakeEngine:
         self.delay = delay
         self.turn = 0
         self.started_with: SessionRef | None = None
+        self.histories: list[list[dict[str, Any]]] = []
         self.system_prompt = ""
         self._tools: dict[str, ToolSpec] = {}
         self._interrupted = asyncio.Event()
@@ -65,7 +66,10 @@ class FakeEngine:
         sid = session.session_id if session else "fake"
         return SessionHandle(session_id=sid, native_handle=f"fake-{self.turn}")
 
-    async def send(self, handle: SessionHandle, user_text: str) -> AsyncIterator[EngineEvent]:
+    async def send(
+        self, handle: SessionHandle, user_text: str, history: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[EngineEvent]:
+        self.histories.append(list(history or []))
         self._interrupted.clear()
         steps = self.script[self.turn] if self.turn < len(self.script) else [Say(text=f"echo: {user_text}")]
         self.turn += 1
