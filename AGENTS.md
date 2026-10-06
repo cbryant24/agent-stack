@@ -62,6 +62,7 @@ Runtime data lives **outside the repo**: `~/agent-data/` (sources, audio, stills
 - Living design docs: [`architecture.md`](docs/architecture.md), [`ai-director-agent-system.md`](docs/ai-director-agent-system.md), [`decisions-mode-spec.md`](docs/decisions-mode-spec.md)
 - [`docs/naming-conventions.md`](docs/naming-conventions.md) — canonical file & folder naming/placement conventions
 - [`docs/visual-generation-known-issues.md`](docs/visual-generation-known-issues.md) — visual-generation limitations
+- Visual Agent evaluation project: start with [`ChatGPT project setup`](packages/visual-generation/docs/chatgpt/README.md), then [`project-instructions.md`](packages/visual-generation/docs/project-instructions.md), [`project-source-manifest.md`](packages/visual-generation/docs/project-source-manifest.md), and [`evaluation-charter.md`](packages/visual-generation/docs/evaluation-charter.md). For visual-generation, Coraline, or RunPod video evaluation work, read these before deep work.
 - [`docs/v2-refinements/`](docs/v2-refinements/) — per-agent deferred backlogs · [`docs/handoffs/`](docs/handoffs/) — point-in-time build/research notes (may be stale) · [`docs/templates/`](docs/templates/) — project-plan scaffolds & worked examples
 - Per-package `README.md`s (table in §3)
 

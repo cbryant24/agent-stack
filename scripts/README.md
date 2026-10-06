@@ -39,7 +39,7 @@ away costs nothing but the time to recreate it.
 
 | Verb | What it does |
 |------|--------------|
-| `up`     | Ensure a running pod exists. If a pod matching the name is already RUNNING **with a GPU**, reuse it; otherwise create a fresh pod and verify it came up with a GPU attached (0 GPUs = capacity failure — delete + retry, see `CREATE_RETRIES` / `CREATE_RETRY_DELAY`), then poll for a healthy runtime before declaring success — see [Health check](#health-check-crash-loop-guard) below. |
+| `up`     | Ensure a running pod exists. If a pod matching the name is already RUNNING **with a GPU**, reuse it; otherwise create a fresh pod and verify it came up with a GPU attached (0 GPUs = capacity failure — delete + retry, see `CREATE_RETRIES` / `CREATE_RETRY_DELAY`), then poll for its SSH endpoint to accept a connection before declaring success — see [Health check](#health-check-crash-loop-guard) below. |
 | `down`   | Delete **all** pods matching the name (running *or* exited), so stale pods don't pile up. Never touches the network volume. |
 | `status` | List matching pods with `id`, `name`, `desiredStatus`, `gpuCount`, `costPerHr`. Uses `pod list --all`, so stopped/exited pods are visible too. |
 | `watch`  | Idle-cost watchdog for an already-running pod — see [Watchdog](#watchdog--idle-timeout) below. |
@@ -86,21 +86,30 @@ the same entrypoint.
 ### Health check (crash-loop guard)
 
 After a fresh create, `up` polls the pod for up to `HEALTH_CHECK_TIMEOUT` seconds (every
-`HEALTH_CHECK_INTERVAL`s) watching its `uptimeSeconds` field (confirmed present in
-`pod get -o json`'s output — an earlier version of this check polled `.runtime` instead,
-which turned out not to exist in this account's responses at all). This exists because
+`HEALTH_CHECK_INTERVAL`s) waiting for its SSH endpoint (`.ssh.ip`/`.ssh.port` from
+`pod get -o json`) to actually **accept a TCP connection** (`nc -z`). This exists because
 `desiredStatus == RUNNING` and `gpuCount >= 1` — the checks `create_pod()` already does —
 are **not enough**: a pod whose container is crash-looping (e.g. the
 runpod/comfyui-template-on-Global-Volume incident, see
 [runpod-setup-context.md](../packages/visual-generation/runpod-setup-context.md)) can show
-both for its entire lifetime while running zero processes. A drop in `uptimeSeconds` between
-polls means the container restarted — `up` deletes the pod and exits nonzero immediately. If
-`uptimeSeconds` never leaves `0` for the full timeout, same outcome (zero uptime progress).
-This deliberately does **not** require anything to be listening on the pod's exposed ports
-(e.g. ComfyUI on 8188) — ComfyUI is installed/started separately by `comfyui-bootstrap`
-*after* `up` succeeds, so gating on a port response here would always time out. It can't
-catch a restart that happens after this check already passed — see the script's own comment
-on `wait_for_healthy_pod()`.
+both for its entire lifetime while running zero processes.
+
+**This replaced an `uptimeSeconds`-based check that turned out not to work at all** — that
+field exists in `pod get`'s output, but across every pod created in this account since, it
+never once left `0`, including for pods independently confirmed healthy via a real SSH login
+(confirmed 2026-09-22). It could only ever time out, never pass — a pure false negative that
+deleted several good pods before this was caught. The SSH-connect check is a real, observed
+state transition instead (RunPod's `.ssh` field visibly moves from a "not ready" placeholder
+to real values within seconds for a healthy pod), and reasonably should catch the original
+incident too — that entrypoint's `rsync -a` crash happened *before* sshd started, so nothing
+would answer the TCP connect either. That reasoning is sound but wasn't tested against an
+actual repeat of the incident, since none recurred to check it against.
+
+This deliberately does **not** require anything to be listening on the pod's other exposed
+ports (e.g. ComfyUI on 8188) — ComfyUI is installed/started separately by `comfyui-bootstrap`
+*after* `up` succeeds, so gating on that here would always time out. It can't catch a restart
+that happens after this check already passed — see the script's own comment on
+`wait_for_healthy_pod()`.
 
 ### Watchdog / idle timeout
 
@@ -132,6 +141,8 @@ The two knobs:
   verify a pod after GraphQL creates it). Verify with `runpodctl doctor`.
 - **jq**
 - **curl** — used for the GraphQL create call.
+- **nc** — used for the post-create health check's TCP connect test. Ships with macOS by
+  default; nothing to install if you're on a Mac.
 - **`RUNPOD_API_KEY`** set in the environment — separate from `runpodctl`'s own auth, see
   Configuration above.
 

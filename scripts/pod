@@ -39,7 +39,7 @@
 #   up      Ensure a running pod exists. If one matching POD_NAME is already RUNNING with
 #           a GPU, reuse it; otherwise create a fresh pod, verify it came up RUNNING with
 #           gpuCount >= 1 (a 0-GPU result is capacity failure -> delete + retry), THEN poll
-#           for real uptime progress (RUNNING/gpuCount alone is not enough — a crash-looping
+#           for its SSH endpoint to accept a real connection (RUNNING/gpuCount alone is not enough — a crash-looping
 #           container can show both the whole time; see HEALTH_CHECK_* below and the
 #           runpod-setup-context.md incident it's guarding against).
 #   down    Delete ALL pods matching the target (running OR exited) so stale pods don't
@@ -98,13 +98,13 @@
 #                      it likely needs to be added to `.env` separately.
 #   CREATE_RETRIES     Capacity-error retries on create.         Default: 3
 #   CREATE_RETRY_DELAY Seconds between create retries.           Default: 15
-#   HEALTH_CHECK_TIMEOUT   Seconds `up` polls a freshly-created pod for real uptime progress
+#   HEALTH_CHECK_TIMEOUT   Seconds `up` polls a freshly-created pod for its SSH endpoint to accept a connection
 #                      before giving up, deleting it, and exiting nonzero.  Default: 180 (3m)
 #   HEALTH_CHECK_INTERVAL  Seconds between health-check polls.   Default: 15
 #   CHECKIN_INTERVAL   Seconds between `watch` confirmations.    Default: 1800 (30m)
 #   GRACE              Seconds to respond before `watch` deletes. Default: 180 (3m)
 #
-# External dependencies: runpodctl, jq, curl.
+# External dependencies: runpodctl, jq, curl, nc (ships with macOS by default).
 
 set -euo pipefail
 
@@ -139,8 +139,8 @@ usage() {
 Usage: pod <up|down|status|watch>
 
   up      Ensure a running pod exists: reuse a RUNNING pod with a GPU, else create a
-          fresh one, verify it came up with gpuCount >= 1, then poll for real uptime
-          progress (deletes and fails if the container is stuck crash-looping).
+          fresh one, verify it came up with gpuCount >= 1, then poll for its SSH endpoint to
+          accept a connection (deletes and fails if the container is stuck crash-looping).
   down    Delete ALL pods matching the target (running or exited). Never touches the
           network volume.
   status  Print id, name, desiredStatus, gpuCount, costPerHr for each matching pod
@@ -175,6 +175,11 @@ preflight() {
   fi
   if ! command -v curl >/dev/null 2>&1; then
     echo "error: curl not found on PATH (needed for the GraphQL pod-create call)." >&2
+    exit 1
+  fi
+  if ! command -v nc >/dev/null 2>&1; then
+    echo "error: nc not found on PATH (needed for the post-create health check)." >&2
+    echo "    macOS ships this by default; nothing to install if you're on a Mac." >&2
     exit 1
   fi
 }
@@ -408,9 +413,9 @@ create_pod() {
   exit 1
 }
 
-# Poll a freshly-created pod's uptimeSeconds until it shows real progress (or
-# HEALTH_CHECK_TIMEOUT elapses), deleting it and failing loudly on timeout/restart rather
-# than leaving a stuck pod billing.
+# Poll a freshly-created pod until its SSH endpoint actually accepts a TCP connection (or
+# HEALTH_CHECK_TIMEOUT elapses), deleting it and failing loudly on timeout rather than
+# leaving a stuck pod billing.
 #
 # WHY THIS EXISTS: `create_pod()`'s own check (desiredStatus == RUNNING && gpuCount >= 1) is
 # NOT sufficient — the 2026-09-19 crash-loop incident showed a pod can report RUNNING with a
@@ -418,25 +423,39 @@ create_pod() {
 # and never runs a single process (see the TEMPLATE_ID comment above and
 # runpod-setup-context.md). Pod-level desiredStatus doesn't reflect container-level health.
 #
-# WHAT SIGNAL THIS USES, AND WHY: `pod get -o json` exposes a top-level `uptimeSeconds`
-# field, confirmed via a live response on 2026-09-20 (not previously verified — an earlier
-# version of this function used `.runtime` instead, which turned out not to exist at all in
-# this account's `pod get` responses; `uptimeSeconds` does, and is a direct restart/uptime
-# signal rather than a guess). This function polls it every HEALTH_CHECK_INTERVAL: a drop
-# from one poll to the next means the container restarted (crash-loop) — fail immediately,
-# no need to wait out the rest of the timeout. Any nonzero reading that hasn't just dropped
-# means the container has stayed up for at least one full boot — declare healthy. If it
-# never leaves 0 for the whole timeout, that's zero uptime progress — same failure class,
-# different evidence. NOTE: this deliberately does NOT require anything to be listening on
-# the exposed ports (e.g. ComfyUI on 8188) — ComfyUI is installed/started separately by
-# scripts/comfyui-bootstrap after `up` succeeds, so gating on a port response here would
-# always time out. Only a fresh create is checked (see cmd_up) — a pod `up` reuses is
-# assumed already-verified from when it was created. This can't catch a restart that happens
-# AFTER this check passes; that's what scripts/pod watch's idle/reachability loop is for.
+# WHAT SIGNAL THIS USES, AND WHY THE PREVIOUS ONE DIDN'T WORK: an earlier version of this
+# function polled `pod get`'s `uptimeSeconds` field. That field exists (confirmed via a live
+# response on 2026-09-20), but existing was never the same as working — across every pod
+# created in this account since, `uptimeSeconds` has stayed at exactly `0` even for pods
+# independently confirmed healthy via a real SSH login (confirmed 2026-09-22). It never
+# increments, so it can never signal "healthy" and can only ever time out — a pure false
+# negative, not a slow-but-working signal. It's been dropped entirely rather than patched.
+#
+# The replacement, confirmed against a real pod on 2026-09-22: `pod get`'s `.ssh.ip`/
+# `.ssh.port` go from an `{"error": "pod not ready"}` placeholder to real values within
+# seconds of creation — but that alone only proves RunPod's orchestration layer assigned a
+# port mapping, not that anything inside the container is listening on it. So this function
+# additionally attempts an actual TCP connect (`nc -z`) to that address once it's populated.
+# This should catch the original incident class specifically because that entrypoint ran its
+# doomed `rsync -a` step BEFORE starting sshd — under `set -e`, a crash there means sshd
+# never starts, so even if RunPod still assigns the port mapping, nothing answers on it and
+# the TCP connect fails/times out. NOTE: this still deliberately does NOT check the exposed
+# ComfyUI port (8188) — ComfyUI is installed/started separately by scripts/comfyui-bootstrap
+# after `up` succeeds, so gating on that here would always time out. Only a fresh create is
+# checked (see cmd_up) — a pod `up` reuses is assumed already-verified from when it was
+# created. This can't catch a restart that happens AFTER this check passes; that's what
+# scripts/pod watch's idle/reachability loop is for.
+#
+# LIMITATION, STATED RATHER THAN OVERCLAIMED: this was validated against a genuinely healthy
+# pod (SSH connect succeeded quickly) but NOT against an actual repeat of the original
+# crash-loop this session, since none recurred to test against. The reasoning above is sound
+# but unproven against a live crash-loop; revisit if a false positive/negative shows up.
 wait_for_healthy_pod() {
-  local id="$1" waited=0 json uptime prev_uptime=-1 cost
-  log "waiting up to ${HEALTH_CHECK_TIMEOUT}s for pod $id's uptimeSeconds to show real progress"
-  log "  (catches a crash-looping container that create_pod()'s RUNNING/gpuCount check can't see)..."
+  local id="$1" waited=0 json ssh_ip ssh_port cost
+
+  log "waiting up to ${HEALTH_CHECK_TIMEOUT}s for pod $id's SSH endpoint to accept a real"
+  log "  TCP connection (catches a crash-looping container that create_pod()'s"
+  log "  RUNNING/gpuCount check, and the field this replaced, can't see)..."
 
   while (( waited < HEALTH_CHECK_TIMEOUT )); do
     json="$(pod_get "$id" 2>/dev/null || true)"
@@ -445,35 +464,31 @@ wait_for_healthy_pod() {
       return 1
     fi
 
-    uptime="$(jq -r '.uptimeSeconds // 0' <<<"$json" 2>/dev/null || echo 0)"
+    ssh_ip="$(jq -r '.ssh.ip // empty' <<<"$json" 2>/dev/null || true)"
+    ssh_port="$(jq -r '.ssh.port // empty' <<<"$json" 2>/dev/null || true)"
 
-    if (( prev_uptime >= 0 && uptime < prev_uptime )); then
-      echo "" >&2
-      echo "!!! WARNING: pod $id's uptimeSeconds dropped (${prev_uptime}s -> ${uptime}s) —" >&2
-      echo "    the container restarted. This is the signature of a crash-looping container" >&2
-      echo "    (e.g. the runpod/comfyui-template-on-Global-Volume incident — see TEMPLATE_ID" >&2
-      echo "    comment above). Deleting the pod rather than leaving it billing stuck." >&2
-      delete_pod "$id" || true
-      return 1
+    if [[ -n "$ssh_ip" && -n "$ssh_port" ]]; then
+      if nc -z -w 5 "$ssh_ip" "$ssh_port" 2>/dev/null; then
+        log "pod $id's SSH endpoint ($ssh_ip:$ssh_port) accepted a connection after" \
+            "${waited}s — looks healthy."
+        return 0
+      fi
+      log "pod $id has an SSH endpoint assigned ($ssh_ip:$ssh_port) but it isn't accepting" \
+          "connections yet..."
     fi
 
-    if (( uptime > 0 )); then
-      log "pod $id uptimeSeconds=$uptime after ${waited}s — looks healthy."
-      return 0
-    fi
-
-    prev_uptime=$uptime
     sleep "$HEALTH_CHECK_INTERVAL"
     (( waited += HEALTH_CHECK_INTERVAL ))
   done
 
   cost="$(jq -r '.costPerHr // "?"' <<<"$json" 2>/dev/null || echo "?")"
   echo "" >&2
-  echo "!!! WARNING: pod $id's uptimeSeconds stayed at 0 for the full ${HEALTH_CHECK_TIMEOUT}s —" >&2
-  echo "    zero uptime progress. A healthy boot normally shows nonzero uptime within 1-3 min;" >&2
-  echo "    this is the signature of a crash-looping container (e.g. the" >&2
-  echo "    runpod/comfyui-template-on-Global-Volume incident — see TEMPLATE_ID comment above)." >&2
-  echo "    Deleting the pod rather than leaving it billing at \$${cost}/hr stuck." >&2
+  echo "!!! WARNING: pod $id's SSH endpoint never accepted a connection within" \
+       "${HEALTH_CHECK_TIMEOUT}s." >&2
+  echo "    A healthy boot normally accepts one within 1-3 min; this is the signature of a" >&2
+  echo "    crash-looping container (e.g. the runpod/comfyui-template-on-Global-Volume" >&2
+  echo "    incident — see TEMPLATE_ID comment above). Deleting the pod rather than leaving" >&2
+  echo "    it billing at \$${cost}/hr stuck." >&2
   delete_pod "$id" || true
   return 1
 }

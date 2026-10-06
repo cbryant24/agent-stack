@@ -11,12 +11,14 @@ the dual Claude/GPU budgets, the three-memory-type collection, and the tutor rol
 (`explain` / `research`). Stills run on Z-Image-Turbo and Flux/SDXL; img2img + inpaint
 (edit-mode refinement) is wired.
 
-**Video (WAN 2.2) — setup done, agent integration is Phase 2 (not yet built).** WAN
-2.2 14B text-to-video and image-to-video have been stood up and verified **manually in
-ComfyUI** on the pod (models installed, graphs captured, recipes recorded). Driving WAN
-through the agent CLI — the `output` field, keyframe extraction, the cost/sanity-check
-additions — is the Phase 2 build. See "Video generation (WAN 2.2)" below and
-`docs/handoffs/visual-generation-video-phase1-handoff.md`.
+**Video (WAN 2.2) — one-off generation via `quick --video` is built; full-pipeline
+integration (`draft`/`generate`/canon/memory) is not.** WAN 2.2 14B text-to-video and
+image-to-video are stood up, verified working, and reachable through
+[`quick`](#quick-prompt---endpoint-url---video---image-seedpng-) (recipe-locked to the
+proven 4-step lightx2v settings). What's still Phase 2 (not built): driving WAN through
+`draft`/`generate` with the `output` field, keyframe extraction into
+`visual_generation_memory`, and the kind-aware cost/sanity-check additions — see "Video
+generation (WAN 2.2)" below and `docs/handoffs/visual-generation-video-phase1-handoff.md`.
 
 The data + retrieval foundation:
 
@@ -83,9 +85,10 @@ CLI generations" below).
 
 ## Video generation (WAN 2.2)
 
-**Status: manual ComfyUI workflow today; agent CLI integration is Phase 2 (not yet
-built).** The steps below are the *operational* path for producing WAN clips in ComfyUI
-on the pod, plus what was decided during setup. The agent does not yet drive WAN.
+**Status: one-off CLI generation via [`quick --video`](#quick-prompt---endpoint-url---video---image-seedpng-)
+is built; the manual ComfyUI steps below remain the path for exploration, and full-pipeline
+integration (`draft`/`generate`/canon/memory) is Phase 2 (not yet built).** The steps below
+are also useful background for what `quick --video`'s registered templates automate.
 
 > **Architecture note (2026-07-15, consolidated audit §17):** still/keyframe authority is
 > **plate-first** — approved set plates + character reference packs + sequential masked
@@ -574,6 +577,56 @@ each individual generation in the run:
 - It does **not** stop the pod, and does **not** stop GPU billing — the pod
   keeps running and accruing cost until you stop it yourself in the RunPod UI.
 
+### `quick "<prompt>" --endpoint <url> [--video] [--image <seed.png>] [...]`
+
+A one-off generation for when you already have a finished prompt (hand-written,
+or produced by an external tool — e.g. another LLM/agent) and just want a file
+back, without the batch/canon/memory machinery `draft`/`generate` build on top
+of. **Skips**: drafting, canon, `visual-batch.md`, and any write to
+`visual_generation_memory` — nothing about a `quick` render is recorded or
+retrievable later. **The one thing it still needs**: the target's workflow
+graph must already be registered via `workflow register` (the graph itself
+only exists as a Qdrant-stored template — see [`workflow register`](#workflow-register-exported-apijson---name-n)
+above), so Qdrant must be reachable.
+
+```bash
+# a still, straight from a raw prompt
+op run --env-file=.env -- uv run visual-generation quick \
+  "a red bicycle leaning against a brick wall" --endpoint https://<pod-id>-8188.proxy.runpod.net
+
+# a WAN 2.2 text-to-video clip
+op run --env-file=.env -- uv run visual-generation quick \
+  "a red fox running through falling snow, side view, cinematic" \
+  --video --endpoint https://<pod-id>-8188.proxy.runpod.net
+
+# a WAN 2.2 image-to-video clip, seeded from an existing still
+op run --env-file=.env -- uv run visual-generation quick \
+  "the woman blinks and slowly shifts her weight" \
+  --video --image ~/agent-projects/my-project/plate.png \
+  --endpoint https://<pod-id>-8188.proxy.runpod.net
+```
+
+**Video is recipe-locked.** WAN 2.2's `steps`/`cfg`/`sampler`/`scheduler`/`shift`/boundary-step
+are the proven 4-step lightx2v settings, baked into the registered template — `--steps`,
+`--cfg`, `--sampler`, `--scheduler`, `--model`, and `--lora` are stills-only and rejected
+with `--video`. What *is* overridable for video: `--seed`, `--width`/`--height`,
+`--length` (frame count — must be 4n+1), and `--fps`. Use `draft`/`generate` instead (not
+yet built for video — see "Video generation (WAN 2.2)" below) if you need per-run control
+over WAN's settings.
+
+By default the output saves to
+`~/agent-data/visual-generation/assets/adhoc/<id>.{png,mp4}`; pass `--out <path>` to save
+somewhere else. `--yes` skips the spend confirmation. **One-time setup**, before the first
+`quick --video` call — register both WAN graphs (already exported and committed at
+`workflows/wan2.2-{t2v,i2v}-14B-lightx2v-api.json`):
+
+```bash
+op run --env-file=.env -- uv run visual-generation workflow register \
+  workflows/wan2.2-t2v-14B-lightx2v-api.json --name wan2.2-t2v
+op run --env-file=.env -- uv run visual-generation workflow register \
+  workflows/wan2.2-i2v-14B-lightx2v-api.json --name wan2.2-i2v
+```
+
 ### `redraft <gen_id> "<change>" [-o batch.md] [--project P] [--model {sonnet|opus}]`
 
 A directed, **recipe-locked text2img revise** of an existing generation — when you
@@ -811,11 +864,11 @@ pod absent + the create-time balance error.
 Global Volume migration, **this is expected, not a bug** — ComfyUI is no longer baked into
 any image/template, so nothing serves :8188 until you separately run
 `scripts/comfyui-bootstrap` on the pod over SSH (see `scripts/README.md`). `pod up` itself
-now includes a health check (`wait_for_healthy_pod`, `HEALTH_CHECK_*` knobs) that polls the
-pod's `uptimeSeconds` for real progress — the new default template (`runpod-torch-v280`)
-starts sshd quickly on its own, so that check passing does **not** mean ComfyUI is up, only
-that the container itself isn't crash-looping. `/object_info` 404 until you've run the
-bootstrap script is the normal sequence.
+now includes a health check (`wait_for_healthy_pod`, `HEALTH_CHECK_*` knobs) that waits for
+the pod's SSH endpoint to accept a real TCP connection — the new default template
+(`runpod-torch-v280`) starts sshd quickly on its own, so that check passing does **not** mean
+ComfyUI is up, only that the container itself isn't crash-looping. `/object_info` 404 until
+you've run the bootstrap script is the normal sequence.
 
 **⚠️ Do NOT "fix" a not-yet-serving pod by switching to the `agent-stack`/`cnne9dp3rt`
 ComfyUI template.** That was the old advice (pre-migration) and is now actively wrong — that
