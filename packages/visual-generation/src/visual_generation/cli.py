@@ -967,6 +967,42 @@ def chat_entry() -> None:
     cli(["chat", *sys.argv[1:]])
 
 
+# ── gate0 (read-only check of a finished Gate 0 run) ───────────────────────────
+
+
+@cli.group()
+def gate0() -> None:
+    """Gate 0 (execution truth): verify a finished run. Reads only; spends nothing."""
+
+
+@gate0.command("verify")
+@click.option("--project", default="gate0", show_default=True, help="Project the Gate 0 run used.")
+@click.option("--template", "template_name", required=True,
+              help="Registered workflow template the run used (also used for the refusal check).")
+@click.option("--fixed-seed", type=int, default=12345, show_default=True,
+              help="The seed the fixed-seed spec asked for.")
+@click.option("--out", "out_path", type=click.Path(dir_okay=False), default=None,
+              help="Write the result record (markdown) to this path.")
+def gate0_verify(project: str, template_name: str, fixed_seed: int, out_path: str | None) -> None:
+    """Check seed truth, random-seed variety, fixed-seed honoring, replay inputs and refusal."""
+    from visual_generation.gate0 import render_record, verify_gate0
+
+    async def _run():  # type: ignore[no-untyped-def]
+        store, _ = _get_stores()
+        return await verify_gate0(project, store=store, template_name=template_name, fixed_seed=fixed_seed)
+
+    report = asyncio.run(_run())
+    click.echo(f"Gate 0 for project {project!r}: {len(report.generations)} generation(s)\n")
+    for c in report.checks:
+        click.echo(f"  [{'PASS' if c.passed else 'FAIL'}] {c.name}: {c.detail}")
+    click.echo(f"\nGate 0 result: {'PASS' if report.passed else 'FAIL'}")
+    if out_path:
+        Path(out_path).write_text(render_record(report), encoding="utf-8")
+        click.echo(f"Record written to {out_path}")
+    if not report.passed:
+        raise SystemExit(1)
+
+
 # ── Inspect (review-pending / chain show / recall) — pure reads ───────────────
 
 
