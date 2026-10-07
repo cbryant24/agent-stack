@@ -577,6 +577,30 @@ each individual generation in the run:
 - It does **not** stop the pod, and does **not** stop GPU billing — the pod
   keeps running and accruing cost until you stop it yourself in the RunPod UI.
 
+### Execution truth: plan-time refusals, provenance files, and Gate 0
+
+What `generate` (and `quick`) now guarantee, so the record can be trusted:
+
+- **Refused at plan time, before any spend** (the skip reason says why): a value outside its bound
+  (steps 1-150, cfg 0-30, denoise 0-1, flux_guidance 0-20, LoRA strength 0-4, width/height multiples
+  of 8 in 64-4096, fixed seed 0 to 2^64-1, video length 4n+1 in 1-513, fps 1-120; bounds live in
+  `constants.VALUE_BOUNDS`); an identity-bearing LoRA the template has no loader for; and a template
+  that bakes in a LoRA it cannot switch off. Nothing is clamped: what runs equals what is recorded.
+  A style LoRA that does not fit is only a warning.
+- **Baked-in LoRAs are switched off** when a spec asks for none (the Z-Image workflows bake in a character
+  LoRA at strength 1.0); the cost gate prints which ones.
+- **Proof saved beside every output**: `<stem>.graph.json` is the exact graph submitted (captured just before
+  submit), and `<stem>.provenance.json` holds the prompt id, the resolved seed and the seed actually in the
+  graph, workflow name and hash, the graph's hash, model and LoRA names, the sha256 of every uploaded source
+  file (hashed from the bytes sent) and of the output, timing, unmapped values and switched-off LoRAs. For
+  identity-bearing outputs these sit in the same secured folder as the image. The generation record carries
+  `submitted_graph_sha256` and `provenance_path`.
+- **Gate 0** (the charter's execution-truth gate): `docs/gate0/RUN.md` has the exact commands and the neutral
+  fixture (`docs/gate0/batch.md`: two random-seed images and one fixed-seed image of a plain mug). After the
+  run, `visual-generation gate0 verify --project gate0 --template <name> --out docs/audit/gate0-result.md`
+  judges it (read-only, spends nothing) and writes the result record. Set `EXECUTION_TRUTH_VERIFIED_SINCE`
+  only after it passes and you sign off.
+
 ### `quick "<prompt>" --endpoint <url> [--video] [--image <seed.png>] [...]`
 
 A one-off generation for when you already have a finished prompt (hand-written,

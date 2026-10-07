@@ -19,6 +19,13 @@ Then run **Gate 0** from `evaluation-charter.md` on a neutral fixture: two rando
 
 These fixes are their own Claude Code sessions, separate from the REPL work. They can run in parallel with Phases 1-4.
 
+**Status (2026-10-07).** Session 1 is done except for the live run: items 1 to 6 above are fixed and tested
+(`a2395c1`, `b117501`, `2a7b9b4`, `dc30283`, `2eb2ba5`). A read-only checker, `visual-generation gate0 verify`,
+the neutral fixture batch, the run guide and a record template are in `packages/visual-generation/docs/gate0/`.
+**Gate 0 itself still has to be run on a pod by you**, and passed, before Session 2 (the tools) starts.
+Two notes on what was built: out-of-range values are rejected at plan time and never clamped; and the
+audit's "template default 1152×896" row is not part of this and remains open.
+
 Remaining §9 items (drafter grounding, stale LoRAs offered, alias matching, trigger tokens, image-level verification, ledger coverage) are not blockers for wrapping `generate`, but the REPL surfaces them as warnings where it can.
 
 ## Part A — generation tools
