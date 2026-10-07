@@ -1,0 +1,3 @@
+{"feedback": "attempt-03 is closer but the face still reads as CGI plastic, and her eyes look like painted buttons.", "context_labels": ["attempt-03"], "attempts": 8}
+{"feedback": "I like the set in attempt-05 and attempt-06, but in attempt-06 the coat changed colour. Can we keep the coat from attempt-05?", "context_labels": ["attempt-05", "attempt-06"], "attempts": 8}
+{"feedback": "the last one is way too dark and I think the pod was slow. also what about attempt-14, where she is holding the key?", "context_labels": ["latest", "attempt-14"], "attempts": 8}

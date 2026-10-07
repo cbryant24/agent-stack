@@ -38,6 +38,8 @@ from visual_generation.discovery import compile_creative_input, discover_scenes
 from visual_generation.constants import (
     AGENT_NAME,
     DRAFT_BUDGET,
+    IMG2IMG_TEMPLATE_NAME,
+    INPAINT_TEMPLATE_NAME,
     RESEARCH_GAP_THRESHOLD,
 )
 from visual_generation.identity import derive_identity_bearing
@@ -145,6 +147,42 @@ def _pin_canon_loras(
     notes += dropped
     spec.identity_bearing = derive_identity_bearing(spec, store.get_model)
     return notes
+
+
+class RefinementSourceError(ValueError):
+    """Bad refinement-source options. `code` lets each front end phrase it for its own flags."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def build_refinement_source(
+    from_generation: str | None,
+    image_path: str | None,
+    mask_path: str | None,
+    template_name: str | None,
+) -> tuple[VisualSource | None, str | None]:
+    """(source, template_name) for a draft/redraft refinement.
+
+    A source has exactly one origin; a mask needs a source. A refinement needs a template with
+    an init_image (+ mask) slot, so when none is named this defaults to the img2img template
+    (inpaint when a mask is given): a text2img graph silently drops the source.
+    """
+    if from_generation and image_path:
+        raise RefinementSourceError(
+            "both_origins", "use only one of from_generation / image_path (a source has one origin)"
+        )
+    if mask_path and not (from_generation or image_path):
+        raise RefinementSourceError(
+            "mask_without_source", "a mask requires a source (from_generation or image_path)"
+        )
+    if not (from_generation or image_path):
+        return None, template_name
+    source = VisualSource(from_generation=from_generation, image_path=image_path, mask=mask_path)
+    if template_name is None:
+        template_name = INPAINT_TEMPLATE_NAME if mask_path else IMG2IMG_TEMPLATE_NAME
+    return source, template_name
 
 
 async def draft(

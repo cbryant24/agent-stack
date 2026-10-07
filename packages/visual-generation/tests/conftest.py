@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -20,11 +21,30 @@ requires_qdrant = pytest.mark.skipif(
 )
 
 
+LIVE = os.environ.get("AGENT_SHELL_LIVE") == "1"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "live: calls a real provider (costs money); run with AGENT_SHELL_LIVE=1 under `op run`"
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if LIVE:
+        return
+    skip = pytest.mark.skip(reason="live provider test: set AGENT_SHELL_LIVE=1 (under op run)")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
 def fake_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-test-anthropic")
-    monkeypatch.setenv("VOYAGE_API_KEY", "pa-test-voyage")
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    if not LIVE:   # live tests must see the real keys
+        monkeypatch.setenv("PRODUCTION_AGENTS_ANTHROPIC_API_KEY", "sk-test-anthropic")
+        monkeypatch.setenv("VOYAGE_API_KEY", "pa-test-voyage")
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
     monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path / "agent-data"))
     # The opsec guard forbids identity writes under the obsidian vault

@@ -14,10 +14,12 @@ dev = [
     "ipython>=8.0",
     "pytest-asyncio>=1.4.0",
     "agent-shell[langgraph]",
+    "visual-generation[chat]",
 ]
 
 [tool.uv.sources]
 agent-shell = { workspace = true }
+visual-generation = { workspace = true }
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"

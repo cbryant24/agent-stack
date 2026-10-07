@@ -93,3 +93,51 @@ class TestChatOpenAIKey:
         cfg = RuntimeConfig(_env_file=None)  # type: ignore[call-arg]
         assert cfg.chat_openai_api_key == "sk-chat"
         assert cfg.openai_api_key == "sk-shared"
+
+
+class TestProjectsDir:
+    def test_default_is_agent_projects_in_home(self, fake_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AGENT_PROJECTS_DIR", raising=False)
+        cfg = RuntimeConfig(_env_file=None)  # type: ignore[call-arg]
+        assert cfg.agent_projects_dir == Path("~/agent-projects").expanduser()
+
+    def test_env_override_expands_tilde_and_is_not_created(
+        self, fake_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "work" / "projects"
+        monkeypatch.setenv("AGENT_PROJECTS_DIR", str(target))
+        cfg = RuntimeConfig(_env_file=None)  # type: ignore[call-arg]
+        assert cfg.agent_projects_dir == target
+        assert not target.exists()                     # director-owned: never auto-created
+
+    def test_project_dir_joins_a_valid_slug(
+        self, fake_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agent_runtime.config import project_dir
+
+        monkeypatch.setenv("AGENT_PROJECTS_DIR", str(tmp_path))
+        cfg = RuntimeConfig(_env_file=None)  # type: ignore[call-arg]
+        assert project_dir("celeste-you-dangerous", cfg) == tmp_path / "celeste-you-dangerous"
+        assert project_dir("a1", cfg) == tmp_path / "a1"
+        assert not (tmp_path / "a1").exists()
+
+    @pytest.mark.parametrize(
+        "bad", ["", "Has-Caps", "with space", "snake_case", "../escape", "a/b", "-lead", "trail-", "a--b"]
+    )
+    def test_project_dir_rejects_non_kebab_slugs(
+        self, fake_env: None, tmp_path: Path, bad: str
+    ) -> None:
+        from agent_runtime.config import project_dir
+
+        with pytest.raises(ValueError, match="invalid project slug"):
+            project_dir(bad, RuntimeConfig(agent_projects_dir=tmp_path, _env_file=None))  # type: ignore[call-arg]
+
+    def test_project_dir_uses_the_cached_config_by_default(
+        self, fake_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agent_runtime.config import project_dir
+
+        monkeypatch.setenv("AGENT_PROJECTS_DIR", str(tmp_path))
+        reset_config()
+        assert project_dir("demo") == tmp_path / "demo"
+        reset_config()

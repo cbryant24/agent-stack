@@ -124,6 +124,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "visual-generation", extra = ["chat"] },
 ]
 
 [package.metadata]
@@ -136,6 +137,7 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.9" },
+    { name = "visual-generation", extras = ["chat"], editable = "packages/visual-generation" },
 ]
 
 [[package]]
@@ -3626,12 +3628,27 @@ dependencies = [
     { name = "httpx" },
 ]
 
+[package.optional-dependencies]
+chat = [
+    { name = "agent-shell", extra = ["langgraph"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "import-linter" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "agent-runtime", editable = "packages/agent-runtime" },
+    { name = "agent-shell", extras = ["langgraph"], marker = "extra == 'chat'", editable = "packages/agent-shell" },
     { name = "click", specifier = ">=8.0" },
     { name = "httpx", specifier = ">=0.27" },
 ]
+provides-extras = ["chat"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "import-linter", specifier = ">=2.0" }]
 
 [[package]]
 name = "voiceover-direction"

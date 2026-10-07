@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,6 @@ from visual_generation.constants import (
     DEFAULT_POLL_TIMEOUT_SEC,
     EXPLAIN_LEVELS,
     IMG2IMG_TEMPLATE_NAME,
-    INPAINT_TEMPLATE_NAME,
     LESSON_SCOPE_MODEL,
     LESSON_SCOPE_PROMPT,
     LESSON_SCOPE_SETTINGS,
@@ -52,7 +52,13 @@ from visual_generation.constants import (
     REACTIONS,
 )
 from visual_generation.canon import ProjectCanon
-from visual_generation.draft import batch_project_sync, draft_sync, redraft_sync
+from visual_generation.draft import (
+    RefinementSourceError,
+    batch_project_sync,
+    build_refinement_source,
+    draft_sync,
+    redraft_sync,
+)
 from visual_generation.explain import explain_sync, render_explain
 from visual_generation.generate import plan_generation_sync, spend_generation_sync
 from visual_generation.gpu_tracker import GpuLedger
@@ -73,6 +79,21 @@ from visual_generation.quick import (
     QuickSourceError,
     QuickTemplateNotFound,
     quick_generate_sync,
+)
+from visual_generation.reads import (
+    build_digest,
+    list_lessons,
+    list_models,
+    list_templates,
+    render_canon,
+    render_digest,
+    render_lessons,
+    render_models,
+    render_provenance,
+    render_subject,
+    render_templates,
+    render_verify,
+    show_canon,
 )
 from visual_generation.report import report_sync
 from visual_generation.research import register_delegate_handlers, render_research, research_sync
@@ -182,20 +203,7 @@ def model_sync(endpoint: str, yes: bool) -> None:
 @model.command("list")
 def model_list() -> None:
     """List registered model/LoRA assets (identity_bearing and presence shown)."""
-    registry = ModelRegistry()
-    assets = registry.list_models()
-    if not assets:
-        click.echo("No models registered. Run: agent visual-generation model sync --endpoint <url>")
-        return
-    click.echo(f"{len(assets)} registered asset(s):\n")
-    for a in sorted(assets, key=lambda x: (x.kind, x.name)):
-        flags = []
-        if a.identity_bearing:
-            flags.append("identity-bearing")
-        if not a.present_on_endpoint:
-            flags.append("absent-from-last-sync")
-        flag_str = f"  ({', '.join(flags)})" if flags else ""
-        click.echo(f"  [{a.kind:10}] {a.name}  <{a.source}>{flag_str}")
+    click.echo(render_models(list_models()))
 
 
 @model.command("rm")
@@ -325,21 +333,8 @@ def workflow_list(query: str, limit: int) -> None:
 
     async def _run() -> None:
         store, _ = _get_stores()
-        await store.ensure_collection()
-        results = await store.search_templates(query or "workflow template", limit=limit)
-        if not results:
-            click.echo("No workflow templates registered.")
-            return
-        registry = ModelRegistry()
-        known = {a.name for a in registry.list_models()}
-        click.echo(f"{len(results)} template(s):\n")
-        for _id, _score, tmpl in results:
-            click.echo(f"  {tmpl.name}  ({len(tmpl.slot_map)} slots)")
-            click.echo(f"    {tmpl.descriptor[:80]}")
-            if tmpl.required_models:
-                missing = [m for m in tmpl.required_models if m not in known]
-                status = "all present" if not missing else f"missing: {', '.join(missing)}"
-                click.echo(f"    requires: {', '.join(tmpl.required_models)}  [{status}]")
+        listing = await list_templates(store, query=query, limit=limit)
+        click.echo(render_templates(listing))
 
     asyncio.run(_run())
 
@@ -349,16 +344,14 @@ def workflow_list(query: str, limit: int) -> None:
 
 def _echo_provenance(legs: list) -> None:
     """Render the deterministic 'what was surfaced' block (shared by draft/redraft)."""
-    if not legs:
-        return
-    click.echo("\n── Knowledge surfaced (deterministic) ───────────────")
-    for leg in legs:
-        click.echo(
-            f"  [{leg.tier}] {leg.label} ({leg.collection}): "
-            f"{leg.count} hit(s), top {leg.top_score:.2f}"
-        )
-        for snip in leg.snippets:
-            click.echo(f"      ↳ {snip}")
+    if legs:
+        click.echo(render_provenance(legs))
+
+
+_REFINEMENT_FLAG_MESSAGES = {
+    "both_origins": "Use only one of --from / --image (a source has one origin).",
+    "mask_without_source": "--mask requires a source (--from or --image).",
+}
 
 
 @cli.command()
@@ -405,21 +398,12 @@ def draft(intent: str | None, points: tuple[str, ...], scene: str | None,
     the change to make, the source is resolved + uploaded at `generate`, and the new
     generation records parent lineage.
     """
-    if from_generation and image_path:
-        raise click.UsageError("Use only one of --from / --image (a source has one origin).")
-    if mask_path and not (from_generation or image_path):
-        raise click.UsageError("--mask requires a source (--from or --image).")
-
-    source: VisualSource | None = None
-    if from_generation or image_path:
-        source = VisualSource(
-            from_generation=from_generation, image_path=image_path, mask=mask_path
+    try:
+        source, template_name = build_refinement_source(
+            from_generation, image_path, mask_path, template_name
         )
-        # A refinement needs a template with an init_image (+ mask) slot; a txt2img
-        # template can't apply the source and `generate` skips it. Default to the right
-        # graph when the director didn't name one (mirrors the anchored-batch default).
-        if template_name is None:
-            template_name = INPAINT_TEMPLATE_NAME if mask_path else IMG2IMG_TEMPLATE_NAME
+    except RefinementSourceError as exc:
+        raise click.UsageError(_REFINEMENT_FLAG_MESSAGES[exc.code]) from exc
 
     result = draft_sync(
         intent,
@@ -944,6 +928,47 @@ def quick(
     click.echo("\nNot recorded to visual_generation_memory — quick generations are memory-free.")
 
 
+# ── chat (conversational front end; needs the optional `chat` extra) ───────────
+
+
+_CHAT_LIBS = {"agent_shell", "langgraph", "langchain_core", "langchain_anthropic",
+              "langchain_openai", "prompt_toolkit", "rich"}
+
+
+@cli.command("chat")
+@click.option("--provider", type=click.Choice(["claude", "openai"]), default="claude",
+              show_default=True, help="Which model runs the conversation.")
+@click.option("--model", default=None,
+              help="Model id (must have a price row). Required for openai.")
+@click.option("--project", default=None,
+              help="Active project slug (lowercase-kebab). Needed to draft; drafts go to "
+                   "<projects>/<slug>/visual-batch.md.")
+@click.option("--resume", "resume_id", default=None, help="Resume a chat session id.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Spend tools describe what they would do and run nothing.")
+def chat(provider: str, model: str | None, project: str | None, resume_id: str | None,
+         dry_run: bool) -> None:
+    """Chat with the agent: look things up, craft and revise specs, interpret feedback.
+
+    Read and craft only: no GPU spend and no memory writes. Run under op run:
+    `agent visual-generation chat --project <slug>`."""
+    try:
+        from visual_generation.chat.cli import run_chat
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] not in _CHAT_LIBS:
+            raise
+        raise click.ClickException(
+            f"chat needs its optional libraries ({exc.name} is missing). "
+            "Install them with: uv sync --all-packages --extra chat   (visual-generation[chat])"
+        ) from exc
+    run_chat(provider, model, project, resume_id, dry_run)
+
+
+def chat_entry() -> None:
+    """The `visual-agent` console script: the same command as `visual-generation chat`."""
+    cli(["chat", *sys.argv[1:]])
+
+
 # ── Inspect (review-pending / chain show / recall) — pure reads ───────────────
 
 
@@ -963,26 +988,7 @@ def knowledge_verify(query: str, project: str | None, limit: int) -> None:
     async def _run() -> None:
         store, ms = _get_stores()
         report = await verify_knowledge(query, store, ms, project=project, limit=limit)
-
-        click.echo(f"Query: {report.query}")
-        if report.project:
-            click.echo(f"Project: {report.project}")
-
-        click.echo("\n── Collection sizes ─────────────────────────────────")
-        for name, n in report.collection_counts.items():
-            click.echo(f"  {name}: {'unreachable/absent' if n < 0 else n}")
-
-        if report.legs:
-            _echo_provenance(report.legs)
-        else:
-            click.echo("\n⚠ Nothing surfaced for this query.")
-
-        if report.gaps:
-            click.echo("\n⚠ Gaps (knowledge that may be getting ignored):")
-            for g in report.gaps:
-                click.echo(f"  • {g}")
-        else:
-            click.echo("\n✓ No gaps flagged — relevant knowledge is reachable for this query.")
+        click.echo(render_verify(report))
 
     asyncio.run(_run())
 
@@ -1000,31 +1006,7 @@ def digest(project: str, limit: int) -> None:
 
     async def _run() -> None:
         store, _ = _get_stores()
-        await store.ensure_collection()
-        gens = await store.list_generations(project=project)
-        lessons = await store.list_lessons(confirmed_only=True)
-        pending = [g for g in await store.list_pending() if g.project == project]
-
-        click.echo(f"Digest for {project!r}")
-        click.echo(f"\n── Recent generations ({min(len(gens), limit)} of {len(gens)}) ──────────")
-        if not gens:
-            click.echo("  (none yet — draft → generate → report to build memory)")
-        for g in gens[-limit:][::-1]:
-            reaction = g.reaction.upper().replace("_", " ")
-            rating = f" ★{g.rating}" if g.rating is not None else ""
-            click.echo(f"  {g.entry_id[:12]}  [{reaction}{rating}]  {(g.caption or g.prompt or '')[:70]}")
-
-        if pending:
-            click.echo(f"\n── Awaiting your reaction ({len(pending)}) ───────────────")
-            for g in pending:
-                click.echo(f"  {(g.caption or g.prompt or '')[:66]}")
-                click.echo(f"    agent visual-generation report {g.entry_id} "
-                           f"--reaction <{'|'.join(REACTIONS)}>")
-
-        if lessons:
-            click.echo(f"\n── Confirmed technique lessons ({len(lessons)}) ──────────")
-            for le in lessons:
-                click.echo(f"  [{le.valence}/{le.scope}] {le.statement[:80]}")
+        click.echo(render_digest(await build_digest(project, store, limit=limit)))
 
     asyncio.run(_run())
 
@@ -1272,38 +1254,15 @@ def selector_matches(subject: object, alias: str) -> bool:
 
 def _echo_subject(s: object, *, indent: str = "  ") -> None:
     """Print one canon subject's fields (shared by set/edit/show)."""
-    click.echo(f"{indent}aliases: {', '.join(s.aliases)}")          # type: ignore[attr-defined]
-    for label, attr in (
-        ("id:      ", "id"),
-        ("refs:    ", "reference_pack"),
-        ("wardrobe:", "wardrobe"),
-        ("hair:    ", "hair"),
-        ("region:  ", "region"),
-    ):
-        value = getattr(s, attr, None)
-        if value:
-            click.echo(f"{indent}{label} {value}")
-    lora = getattr(s, "lora", None)
-    if lora:
-        click.echo(f"{indent}lora:     {lora.name}@{lora.strength}")
-    extras = getattr(s, "__pydantic_extra__", None) or {}
-    if "locked" in extras or "forbid" in extras:
-        click.echo(f"{indent}(legacy locked/forbid present — ignored)")
+    for line in render_subject(s, indent=indent):
+        click.echo(line)
 
 
 @canon.command("show")
 @click.argument("project")
 def canon_show(project: str) -> None:
     """Show PROJECT's canon subjects."""
-    store = ProjectCanon(project)
-    subjects = store.load()
-    if not subjects:
-        click.echo(f"No canon for {project!r} (looked at {store.path}).")
-        return
-    click.echo(f"Canon for {project!r} ({len(subjects)} subject(s)):")
-    for s in subjects:
-        click.echo("")
-        _echo_subject(s, indent="  ")
+    click.echo(render_canon(show_canon(project, ProjectCanon(project))))
 
 
 @canon.command("edit")
@@ -1424,16 +1383,9 @@ def lesson_list(include_unconfirmed: bool, scope: str | None, valence: str | Non
 
     async def _run() -> None:
         store, _ = _get_stores()
-        await store.ensure_collection()
-        lessons = await store.list_lessons(
-            confirmed_only=not include_unconfirmed, scope=scope, valence=valence)
-        if not lessons:
-            click.echo("No technique lessons.")
-            return
-        click.echo(f"Technique lessons ({len(lessons)}):")
-        for le in lessons:
-            conf = "" if le.confirmed else " (unconfirmed)"
-            click.echo(f"  {le.entry_id}  [{le.valence}/{le.scope}]{conf} {le.statement[:80]}")
+        lessons = await list_lessons(
+            store, include_unconfirmed=include_unconfirmed, scope=scope, valence=valence)
+        click.echo(render_lessons(lessons))
 
     asyncio.run(_run())
 

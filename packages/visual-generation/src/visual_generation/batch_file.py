@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from visual_generation.models import GenerationBatch, LoraRef, VisualSpec, _now_iso
@@ -96,15 +97,31 @@ def _spec_from(meta: dict, prompt: str, heading: str) -> VisualSpec:
     return VisualSpec(**fields)
 
 
-def read_batch(path: Path) -> GenerationBatch:
-    """Read a batch-file markdown path into a GenerationBatch (malformed-tolerant)."""
+@dataclass
+class BatchIssue:
+    """A spec section whose metadata could not be read; its settings fell back to defaults."""
+
+    heading: str
+    problem: str
+
+
+def read_batch_diagnosed(path: Path) -> tuple[GenerationBatch, list[BatchIssue]]:
+    """Read a batch file, reporting sections whose metadata was missing or unparseable.
+
+    Same tolerant parse as `read_batch` (nothing is dropped, the prose is still the prompt),
+    but the silent fallbacks are returned as issues so a caller can show them. A `-->` inside
+    a metadata text field (e.g. `rationale`) truncates the capture and shows up here as
+    unparseable JSON.
+    """
     text = path.read_text(encoding="utf-8")
+    issues: list[BatchIssue] = []
 
     header_m = _BATCH_META_RE.search(text)
     try:
         doc = json.loads(header_m.group(1)) if header_m else {}
     except json.JSONDecodeError:
         doc = {}
+        issues.append(BatchIssue("(file header)", "batch header metadata could not be parsed"))
 
     specs: list[VisualSpec] = []
     matches = list(_HEADING_RE.finditer(text))
@@ -120,19 +137,33 @@ def read_batch(path: Path) -> GenerationBatch:
                 meta = json.loads(meta_m.group(1))
             except json.JSONDecodeError:
                 meta = {}  # garbled edit — fall back to defaults, keep the prompt
+                issues.append(BatchIssue(
+                    heading,
+                    "spec metadata is not valid JSON, so its settings fell back to defaults "
+                    "(check for '-->' inside a text field such as rationale)",
+                ))
+            if meta is not None and not isinstance(meta, dict):
+                issues.append(BatchIssue(heading, "spec metadata is not a JSON object"))
             prose = block[meta_m.end():].strip()
         else:
             meta = {}
             prose = block.strip()
+            issues.append(BatchIssue(heading, "no vg-spec metadata comment, so settings are defaults"))
 
         specs.append(_spec_from(meta if isinstance(meta, dict) else {}, prose, heading))
 
-    return GenerationBatch(
+    batch = GenerationBatch(
         project=doc.get("project"),
         created_at=doc.get("created_at") or _now_iso(),
         source_path=doc.get("source_path"),
         specs=specs,
     )
+    return batch, issues
+
+
+def read_batch(path: Path) -> GenerationBatch:
+    """Read a batch-file markdown path into a GenerationBatch (malformed-tolerant)."""
+    return read_batch_diagnosed(path)[0]
 
 
 def append_spec(path: Path, spec: VisualSpec, *, project: str | None = None) -> GenerationBatch:

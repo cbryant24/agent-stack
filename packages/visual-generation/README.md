@@ -678,6 +678,46 @@ This is the **first remove/replace path** for batch files — `batch_file` was p
 **losslessly**: every other spec's metadata and prose is preserved byte-for-byte, only
 the targeted spec is dropped.
 
+### `chat [--provider claude|openai] [--model M] [--project <slug>] [--resume <id>] [--dry-run]`  (alias: `visual-agent`)
+
+A conversation over the same read and craft functions, so you can look things up, craft and revise
+specs, and have your feedback turned into a structured proposal without typing one command per step.
+**No GPU spend and no memory writes in this phase**: it cannot `generate`, `quick`, `report`, add
+lessons or facts, change canon, or sync models. When a step needs one of those, it says so and you run
+the command yourself.
+
+```bash
+uv sync --all-packages --extra chat            # the chat libraries are an optional extra
+op run --env-file=.env -- uv run visual-generation chat --project celeste-you-dangerous
+agent visual-generation chat --project celeste-you-dangerous      # same, via the wrapper
+agent visual-generation chat --provider openai --model <model with a price row>
+```
+
+Without the extra, every other command still works and `chat` prints how to install it.
+
+- **Tools** (16): `recall`, `review_pending`, `chain_show`, `inspect_generation`, `digest`, `batch_list`,
+  `model_list`, `workflow_list`, `lesson_list`, `canon_show`, `knowledge_verify` (reads);
+  `explain`, `draft`, `redraft`, `batch_build` (LLM calls, a few cents; capped per call);
+  `propose_interpretation` (structures your feedback; stores nothing).
+- **Labels.** Results show generations as `attempt-07 (a1b2c3d4)`: the project's generations, oldest first,
+  numbered from 1. `attempt-7`, `#7`, `latest`, a full id, or a unique id prefix (8+ characters) all resolve.
+  Anything else is not guessed: it comes back as an open question.
+- **Where drafts go.** `draft`, `redraft` and `batch_build` append to
+  `<AGENT_PROJECTS_DIR>/<slug>/visual-batch.md` (default `~/agent-projects`), the type-only filename from
+  `docs/naming-conventions.md`. **The older commands default somewhere else**
+  (`~/agent-data/visual-generation/batches/<slug>.batch.md`), so `batch list --project <slug>` will not see
+  the chat's file; pass the path explicitly, or use the chat's `batch_list`. `generate` takes a path.
+- **Warnings the tools surface.** `draft` always names the template and its modality; it warns when a
+  `denoise` value has no source image (it has no effect) and when an img2img/inpaint template was picked
+  for plain text. `batch_list` reports specs whose metadata could not be parsed (their settings fell back
+  to defaults), which includes the known `-->`-inside-`rationale` truncation.
+- **Keys.** The conversation uses `PRODUCTION_AGENTS_ANTHROPIC_API_KEY` (Claude) or `CHAT_OPENAI_API_KEY`
+  (OpenAI, falling back to `PRODUCTION_AGENTS_OPENAI_API_KEY`). `explain` and the craft step inside
+  `draft`/`redraft` always use Claude, so the Anthropic key is needed even when the conversation runs on OpenAI.
+- **Tests.** `uv run pytest packages/visual-generation/tests/chat`. The live check over your own feedback
+  strings (`tests/chat/golden/feedback.jsonl`, format in its README) costs a few cents:
+  `op run --env-file=.env -- env AGENT_SHELL_LIVE=1 uv run pytest packages/visual-generation -m live -v`.
+
 ### `lesson list [--include-unconfirmed] [--scope S] [--valence V]`
 
 Lists technique lessons one per line as `entry_id  [valence/scope] statement`. The

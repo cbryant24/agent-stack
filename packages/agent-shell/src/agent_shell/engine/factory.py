@@ -40,6 +40,12 @@ def make_engine(provider: str, model: str | None = None) -> Engine:
     else:
         raise EngineConfigError(f"unknown provider: {provider}")
 
+    if key and key.startswith("op://"):
+        raise EngineConfigError(
+            "the API key is an unresolved 1Password reference (op://...). Run under op run, "
+            "e.g. `op run --env-file=.env -- <command>`."
+        )
+
     from agent_shell.engine.langgraph_engine import LangGraphEngine
 
     try:

@@ -83,6 +83,54 @@ def list_pending_sync(**kwargs: Any) -> list[VisualGeneration]:
     return asyncio.run(list_pending(**kwargs))
 
 
+# ── one generation ───────────────────────────────────────────────────────────
+
+
+async def get_generation(
+    entry_id: str,
+    *,
+    store: VisualGenerationStore | None = None,
+    memory_store: MemoryStore | None = None,
+) -> VisualGeneration | None:
+    """One generation by its full entry id (a pure read), or None."""
+    store = store or VisualGenerationStore(memory_store or get_memory_store())
+    await store.ensure_collection()
+    return await store.get_generation(entry_id)
+
+
+def render_generation(gen: VisualGeneration | None, entry_id: str = "") -> str:
+    if gen is None:
+        return f"No generation found with id '{entry_id}'."
+    lines = [f"Generation {gen.entry_id}  [{_reaction_label(gen)}]"]
+    if gen.project:
+        lines.append(f"  Project:    {gen.project}")
+    lines.append(f"  Prompt:     {gen.prompt or gen.caption}")
+    if gen.negative_prompt:
+        lines.append(f"  Negative:   {gen.negative_prompt}")
+    lines.append(f"  Settings:   {_settings_summary(gen)}")
+    if gen.seed is not None or gen.width or gen.height:
+        size = f"{gen.width}x{gen.height}" if gen.width and gen.height else "(template default size)"
+        lines.append(f"  Seed/size:  {gen.seed} / {size}")
+    if gen.workflow_ref:
+        lines.append(f"  Template:   {gen.workflow_ref}")
+    if gen.source_image_path:
+        mask = f" (mask {gen.source_mask_path})" if gen.source_mask_path else ""
+        lines.append(f"  Source:     {gen.source_image_path}{mask}")
+    if gen.parent_id:
+        lines.append(f"  Parent:     {gen.parent_id}")
+    lines.append(f"  Chain root: {gen.chain_root_id}")
+    if gen.asset_path:
+        tag = "  [identity-bearing]" if gen.identity_bearing else ""
+        lines.append(f"  Asset:      {gen.asset_path}{tag}")
+    lines.append(f"  Status:     {gen.status}  (derived from reaction; stays pending until reported)")
+    if gen.notes:
+        lines.append(f"  Notes:      {gen.notes}")
+    if gen.context:
+        lines.append(f"  Context:    {gen.context}")
+    lines.append(f"  Created:    {gen.created_at}")
+    return "\n".join(lines)
+
+
 # ── chain show ───────────────────────────────────────────────────────────────
 
 

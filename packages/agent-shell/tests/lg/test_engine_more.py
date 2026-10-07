@@ -164,3 +164,12 @@ async def test_runaway_tool_loop_stops_at_the_recursion_limit(
     assert "5 steps" in events[-1].detail
     assert 0 < len(counter.calls) < 5
     assert sum(isinstance(e, ToolCallFinished) for e in events) == len(counter.calls)
+
+
+async def test_factory_refuses_an_unresolved_1password_reference(fresh_config: Callable[..., None]) -> None:
+    fresh_config(PRODUCTION_AGENTS_ANTHROPIC_API_KEY="op://Personal/anthropic/credential")
+    with pytest.raises(EngineConfigError, match="op run"):
+        make_engine("claude")
+    fresh_config(CHAT_OPENAI_API_KEY="op://Personal/openai/credential")
+    with pytest.raises(EngineConfigError, match="1Password"):
+        make_engine("openai", "gpt-5-nano")

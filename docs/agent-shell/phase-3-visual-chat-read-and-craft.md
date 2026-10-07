@@ -81,6 +81,17 @@ The prompt is byte-stable across turns so provider prefix caching works. Project
 - **KI-4:** generation status stays `PENDING` after a successful render. Tools must not filter on status.
 - **Batch metadata regex** stops at the first `-->`. `batch_list` reports any spec whose metadata failed to parse instead of silently dropping its settings.
 
+## What was built (and where it differs from the plan above)
+
+- **Library seams.** `reads.py` (digest, templates, lessons, models, canon, verify, provenance: typed fetch with injected stores plus `render_*`), `inspect.get_generation`/`render_generation`, `batch_file.read_batch_diagnosed` (reports garbled or missing spec metadata; `read_batch` is a wrapper with unchanged behavior) and `draft.build_refinement_source`. The Click commands print the same text as before; the existing suite passed unchanged after each extraction.
+- **Async, not `*_sync`.** The `*_sync` wrappers call `asyncio.run`, which fails inside the shell's event loop. Tools call the async functions with one store pair created per session.
+- **`batch_build`** loops `draft` per scene (instead of calling `batch_project`) so each scene gets the per-call budget and the loop stops at a total cap. It refuses to overwrite; rebuild is not exposed.
+- **Project state** rides in the tool descriptions (set once per session), so the system prompt stays byte-stable and the project cannot fall out of the trimmed history window.
+- **Where drafts go:** `<AGENT_PROJECTS_DIR>/<slug>/visual-batch.md`, not the CLI's older default; stated in the README.
+- **`propose_interpretation`** is a validator, not an interpreter: the model reads the feedback and passes structured observations; the function resolves labels (unresolved -> `open_questions`) and enforces conditioning-first (an identity/staging/set failure blamed on anything but conditioning needs `evidence`). The golden check is therefore a live test (`AGENT_SHELL_LIVE=1`) over the strings in `tests/chat/golden/feedback.jsonl`, plus offline tests of the validation.
+- **Packaging.** `visual-generation[chat]` pulls `agent-shell[langgraph]`; the base install and one-shot commands do not need it. An import-linter contract (wildcard sources, so new modules are covered) keeps `agent_shell` and `visual_generation.chat` out of everything but `chat/`, with one exempt lazy import in `cli.py`.
+- **Config.** `RuntimeConfig.agent_projects_dir` (`AGENT_PROJECTS_DIR`) and `project_dir(slug)` (kebab-case only).
+
 ## Acceptance
 
 - A full crafting session works under both providers: recall, draft, redraft, batch list, explain, interpret feedback.
