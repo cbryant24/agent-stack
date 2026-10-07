@@ -6,6 +6,12 @@
 
 Per-agent notes below come from each package README in the bundle. The surface audit in step 1 reads the source and overrides them where they differ.
 
+**Status (2026-10-07).** Agent 1, music-curation, is built: audit in `docs/audit/music-curation-tool-surface.md`,
+chat in `packages/music-curation/src/music_curation/chat/`. The shared knowledge pack is
+`agent_shell.packs.knowledge` and is included in the music and visual chats. No other change to `agent-shell`
+was needed. Not yet done for this agent: a live turn against a real model, and contract tests under the
+LangGraph engine (the offline tests use the scripted engine).
+
 ## Recipe per agent
 
 1. **Surface audit.** `docs/audit/<agent>-tool-surface.md`: every CLI command, its backing library function or "inline", side effects, collection touched.

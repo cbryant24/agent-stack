@@ -9,7 +9,7 @@ A uv workspace for a multi-agent AI system. Specialized agents share a common ru
 | `agent-runtime` | Shared base types, clients, and utilities used by all agents (incl. the shared `docs_ingest` knowledge mechanism) | Complete (184 tests) |
 | `yt-intelligence-pipeline` | YouTube tutorial ingestion — Obsidian notes for humans, Qdrant vectors for agents | Complete (45 tests) |
 | `tutorial-research` | Domain-agnostic agent that discovers, ingests, and synthesizes tutorial content; queries both `tutorial_research` and `user_knowledge` collections | Complete (52 tests) |
-| `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts | Complete (214 tests) |
+| `music-curation` | Music-theory expert with persistent memory for crafting Suno prompts. `music-curation chat` is a conversation over it (every write confirmed) | Complete (264 tests) |
 | `voiceover-direction` | Director for ElevenLabs voiceover — free LLM direction, deliberate paid generation, persistent takes + direction lessons | Complete (145 tests) |
 | `concept-script` | Structural/craft scriptwriting collaborator — seeds or a dictation transcript → an editable `script.md` that `voiceover-direction` consumes unchanged | Complete (45 tests) |
 | `visual-generation` | ComfyUI-backed diffusion collaborator + platform tutor — free offline prompt-craft, deliberate warm-session GPU generation, persistent generations/technique-lessons/workflow-templates | Complete (152 tests) |
