@@ -52,6 +52,7 @@ from visual_generation.graph_build import (
 )
 from visual_generation.models import LoraRef, VisualSource, VisualSpec, _new_id
 from visual_generation.store import VisualGenerationStore
+from visual_generation.validation import validate_spec
 
 
 class QuickTemplateNotFound(RuntimeError):
@@ -64,6 +65,10 @@ class QuickSourceError(RuntimeError):
 
 class QuickLoraUnsafe(RuntimeError):
     """The template bakes in a LoRA that cannot be switched off for this render."""
+
+
+class QuickInvalidSpec(RuntimeError):
+    """A value is outside its allowed range."""
 
 
 class QuickSeedUnmapped(RuntimeError):
@@ -169,6 +174,10 @@ async def quick_generate(
         source=source,
         project=QUICK_PROJECT,
     )
+
+    problems = validate_spec(spec, effective=True)
+    if problems:
+        raise QuickInvalidSpec("; ".join(problems))
 
     graph, unmapped = build_prompt_graph(spec, template)
     if "seed" in unmapped:

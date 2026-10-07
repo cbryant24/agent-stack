@@ -243,3 +243,20 @@ DEFAULT_WAN_WIDTH = 832
 DEFAULT_WAN_HEIGHT = 480
 DEFAULT_WAN_LENGTH = 33  # frame count; must be 4n+1
 DEFAULT_WAN_FPS = 16
+
+
+# ── Value bounds (entry-gate item 5): out-of-range values are rejected at plan time ─────
+# Inclusive (low, high). Rejected, never clamped: what runs must equal what was recorded.
+# The 1.5 LoRA strength *warning* in lora_guard stays advisory; this is the hard limit.
+VALUE_BOUNDS: dict[str, tuple[float, float]] = {
+    "steps": (1, 150),
+    "cfg": (0, 30),
+    "denoise": (0, 1),
+    "flux_guidance": (0, 20),
+    "lora_strength": (0, 4),
+    "size": (64, 4096),            # width and height; also a multiple of 8
+    "seed": (0, 2**64 - 1),
+    "length": (1, 513),            # video frames, also 4n+1
+    "fps": (1, 120),
+}
+SIZE_MULTIPLE = 8

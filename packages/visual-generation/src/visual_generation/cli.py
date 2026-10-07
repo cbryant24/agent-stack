@@ -94,6 +94,7 @@ from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
 from visual_generation.models import LoraRef, VisualSource, WorkflowTemplate
 from visual_generation.quick import (
+    QuickInvalidSpec,
     QuickLoraUnsafe,
     QuickSeedUnmapped,
     QuickSourceError,
@@ -910,7 +911,7 @@ def quick(
             gpu_rate=rate,
             poll_timeout=timeout,
         )
-    except (QuickTemplateNotFound, QuickSourceError, QuickSeedUnmapped, QuickLoraUnsafe) as exc:
+    except (QuickTemplateNotFound, QuickSourceError, QuickSeedUnmapped, QuickLoraUnsafe, QuickInvalidSpec) as exc:
         raise click.ClickException(str(exc)) from exc
     except ComfyUIError as exc:
         raise click.ClickException(str(exc)) from exc

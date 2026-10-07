@@ -75,6 +75,7 @@ from visual_generation.models import (
     _new_id,
 )
 from visual_generation.store import VisualGenerationStore
+from visual_generation.validation import validate_spec
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +353,11 @@ async def plan_generation(
         # spec carries; "random" must override any leftover spec.seed.
         resolved_seed = _resolve_seed(spec)
         build_spec = spec if resolved_seed == spec.seed else spec.model_copy(update={"seed": resolved_seed})
+        problems = validate_spec(build_spec, effective=True)
+        if problems:
+            skipped.append(spec.spec_id)
+            skip_reasons[spec.spec_id] = f"Skipped {spec.spec_id}: " + "; ".join(problems)
+            continue
         graph, unmapped = build_prompt_graph(build_spec, template)
         if "seed" in unmapped:
             # The render can't honor the requested seed — the recorded seed would be fiction.
