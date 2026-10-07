@@ -47,6 +47,7 @@ from visual_generation.generate import _ext_for, _poll_history
 from visual_generation.graph_build import (
     apply_source_filenames,
     build_prompt_graph,
+    dropped_identity_loras,
     neutralize_unused_loras,
 )
 from visual_generation.models import LoraRef, VisualSource, VisualSpec, _new_id
@@ -90,6 +91,11 @@ def _resolve_template_name(
     if not video:
         return DEFAULT_QUICK_IMAGE_TEMPLATE
     return WAN_I2V_TEMPLATE_NAME if image_path else WAN_T2V_TEMPLATE_NAME
+
+
+def _registry_identity(store: VisualGenerationStore, name: str) -> bool:
+    asset = store.get_model(name)
+    return asset is not None and getattr(asset, "identity_bearing", False) is True
 
 
 async def quick_generate(
@@ -171,6 +177,12 @@ async def quick_generate(
             "can't be applied — the render would ignore it."
         )
 
+    dropped = dropped_identity_loras(spec, unmapped, lambda n: _registry_identity(store, n))
+    if dropped:
+        raise QuickLoraUnsafe(
+            f"template {resolved_template!r} has no loader for identity LoRA "
+            f"{', '.join(repr(n) for n in dropped)}, so the render would ignore that identity."
+        )
     _, stuck = neutralize_unused_loras(graph, template.slot_map, len(spec.lora_stack))
     if stuck:
         raise QuickLoraUnsafe(

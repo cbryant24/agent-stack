@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Callable
 from typing import Any
 
 from visual_generation.models import VisualSpec, WorkflowTemplate
@@ -159,3 +160,28 @@ def neutralize_unused_loras(
         else:
             stuck.append(str(name))
     return neutralized, stuck
+
+
+_LORA_UNMAPPED = re.compile(r"^lora_(\d+)(?:_strength)?$")
+
+
+def dropped_identity_loras(
+    spec: VisualSpec, unmapped: list[str], is_identity: Callable[[str], bool]
+) -> list[str]:
+    """Names of identity-bearing LoRAs in the spec's stack that the template had no slot for.
+
+    `build_prompt_graph` reports a LoRA with no loader as advisory `unmapped`. For a style LoRA
+    that is a warning; for an identity LoRA it means the render silently ignores the identity the
+    spec asked for, so the caller must not render it. Pure: `is_identity` is the registry's call.
+    """
+    names: list[str] = []
+    for item in unmapped:
+        m = _LORA_UNMAPPED.match(item)
+        if m is None:
+            continue
+        i = int(m.group(1))
+        if i < len(spec.lora_stack):
+            name = spec.lora_stack[i].name
+            if name not in names and is_identity(name):
+                names.append(name)
+    return names

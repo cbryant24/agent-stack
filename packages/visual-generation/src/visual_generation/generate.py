@@ -59,6 +59,7 @@ from visual_generation.constants import (
 from visual_generation.graph_build import (
     apply_source_filenames,
     build_prompt_graph,
+    dropped_identity_loras,
     neutralize_unused_loras,
     write_slot,
 )
@@ -303,6 +304,12 @@ async def _provision_source(
     )
 
 
+def _registry_identity(store: VisualGenerationStore, name: str) -> bool:
+    """Whether the registry marks `name` identity-bearing (strictly True, never a truthy stand-in)."""
+    asset = store.get_model(name)
+    return asset is not None and getattr(asset, "identity_bearing", False) is True
+
+
 def _record_gpu(per_run_seconds: float, per_run_cost: float, session_cost: float) -> None:
     span = trace.get_current_span()
     span.set_attribute(GPU_SECONDS_SPAN_ATTR, per_run_seconds)
@@ -353,6 +360,17 @@ async def plan_generation(
                 f"Skipped {spec.spec_id}: workflow template '{template.name}' has no seed "
                 "slot, so the requested seed can't be applied — use a template with a "
                 "sampler seed, or register it again so the seed slot is inferred"
+            )
+            continue
+        dropped = dropped_identity_loras(spec, unmapped, lambda n: _registry_identity(store, n))
+        if dropped:
+            loaders = sum(1 for k in template.slot_map if k.startswith("lora_") and k[5:].isdigit())
+            skipped.append(spec.spec_id)
+            skip_reasons[spec.spec_id] = (
+                f"Skipped {spec.spec_id}: workflow template '{template.name}' has {loaders} LoRA "
+                f"loader slot(s) but the spec stacks {len(spec.lora_stack)}; identity LoRA "
+                f"{', '.join(repr(n) for n in dropped)} would be silently dropped and the render "
+                "would ignore that identity — use a template with enough loaders, or remove it"
             )
             continue
         neutralized, stuck = neutralize_unused_loras(graph, template.slot_map, len(spec.lora_stack))
