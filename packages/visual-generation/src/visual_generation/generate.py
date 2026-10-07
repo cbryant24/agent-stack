@@ -74,6 +74,13 @@ from visual_generation.models import (
     WorkflowTemplate,
     _new_id,
 )
+from visual_generation.provenance import (
+    canonical_json,
+    now_iso,
+    provenance_record,
+    sha256_hex,
+    write_provenance,
+)
 from visual_generation.store import VisualGenerationStore
 from visual_generation.validation import validate_spec
 
@@ -105,6 +112,8 @@ class SourceProvision:
     chain_root_id: str | None
     source_image_path: str | None
     source_mask_path: str | None
+    # One entry per uploaded file: role, local path, sha256 of the uploaded bytes, pod-side name.
+    uploads: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -268,7 +277,12 @@ async def _provision_source(
             )
 
     # Collision-proof pod names: the input dir is shared and overwrite=True.
-    pod_init = await client.upload_image(local.read_bytes(), f"{sp.spec.spec_id}_{local.name}")
+    init_bytes = local.read_bytes()
+    pod_init = await client.upload_image(init_bytes, f"{sp.spec.spec_id}_{local.name}")
+    uploads: list[dict[str, Any]] = [{
+        "role": "init_image", "local_path": str(local), "sha256": sha256_hex(init_bytes),
+        "uploaded_as": pod_init,
+    }]
 
     pod_mask: str | None = None
     mask_path: str | None = None
@@ -278,10 +292,15 @@ async def _provision_source(
             raise _SourceSkip(
                 f"Skipped {sp.spec.spec_id}: mask {src.mask} does not exist"
             )
+        mask_bytes = mask_local.read_bytes()
         pod_mask = await client.upload_image(
-            mask_local.read_bytes(), f"{sp.spec.spec_id}_mask_{mask_local.name}"
+            mask_bytes, f"{sp.spec.spec_id}_mask_{mask_local.name}"
         )
         mask_path = str(mask_local)
+        uploads.append({
+            "role": "mask", "local_path": str(mask_local), "sha256": sha256_hex(mask_bytes),
+            "uploaded_as": pod_mask,
+        })
 
     unmapped = apply_source_filenames(
         sp.graph, sp.template.slot_map, init_image=pod_init, mask=pod_mask
@@ -302,6 +321,7 @@ async def _provision_source(
         chain_root_id=chain_root_id,
         source_image_path=str(local),
         source_mask_path=mask_path,
+        uploads=uploads,
     )
 
 
@@ -483,6 +503,10 @@ async def spend_generation(
                         skip_reasons.append(skip.reason)
                         continue
 
+                    # Snapshot the graph as it is right now: these are the bytes that get hashed
+                    # and saved, whatever the client does to its argument.
+                    graph_json = canonical_json(sp.graph)
+                    started_at = now_iso()
                     prompt_id = await client.submit(sp.graph)
                     record = await _poll_history(
                         client, prompt_id, poll_interval, poll_timeout, clock
@@ -513,6 +537,22 @@ async def spend_generation(
                         ext=_ext_for(img["filename"]),
                     )
 
+                    files = write_provenance(
+                        asset_path,
+                        identity_bearing=identity,
+                        graph_json=graph_json,
+                        record=provenance_record(
+                            generation_id=gen_id, spec=sp.spec, template=sp.template,
+                            graph_json=graph_json, prompt_id=prompt_id, endpoint=endpoint,
+                            resolved_seed=sp.resolved_seed, effective_settings=_effective_settings(sp.spec),
+                            sources=list(provision.uploads) if provision else [],
+                            outputs=[{"path": str(asset_path), "sha256": sha256_hex(data)}],
+                            unmapped=sp.unmapped, neutralized_loras=sp.neutralized_loras,
+                            started_at=started_at, completed_at=now_iso(), seconds=clock() - t0,
+                            identity_bearing=identity,
+                        ),
+                    )
+
                     per_run_seconds = clock() - t0
                     per_run_cost = meter.per_run_cost(per_run_seconds)
                     meter.add_run(per_run_seconds)
@@ -540,6 +580,8 @@ async def spend_generation(
                         chain_root_id=(provision.chain_root_id or "") if provision else "",
                         source_image_path=provision.source_image_path if provision else None,
                         source_mask_path=provision.source_mask_path if provision else None,
+                        submitted_graph_sha256=files.graph_sha256,
+                        provenance_path=str(files.provenance_path),
                     )
                     await store.upsert_generation(gen)
                     _record_gpu(per_run_seconds, per_run_cost, running_cost)

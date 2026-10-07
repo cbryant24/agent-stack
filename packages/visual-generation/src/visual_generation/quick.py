@@ -51,6 +51,13 @@ from visual_generation.graph_build import (
     neutralize_unused_loras,
 )
 from visual_generation.models import LoraRef, VisualSource, VisualSpec, _new_id
+from visual_generation.provenance import (
+    canonical_json,
+    now_iso,
+    provenance_record,
+    sha256_hex,
+    write_provenance,
+)
 from visual_generation.store import VisualGenerationStore
 from visual_generation.validation import validate_spec
 
@@ -86,6 +93,9 @@ class QuickResult:
     video: bool
     # Requested values the template had no slot for — they did not reach the render.
     unmapped: list[str] = field(default_factory=list)
+    # The submitted graph and the provenance record saved beside the output.
+    graph_path: Path | None = None
+    provenance_path: Path | None = None
 
 
 def _resolve_template_name(
@@ -192,7 +202,7 @@ async def quick_generate(
             f"template {resolved_template!r} has no loader for identity LoRA "
             f"{', '.join(repr(n) for n in dropped)}, so the render would ignore that identity."
         )
-    _, stuck = neutralize_unused_loras(graph, template.slot_map, len(spec.lora_stack))
+    neutralized, stuck = neutralize_unused_loras(graph, template.slot_map, len(spec.lora_stack))
     if stuck:
         raise QuickLoraUnsafe(
             f"template {resolved_template!r} bakes in LoRA {', '.join(repr(n) for n in stuck)} and "
@@ -201,6 +211,7 @@ async def quick_generate(
 
     client = client or ComfyUIClient(endpoint)
     t0 = time.monotonic()
+    quick_sources: list[dict[str, Any]] = []
 
     if source is not None:
         local = Path(image_path)  # type: ignore[arg-type]
@@ -210,13 +221,20 @@ async def quick_generate(
             raise QuickSourceError(
                 f"template {resolved_template!r} has no init_image slot — it can't take a seed image."
             )
-        pod_name = await client.upload_image(local.read_bytes(), f"quick_{local.name}")
+        seed_bytes = local.read_bytes()
+        pod_name = await client.upload_image(seed_bytes, f"quick_{local.name}")
+        quick_sources.append({
+            "role": "init_image", "local_path": str(local), "sha256": sha256_hex(seed_bytes),
+            "uploaded_as": pod_name,
+        })
         source_unmapped = apply_source_filenames(graph, template.slot_map, init_image=pod_name)
         if "init_image" in source_unmapped:
             raise QuickSourceError(
                 f"template {resolved_template!r} could not accept the seed image."
             )
 
+    graph_json = canonical_json(graph)          # the bytes that get hashed and saved
+    started_at = now_iso()
     prompt_id = await client.submit(graph)
     record = await _poll_history(client, prompt_id, poll_interval, poll_timeout, time.monotonic)
     media = client.videos_from_history(record) if video else client.images_from_history(record)
@@ -242,6 +260,21 @@ async def quick_generate(
             ext=_ext_for(item["filename"]),
         )
 
+    files = write_provenance(
+        asset_path,
+        identity_bearing=False,
+        guard=out_path is None,             # a path the caller chose is theirs; the default is guarded
+        graph_json=graph_json,
+        record=provenance_record(
+            generation_id=asset_path.stem, spec=spec, template=template, graph_json=graph_json,
+            prompt_id=prompt_id, endpoint=endpoint, resolved_seed=resolved_seed,
+            effective_settings=dict(spec.settings), sources=quick_sources,
+            outputs=[{"path": str(asset_path), "sha256": sha256_hex(data)}],
+            unmapped=unmapped, neutralized_loras=neutralized, started_at=started_at,
+            completed_at=now_iso(), seconds=elapsed, identity_bearing=False,
+        ),
+    )
+
     return QuickResult(
         asset_path=asset_path,
         template_name=resolved_template,
@@ -251,6 +284,8 @@ async def quick_generate(
         estimated_cost_usd=elapsed / 3600 * gpu_rate,
         video=video,
         unmapped=unmapped,
+        graph_path=files.graph_path,
+        provenance_path=files.provenance_path,
     )
 
 

@@ -126,6 +126,10 @@ class VisualGeneration(BaseModel):
     # capture the external-image case (no parent) and aid reproduction.
     source_image_path: str | None = None
     source_mask_path: str | None = None
+    # Execution provenance (additive): the sha256 of the exact graph submitted and the path of
+    # the provenance file saved beside the asset. None for generations made before they existed.
+    submitted_graph_sha256: str | None = None
+    provenance_path: str | None = None
     created_at: str = Field(default_factory=_now_iso)
     reacted_at: str | None = None
 
