@@ -28,7 +28,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -36,7 +35,7 @@ from typing import Any
 import click
 
 from visual_generation.agent import _get_stores
-from visual_generation.batch_file import read_batch, remove_spec, write_batch
+from visual_generation.batch_file import read_batch
 from visual_generation.comfyui_client import ComfyUIClient, ComfyUIError
 from visual_generation.constants import (
     DEFAULT_GPU_RATE_USD_PER_HR,
@@ -52,6 +51,26 @@ from visual_generation.constants import (
     REACTIONS,
 )
 from visual_generation.canon import ProjectCanon
+from visual_generation.curation import (
+    CanonEdit,
+    add_fact,
+    add_lesson,
+    commit_workflow,
+    edit_canon_subject,
+    find_batch_spec,
+    find_canon_subject,
+    load_graph_file,
+    lookup_lesson,
+    lookup_model,
+    parse_lora,
+    plan_workflow,
+    remove_batch_spec,
+    remove_canon_subject,
+    remove_lesson,
+    remove_model,
+    render_workflow_plan,
+    set_canon_subject,
+)
 from visual_generation.draft import (
     RefinementSourceError,
     batch_project_sync,
@@ -73,7 +92,7 @@ from visual_generation.inspect import (
 from visual_generation.lora_guard import strength_warnings
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
-from visual_generation.models import LoraRef, TechniqueLesson, VisualSource, WorkflowTemplate
+from visual_generation.models import LoraRef, VisualSource, WorkflowTemplate
 from visual_generation.quick import (
     QuickSeedUnmapped,
     QuickSourceError,
@@ -97,7 +116,6 @@ from visual_generation.reads import (
 )
 from visual_generation.report import report_sync
 from visual_generation.research import register_delegate_handlers, render_research, research_sync
-from visual_generation.slot_inference import infer_slots
 
 
 @click.group()
@@ -218,16 +236,15 @@ def model_rm(name: str, yes: bool) -> None:
     the clean fix.
     """
     registry = ModelRegistry()
-    asset = registry.get_model(name)
-    if asset is None:
-        raise click.ClickException(
-            f"No registered asset named {name!r}. See: agent visual-generation model list"
-        )
+    try:
+        asset = lookup_model(name, registry)
+    except LookupError as exc:
+        raise click.ClickException(str(exc)) from exc
     flag = " [identity-bearing]" if asset.identity_bearing else ""
     click.echo(f"Will unregister: [{asset.kind}] {name}{flag}")
     if not yes:
         click.confirm("Remove this entry from the registry?", abort=True)
-    registry.remove(name)
+    remove_model(name, registry)
     click.echo(f"Unregistered {name}. Registry now at {registry.path}")
 
 
@@ -254,75 +271,49 @@ def workflow_register(graph_file: str, name: str | None, descriptor: str | None,
     """
     path = Path(graph_file)
     try:
-        graph = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise click.ClickException(f"Not valid JSON: {exc}") from exc
-    if not isinstance(graph, dict) or not graph:
-        raise click.ClickException(
-            "Expected an API-format graph (node_id → {class_type, inputs}). "
-            "Export with ComfyUI's 'Export Workflow (API)'."
-        )
+        graph = load_graph_file(path)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     name = name or path.stem
-    inferred = infer_slots(graph)
-    slot_map = dict(inferred.slot_map)
+    plan = plan_workflow(graph, name)
 
     # ── Propose ──────────────────────────────────────────────────────────────
-    click.echo(f"── Inferred slots for '{name}' ──────────────────────")
-    if slot_map:
-        for slot, target in slot_map.items():
-            click.echo(f"  {slot:14} → node {target['node_id']}.{target['input_key']}")
-    else:
-        click.echo("  (none inferred)")
-    if inferred.notes:
-        click.echo("\nNotes:")
-        for note in inferred.notes:
-            click.echo(f"  • {note}")
+    click.echo(render_workflow_plan(plan))
 
     # ── Confirm / correct ────────────────────────────────────────────────────
+    add_negative = False
     if not yes:
         # The one genuinely ambiguous slot the heuristic can offer to correct:
         # a suppressed negative whose placeholder node we actually know.
-        if inferred.negative_suppressed and inferred.negative_candidate is not None:
-            if click.confirm(
+        if plan.negative_suppressed and plan.negative_candidate is not None:
+            add_negative = click.confirm(
                 "Negative prompt was suppressed. Add a negative slot at the traced node?",
                 default=False,
-            ):
-                slot_map["negative"] = inferred.negative_candidate
+            )
         if not click.confirm("Accept this slot map?", default=True):
             raise click.ClickException("Aborted — re-export or edit the graph and retry.")
 
     # ── Required-model advisory (never blocks) ───────────────────────────────
-    registry = ModelRegistry()
-    known = {a.name for a in registry.list_models()}
-    missing = [m for m in inferred.required_models if m not in known]
-    if inferred.required_models:
-        click.echo(f"\nRequired models: {', '.join(inferred.required_models)}")
-    if missing:
+    if plan.required_models:
+        click.echo(f"\nRequired models: {', '.join(plan.required_models)}")
+    if plan.missing_models:
         click.echo(
             f"  ⚠ Not in registry (run `model sync` against a pod that has them): "
-            f"{', '.join(missing)}"
+            f"{', '.join(plan.missing_models)}"
         )
 
     if descriptor is None:
         descriptor = click.prompt("Descriptor (what this template serves)", default=name)
 
-    template = WorkflowTemplate(
-        name=name,
-        descriptor=descriptor,
-        graph=graph,
-        slot_map=slot_map,
-        required_models=inferred.required_models,
-    )
-
-    async def _store() -> str:
+    async def _store() -> WorkflowTemplate:
         store, _ = _get_stores()
-        await store.ensure_collection()
-        await store.upsert_template(template)
-        return template.entry_id
+        return await commit_workflow(plan, descriptor, store, add_negative=add_negative)
 
-    entry_id = asyncio.run(_store())
-    click.echo(f"\nRegistered template '{name}' ({entry_id[:12]}) with {len(slot_map)} slot(s).")
+    template = asyncio.run(_store())
+    click.echo(
+        f"\nRegistered template '{name}' ({template.entry_id[:12]}) with {len(template.slot_map)} slot(s)."
+    )
 
 
 @workflow.command("list")
@@ -1166,17 +1157,15 @@ def batch_rm(spec_id: str, batch_file: str | None, project: str | None, yes: boo
         agent visual-generation batch rm <spec_id> --project celeste-you-dangerous
     """
     path = _resolve_batch_path(batch_file, project)
-    parsed = read_batch(path)
-    target = next((s for s in parsed.specs if s.spec_id == spec_id), None)
-    if target is None:
-        known = ", ".join(s.spec_id for s in parsed.specs) or "(none)"
-        raise click.ClickException(f"No spec with id {spec_id} in this batch. Known: {known}")
+    try:
+        _, target = find_batch_spec(path, spec_id)
+    except LookupError as exc:
+        raise click.ClickException(str(exc)) from exc
     if not yes:
         title = target.heading or (target.prompt[:60] if target.prompt else spec_id)
         click.confirm(f"Remove spec {spec_id} ({title})?", abort=True)
-    remove_spec(parsed, spec_id)
-    write_batch(parsed, path)
-    click.echo(f"Removed spec {spec_id}. {len(parsed.specs)} spec(s) remain.")
+    _, remaining = remove_batch_spec(path, spec_id)
+    click.echo(f"Removed spec {spec_id}. {remaining} spec(s) remain.")
 
 
 # ── Project canon (deterministic, file-backed) ───────────────────────────────
@@ -1184,16 +1173,12 @@ def batch_rm(spec_id: str, batch_file: str | None, project: str | None, yes: boo
 
 def _parse_lora(spec: str) -> LoraRef:
     """Parse a NAME[:STRENGTH] CLI token into a LoraRef (strength defaults to 1.0)."""
-    name, _, strength = spec.partition(":")
-    name = name.strip()
-    if not name:
-        raise click.BadParameter("--lora needs a registry name (NAME[:STRENGTH])")
-    if not strength:
-        return LoraRef(name=name)
     try:
-        return LoraRef(name=name, strength=float(strength))
+        return parse_lora(spec)
     except ValueError as exc:
-        raise click.BadParameter(f"--lora strength {strength!r} is not a number") from exc
+        raise click.BadParameter(
+            str(exc).replace("a lora needs", "--lora needs").replace("lora strength", "--lora strength")
+        ) from exc
 
 
 @cli.group()
@@ -1232,15 +1217,16 @@ def canon_set(
     are dropped. Use `canon edit` for surgical changes that preserve them."""
     lora_ref = _parse_lora(lora) if lora else None
     store = ProjectCanon(project)
-    existed = any(selector_matches(s, aliases[0]) for s in store.load())
-    subject = store.set_subject(
-        list(aliases), lora=lora_ref, id=subject_id, reference_pack=reference_pack,
-        wardrobe=wardrobe, hair=hair, region=region,
+    change = set_canon_subject(
+        project, list(aliases), lora=lora_ref, id=subject_id, reference_pack=reference_pack,
+        wardrobe=wardrobe, hair=hair, region=region, canon=store,
     )
-    verb = "replaced" if existed else "set"
+    subject = change.after
+    assert subject is not None
+    verb = "replaced" if change.existed else "set"
     click.echo(f"Canon {verb} for {project!r} (subject '{subject.aliases[0]}'):")
     _echo_subject(subject, indent="  ")
-    if existed:
+    if change.existed:
         click.echo(
             "\nNote: `canon set` REPLACES the whole subject (legacy locked/forbid are "
             "dropped). To change just one field without restating the rest, use `canon edit`."
@@ -1300,9 +1286,12 @@ def canon_edit(
         canon edit celeste-you-dangerous "the narrator" \\
           --id narrator_v1 --reference-pack narrator_refs_v1
     """
-    field_edits = [subject_id, reference_pack, wardrobe, hair, region]
-    if not any([add_alias, rm_alias, lora is not None, clear_lora,
-                *[v is not None for v in field_edits]]):
+    edit = CanonEdit(
+        add_aliases=list(add_alias), remove_aliases=list(rm_alias),
+        lora=_parse_lora(lora) if lora else None, clear_lora=clear_lora, id=subject_id,
+        reference_pack=reference_pack, wardrobe=wardrobe, hair=hair, region=region,
+    )
+    if edit.is_empty():
         raise click.UsageError(
             "Nothing to edit. Pass at least one of --add-alias / --rm-alias / --id / "
             "--reference-pack / --wardrobe / --hair / --region / --lora / --clear-lora."
@@ -1310,18 +1299,12 @@ def canon_edit(
     if lora and clear_lora:
         raise click.UsageError("Pass either --lora or --clear-lora, not both.")
     store = ProjectCanon(project)
-    before = next((s for s in store.load() if selector_matches(s, subject)), None)
+    before = find_canon_subject(project, subject, store)
     if before is not None:
         click.echo("Before:")
         _echo_subject(before, indent="  ")
     try:
-        updated = store.update_subject(
-            subject,
-            add_aliases=list(add_alias), remove_aliases=list(rm_alias),
-            lora=_parse_lora(lora) if lora else None, clear_lora=clear_lora,
-            id=subject_id, reference_pack=reference_pack, wardrobe=wardrobe,
-            hair=hair, region=region,
-        )
+        updated = edit_canon_subject(project, subject, edit, canon=store).after
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo("\nAfter:")
@@ -1334,8 +1317,7 @@ def canon_edit(
 @click.argument("alias")
 def canon_rm(project: str, alias: str) -> None:
     """Remove the canon subject that any of whose aliases match ALIAS."""
-    store = ProjectCanon(project)
-    if store.remove(alias):
+    if remove_canon_subject(project, alias) is not None:
         click.echo(f"Removed canon subject matching {alias!r} from {project!r}.")
     else:
         click.echo(f"No canon subject matching {alias!r} in {project!r}.", err=True)
@@ -1362,9 +1344,7 @@ def lesson_add(statement: str, scope: str, valence: str) -> None:
 
     async def _run() -> None:
         store, _ = _get_stores()
-        await store.ensure_collection()
-        le = TechniqueLesson(statement=statement, scope=scope, valence=valence, confirmed=True)
-        await store.upsert_lesson(le)
+        await add_lesson(statement, scope, valence, store=store)
         click.echo(f"Added technique lesson [{valence}/{scope}]: {statement[:60]}")
 
     asyncio.run(_run())
@@ -1399,18 +1379,17 @@ def lesson_rm(entry_id: str, yes: bool) -> None:
 
     async def _run() -> None:
         store, _ = _get_stores()
-        await store.ensure_collection()
         try:
-            le = await store.get_lesson(entry_id)
+            le = await lookup_lesson(entry_id, store)
         except ValueError as exc:
             raise click.ClickException(
                 f"Entry {entry_id} is a {exc}, not a technique_lesson; refusing to delete.")
-        if le is None:
-            raise click.ClickException(f"No technique lesson with id {entry_id}.")
+        except LookupError as exc:
+            raise click.ClickException(str(exc))
         if not yes:
             click.confirm(
                 f"Remove [{le.valence}/{le.scope}] {le.statement[:60]}?", abort=True)
-        await store.delete_lesson(entry_id)
+        await remove_lesson(entry_id, store, lesson=le)
         click.echo(f"Removed technique lesson {entry_id}: {le.statement[:60]}")
 
     asyncio.run(_run())
@@ -1433,14 +1412,9 @@ def fact_add(statement: str, domain: str, confidence: str) -> None:
 
     async def _run() -> None:
         uks = UserKnowledgeStore(get_memory_store())
-        await uks.ensure_collection()
-        entry_ids = await uks.bulk_load_verified(
-            [{"statement": statement, "domain": domain,
-              "source_type": "user_verified", "confidence": confidence}],
-            source_ref="manual:cli",
-        )
+        entry_id = await add_fact(statement, domain, uks=uks, confidence=confidence)
         click.echo(f"Added fact to {domain}: {statement[:60]}")
-        click.echo(f"Entry ID: {entry_ids[0]}")
+        click.echo(f"Entry ID: {entry_id}")
 
     asyncio.run(_run())
 

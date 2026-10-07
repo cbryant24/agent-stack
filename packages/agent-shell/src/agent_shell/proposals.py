@@ -19,6 +19,9 @@ class Proposal(BaseModel):
     kind: str                       # e.g. "lesson", "interpretation"
     summary: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    # The registry tool that carries this write out when the proposal is accepted (payload =
+    # its arguments). None means the caller applies it.
+    tool: str | None = None
 
     @property
     def id(self) -> str:
@@ -62,7 +65,7 @@ async def walk_proposals(
         elif decision.kind == "edit":
             report.accepted.append(p.model_copy(update={"payload": decision.payload or p.payload}))
         elif decision.kind == "defer":
-            write_draft(drafts_dir, p.kind, p.payload, summary=p.summary)
+            write_draft(drafts_dir, p.kind, p.payload, summary=p.summary, tool=p.tool)
             report.deferred.append(p)
         else:
             report.skipped.append(p)

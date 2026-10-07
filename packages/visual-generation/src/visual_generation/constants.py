@@ -15,6 +15,7 @@ COLLECTION_NAME = "visual_generation_memory"
 MEMORY_TYPE_GENERATION = "generation"
 MEMORY_TYPE_TECHNIQUE_LESSON = "technique_lesson"
 MEMORY_TYPE_WORKFLOW_TEMPLATE = "workflow_template"
+MEMORY_TYPE_EVALUATION = "evaluation"
 
 # Generation lifecycle status (derived from reaction).
 STATUS_PENDING = "pending"

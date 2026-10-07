@@ -32,4 +32,5 @@ def run_chat(
         raise click.ClickException(str(e)) from e
     settings = ShellSettings(agent_data_dir=config.agent_data_dir, dry_run=dry_run)
     session = Session(build_chat_config(state), settings, engine)
+    state.session = session          # session id and current engine, for evaluation records
     asyncio.run(ShellApp(session, engine_factory=make_engine).run(resume_id))

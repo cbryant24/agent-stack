@@ -38,8 +38,12 @@ class ToolSpec(BaseModel):
     input_model: type[BaseModel]
     effect: EffectClass
     handler: Callable[..., Awaitable[ToolResult]]
-    preview: Callable[..., str] | None = None   # text shown in the confirm panel
+    # Text shown in the confirm panel. May be async, so it can read what the call will touch.
+    preview: Callable[..., str | Awaitable[str]] | None = None
     estimate_cost: Callable[..., float] | None = None
+    # Optional async check run BEFORE the gate: return a message and the call is refused with it
+    # (an error result, no prompt), so the user is never asked to approve a call that would fail.
+    precheck: Callable[..., Awaitable[str | None]] | None = None
 
 
 class Registry:

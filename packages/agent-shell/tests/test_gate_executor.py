@@ -159,3 +159,69 @@ async def test_budgets_are_independent() -> None:
     assert budgets.tool.max_usd == 1.0  # child envelope is capped by the parent
     budgets.gpu.charge(2.0)
     assert budgets.gpu.exhausted and not budgets.repl.exhausted and not budgets.tool.exhausted
+
+
+async def test_precheck_refusal_is_an_error_result_with_no_prompt_and_no_call(
+    tmp_path: Path, counter: Counter
+) -> None:
+    c = AutoConfirmer("accept")
+    ex, _, audit = build(tmp_path, c)
+    tool = make_tool("m", EffectClass.MEMORY_WRITE, counter)
+
+    async def refuse(a: object) -> str | None:
+        return "this would break a rule"
+
+    res = await ex.run(tool.model_copy(update={"precheck": refuse}), {"text": "x"})
+    assert res.is_error and res.text == "this would break a rule" and res.data == {"refused": True}
+    assert c.requests == [] and counter.calls == []                         # the user is never asked
+    assert audit.read()[0]["decision"] == "precheck_failed"
+
+
+async def test_precheck_that_passes_changes_nothing_and_a_broken_one_is_an_error(
+    tmp_path: Path, counter: Counter
+) -> None:
+    ex, _, audit = build(tmp_path, AutoConfirmer("accept", "accept"))
+    tool = make_tool("m", EffectClass.MEMORY_WRITE, counter)
+
+    async def fine(a: object) -> str | None:
+        return None
+
+    async def broken(a: object) -> str | None:
+        raise RuntimeError("store down")
+
+    assert (await ex.run(tool.model_copy(update={"precheck": fine}), {})).text == "m ran x"
+    res = await ex.run(tool.model_copy(update={"precheck": broken}), {})
+    assert res.is_error and "RuntimeError: store down" in res.text and counter.calls == ["x"]
+    assert audit.read()[1]["decision"] == "precheck_error"
+
+
+async def test_an_async_preview_is_awaited_for_the_confirm_panel(tmp_path: Path, counter: Counter) -> None:
+    c = AutoConfirmer("reject")
+    ex, _, _ = build(tmp_path, c)
+
+    async def preview(a: object) -> str:
+        return "fetched from the store: the exact item"
+
+    await ex.run(make_tool("d", EffectClass.DESTRUCTIVE_LOCAL, counter).model_copy(update={"preview": preview}), {})
+    assert c.requests[0].preview == "fetched from the store: the exact item"
+
+
+async def test_a_failing_preview_is_an_error_result_not_a_crash(tmp_path: Path, counter: Counter) -> None:
+    ex, _, audit = build(tmp_path, AutoConfirmer("accept"))
+
+    def preview(a: object) -> str:
+        raise OSError("disk gone")
+
+    res = await ex.run(make_tool("d", EffectClass.DESTRUCTIVE_LOCAL, counter).model_copy(update={"preview": preview}), {})
+    assert res.is_error and "OSError" in res.text and counter.calls == []
+    assert audit.read()[0]["decision"] == "preview_error"
+
+
+async def test_precheck_also_guards_confirmed_proposals(tmp_path: Path, counter: Counter) -> None:
+    ex, _, _ = build(tmp_path, AutoConfirmer())
+
+    async def refuse(a: object) -> str | None:
+        return "no"
+
+    res = await ex.run(make_tool("m", EffectClass.MEMORY_WRITE, counter).model_copy(update={"precheck": refuse}), {}, confirmed=True)
+    assert res.is_error and counter.calls == []

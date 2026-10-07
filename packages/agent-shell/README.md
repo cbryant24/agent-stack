@@ -63,6 +63,13 @@ testing.py          small helpers for tool tests
 
 Tool errors are results, not crashes: a handler exception becomes `ToolResult(is_error=True, text="<ExcType>: <message>")` and is audited.
 
+### Beyond the basics (tools that need to read before they ask)
+
+- `ToolSpec.preview` may be `async`, so the confirm panel can show what the call will actually touch (a lesson's text, a record with its labels resolved).
+- `ToolSpec.precheck` (async) runs **before** the gate and can refuse the call with a message: the user is never asked to approve something that would fail. Audited as `precheck_failed`.
+- `Proposal.tool` names the registry tool that carries a proposal out. At `/exit` an **accepted** proposal is run through that tool (`Session.apply_proposal`, i.e. `Executor.run(..., confirmed=True)`: the accept was the confirmation, so the gate is skipped, but validation, dry-run and the audit still apply; audited as `proposal_accept`). Deferred ones queue as drafts carrying the tool name and arguments.
+- Audit records include `result_data` and `artifacts`, so the log alone shows what was written (ids, counts) next to the arguments and the decision.
+
 ### What an agent supplies
 
 ```python

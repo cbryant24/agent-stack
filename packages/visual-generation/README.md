@@ -680,11 +680,11 @@ the targeted spec is dropped.
 
 ### `chat [--provider claude|openai] [--model M] [--project <slug>] [--resume <id>] [--dry-run]`  (alias: `visual-agent`)
 
-A conversation over the same read and craft functions, so you can look things up, craft and revise
-specs, and have your feedback turned into a structured proposal without typing one command per step.
-**No GPU spend and no memory writes in this phase**: it cannot `generate`, `quick`, `report`, add
-lessons or facts, change canon, or sync models. When a step needs one of those, it says so and you run
-the command yourself.
+A conversation over the same read, craft and curation functions, so you can look things up, craft and
+revise specs, give feedback that becomes a structured, lineage-linked evaluation, and fix memory without
+typing one command per step. **It can never spend on a GPU**: no `generate`, `quick` or `model sync`.
+**Every write asks you first** (confirm, edit, defer or reject; destructive ones show the exact item and
+are yes/no only), and rejecting leaves memory unchanged.
 
 ```bash
 uv sync --all-packages --extra chat            # the chat libraries are an optional extra
@@ -695,10 +695,32 @@ agent visual-generation chat --provider openai --model <model with a price row>
 
 Without the extra, every other command still works and `chat` prints how to install it.
 
-- **Tools** (16): `recall`, `review_pending`, `chain_show`, `inspect_generation`, `digest`, `batch_list`,
-  `model_list`, `workflow_list`, `lesson_list`, `canon_show`, `knowledge_verify` (reads);
-  `explain`, `draft`, `redraft`, `batch_build` (LLM calls, a few cents; capped per call);
-  `propose_interpretation` (structures your feedback; stores nothing).
+- **Tools** (28): `recall` (now also returns evaluations), `review_pending`, `chain_show`,
+  `inspect_generation`, `digest`, `batch_list`, `model_list`, `workflow_list`, `lesson_list`, `canon_show`,
+  `knowledge_verify`, `list_evaluations` (reads); `explain`, `draft`, `redraft`, `batch_build` (LLM calls, a
+  few cents; capped per call); `propose_interpretation` (structures your feedback; stores nothing);
+  memory writes behind the gate: `report`, `record_evaluation`, `add_lesson`, `add_fact`, `canon_set`,
+  `canon_edit`, `workflow_register`; destructive, showing the exact item: `lesson_rm`, `batch_rm`,
+  `model_rm`, `canon_rm`.
+- **Feedback becomes an evaluation.** Tell it your reaction and what you saw; it calls
+  `propose_interpretation` (a proposal, nothing stored), you read it, then `record_evaluation` shows the
+  full record and you confirm, edit or defer. The record is a new `evaluation` point in
+  `visual_generation_memory`, linked to the generation and its chain, and it also sets the generation's
+  reaction (what `report` does). Lessons are offered one at a time and are never auto-confirmed. Anything
+  proposed but unwritten at `/exit` is offered again; accepted ones are written, deferred ones queue under
+  `~/agent-data/drafts/visual-generation/`.
+- **Guardrails enforced in code** (from `docs/agent-retrospective-corrections.md` §D, not left to the
+  prompt): a prompt-layer lesson about identity, staging or set geometry needs a `falsification_test`;
+  `claim_level="validated"` needs `evidence_n >= 5` and a held-out evaluation id that exists; after three
+  failed attempts at one fix class (`strike_class`) in a chain, a fourth redraft needs a written
+  architecture question (layer blamed + a different alternative layer), and `redraft` refuses until one is
+  recorded; and the model may not invent numbers (a number in a proposed change must come from your words
+  or the attempt's own recipe; anything new is an open parameter for you to decide).
+- **Evaluations of older generations are marked unresolved.** Until you set `EXECUTION_TRUTH_VERIFIED_SINCE`
+  (an ISO date, in your environment) to the date execution was verified, every evaluation of a generation
+  made before it gets `agent_status="unresolved"` and a finding that the recorded seed may not match the
+  submitted graph. Unset means nothing is trusted yet. The date to use is when Gate 0 (the seed check in
+  `evaluation-charter.md`) passes, not when the code fix landed.
 - **Labels.** Results show generations as `attempt-07 (a1b2c3d4)`: the project's generations, oldest first,
   numbered from 1. `attempt-7`, `#7`, `latest`, a full id, or a unique id prefix (8+ characters) all resolve.
   Anything else is not guessed: it comes back as an open question.
@@ -714,8 +736,9 @@ Without the extra, every other command still works and `chat` prints how to inst
 - **Keys.** The conversation uses `PRODUCTION_AGENTS_ANTHROPIC_API_KEY` (Claude) or `CHAT_OPENAI_API_KEY`
   (OpenAI, falling back to `PRODUCTION_AGENTS_OPENAI_API_KEY`). `explain` and the craft step inside
   `draft`/`redraft` always use Claude, so the Anthropic key is needed even when the conversation runs on OpenAI.
-- **Tests.** `uv run pytest packages/visual-generation/tests/chat`. The live check over your own feedback
-  strings (`tests/chat/golden/feedback.jsonl`, format in its README) costs a few cents:
+- **Tests.** `uv run pytest packages/visual-generation/tests/chat -rs`. The confirm / reject / edit / defer
+  checks run against a real Qdrant (a throwaway collection per test, embeddings faked) and are skipped with
+  a note in the summary if Qdrant is down. The live check over your own feedback strings (`tests/chat/golden/feedback.jsonl`, format in its README) costs a few cents:
   `op run --env-file=.env -- env AGENT_SHELL_LIVE=1 uv run pytest packages/visual-generation -m live -v`.
 
 ### `lesson list [--include-unconfirmed] [--scope S] [--valence V]`

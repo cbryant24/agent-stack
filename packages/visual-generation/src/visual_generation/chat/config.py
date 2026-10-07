@@ -24,5 +24,7 @@ def build_chat_config(state: ChatState) -> ChatConfig:
         system_prompt=system_prompt(),
         tool_pack=lambda: tool_pack(state),
         default_budget=BudgetEnvelope(max_cost_usd=1.0, max_depth=1),
-        on_session_end=None,      # Phase 4 adds proposals for confirmed memory writes
+        # Anything proposed but not written by /exit is offered again (accepted ones are applied
+        # through their tool; deferred ones queue under drafts/visual-generation/).
+        on_session_end=lambda transcript: state.unwritten_proposals(),
     )

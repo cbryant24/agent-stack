@@ -123,6 +123,19 @@ Flow: you give feedback, the model calls `propose_interpretation`, you see the r
 
 The retrospective §B1 lists three lessons to rewrite and three to add, and says those are "follow-up actions for their own sessions". Doing them through the new tools is the acceptance exercise for this phase.
 
+## What was built (and where it differs from the plan above)
+
+- **Names.** The persisted model is `EvaluationEntry` in the library (`memory_type="evaluation"`, `entry_id` = the eval id), not `kind`/`eval_id`, to match every other payload. It lives in `visual_generation.models` because the library cannot import `chat/`. Added to `TechniqueLesson`: optional `layer`, `evidence_n`, `falsification_test`, `claim_level` (lessons stored before load unchanged). Added to the evaluation: `architecture_question`, so "recorded" has somewhere to live.
+- **Layers.** The five-valued `Layer` replaces Phase 3's score-layer + attribution pair; the prompt still quotes the three score layers and maps `outcome` to production quality.
+- **`record_evaluation`** takes the full record as its arguments (not a proposal id) so a deferred record is self-contained and the gate shows exactly what will be written. It calls the async `report()` (not `report_sync`, which uses `asyncio.run`), writes the evaluation first, and its id is `uuid5(gen, reaction, feedback)` so a retry or re-confirm never duplicates. A failure of the second step is reported as a partial write.
+- **Rules in code**, in the library so no caller can skip them: prompt-layer conditioning lessons need a falsification test; "validated" needs `evidence_n >= 5` and an existing held-out evaluation; a fourth same-class redraft needs an architecture question (enforced in `propose_interpretation` and in the `redraft` tool); numbers in a proposal must be grounded in the director's words or the attempt's recipe. Each has tests, including the fourth (numbers), which the doc lists as a bullet but not among the "three".
+- **agent-shell additions** the phase needed: async `preview`, `precheck` (refuse before asking), `Proposal.tool` + `Session.apply_proposal` so accepted end-of-session proposals are actually written, and `result_data`/`artifacts` in the audit record.
+- **`fact add`** now calls `add_fact` (propose then confirm); a test proves the stored payload equals what `bulk_load_verified` stored, and the one CLI test that pinned the old call was updated.
+- **Not extracted or exposed:** `sync_models` (needs the ComfyUI client and a pod). `recall` in the CLI still returns three kinds; the chat's `recall` returns evaluations too (`recall_all`).
+- **Pre-fix marking** uses the environment variable `EXECUTION_TRUTH_VERIFIED_SINCE` (an ISO date). Unset means nothing is trusted yet.
+- **Tests against a real Qdrant** use a throwaway collection per test and faked embeddings; skipped with a visible note when Qdrant is down.
+- The §B1 lesson corrections are a work list for you (`docs/agent-shell/phase-4-b1-lessons.md`); they need your keys and Qdrant.
+
 ## Acceptance
 
 - Every write shows a confirm panel; rejecting leaves Qdrant point counts unchanged (test compares counts). Edit and defer paths are tested.

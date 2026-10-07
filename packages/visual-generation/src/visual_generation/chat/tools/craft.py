@@ -23,6 +23,7 @@ from visual_generation.draft import (
     draft as _draft,
     redraft as _redraft,
 )
+from visual_generation.evaluation import strike_status
 from visual_generation.explain import explain as _explain
 from visual_generation.explain import render_explain
 from visual_generation.models import DraftResult, VisualSource
@@ -187,6 +188,18 @@ def make_craft_tools(state: ChatState) -> list[ToolSpec]:
         if gen_id is None:
             return fail(f"Could not resolve {a.generation!r}: {why}", data={"open_questions": [why]})
         store, ms = state.stores()
+        # Three strikes: after three failed same-class attempts, a fourth needs a written question.
+        gen = await store.get_generation(gen_id)
+        if gen is not None:
+            strike = strike_status(await store.list_evaluations(chain_root_id=gen.chain_root_id))
+            if strike.blocked:
+                return fail(
+                    f"{strike.count} attempts at fix class {strike.strike_class!r} have failed in this chain. "
+                    "A fourth redraft needs a written architecture question first: use propose_interpretation "
+                    "with `architecture_question` (the layer being blamed and a different layer that could be "
+                    "at fault) and record it, or change layer (new_draft, refine_img2img, inpaint).",
+                    data={"strike": strike.model_dump()},
+                )
         result = await _redraft(
             gen_id, a.change, batch_path=path, project=a.project or state.project,
             force_canon=a.canon or None, budget=DRAFT_CAP, store=store, memory_store=ms,

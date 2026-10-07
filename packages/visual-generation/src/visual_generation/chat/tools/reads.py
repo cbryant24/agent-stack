@@ -20,11 +20,11 @@ from visual_generation.inspect import (
     get_chain,
     get_generation,
     list_pending,
-    recall,
+    recall_all,
     render_chain,
     render_generation,
     render_pending,
-    render_recall,
+    render_recall_all,
 )
 from visual_generation.verify import verify_knowledge
 
@@ -82,13 +82,15 @@ def make_read_tools(state: ChatState) -> list[ToolSpec]:
 
     async def recall_tool(a: RecallArgs) -> ToolResult:
         store, _ = state.stores()
-        gens, lessons, templates = await recall(a.query, limit=a.limit, store=store)
+        result = await recall_all(a.query, limit=a.limit, store=store)
+        gens, lessons, templates = result.generations, result.lessons, result.templates
         resolver = await resolver_for(state)
-        text = render_recall(gens, lessons, templates) + label_footer(resolver, [g.entry_id for _, _, g in gens])
+        text = render_recall_all(result) + label_footer(resolver, [g.entry_id for _, _, g in gens])
         return ok(text, data={
             "generation_ids": [g.entry_id for _, _, g in gens],
             "lesson_ids": [le.entry_id for _, _, le in lessons],
             "template_names": [t.name for _, _, t in templates],
+            "evaluation_ids": [e.entry_id for _, _, e in result.evaluations],
         })
 
     async def pending_tool(a: PendingArgs) -> ToolResult:
@@ -184,7 +186,7 @@ def make_read_tools(state: ChatState) -> list[ToolSpec]:
     R = EffectClass.READ
     return [
         ToolSpec(name="recall", effect=R, input_model=RecallArgs, handler=recall_tool,
-                 description="Search your own memory: prior generations, technique lessons, workflow templates. "
+                 description="Search your own memory: prior generations, evaluations, technique lessons, workflow templates. "
                              "Returns hits, not answers. " + note),
         ToolSpec(name="review_pending", effect=R, input_model=PendingArgs, handler=pending_tool,
                  description="List generations awaiting a reaction. 'Pending' means not yet reacted to, "

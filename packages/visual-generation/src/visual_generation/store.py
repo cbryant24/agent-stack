@@ -1,7 +1,7 @@
 """VisualGenerationStore — wrapper over agent-runtime's MemoryStore.
 
-Owns the `visual_generation_memory` Qdrant collection, routing the three memory
-types (`generation`, `technique_lesson`, `workflow_template`) to it discriminated
+Owns the `visual_generation_memory` Qdrant collection, routing the four memory
+types (`generation`, `technique_lesson`, `workflow_template`, `evaluation`) to it discriminated
 by the `memory_type` payload field. Also owns the model/LoRA registry (a local
 JSON file via `ModelRegistry`) so the store is the single persistence surface.
 
@@ -37,6 +37,7 @@ from qdrant_client.models import (
 from visual_generation.constants import (
     COLLECTION_NAME,
     EMBEDDING_DIM,
+    MEMORY_TYPE_EVALUATION,
     MEMORY_TYPE_GENERATION,
     MEMORY_TYPE_TECHNIQUE_LESSON,
     MEMORY_TYPE_WORKFLOW_TEMPLATE,
@@ -45,6 +46,7 @@ from visual_generation.constants import (
 )
 from visual_generation.model_registry import ModelRegistry
 from visual_generation.models import (
+    EvaluationEntry,
     ModelAsset,
     TechniqueLesson,
     VisualGeneration,
@@ -446,6 +448,70 @@ class VisualGenerationStore:
         if not records:
             return None
         return WorkflowTemplate.from_payload(records[0].payload or {})
+
+    # ── Evaluation writes / reads (text-embedded: feedback + finding statements) ──
+
+    async def upsert_evaluation(self, entry: EvaluationEntry) -> None:
+        """Embed the feedback text and upsert as an evaluation point (idempotent by entry_id)."""
+        embedder = self._store.embedding_client
+        [vector] = await embedder.embed([entry.embed_text], input_type="document")
+        point = PointStruct(id=entry.entry_id, vector=vector, payload=entry.to_payload())
+        await self._store.upsert_raw_points(self._collection, [point])
+
+    async def get_evaluation(self, entry_id: str) -> EvaluationEntry | None:
+        records = await self._store.retrieve_points(self._collection, [entry_id])
+        if not records:
+            return None
+        payload = records[0].payload or {}
+        if payload.get("memory_type") != MEMORY_TYPE_EVALUATION:
+            return None
+        return EvaluationEntry.from_payload(payload)
+
+    async def list_evaluations(
+        self,
+        *,
+        gen_id: str | None = None,
+        chain_root_id: str | None = None,
+        project: str | None = None,
+    ) -> list[EvaluationEntry]:
+        """Filter-scroll (no embedding) the evaluations for a generation, a chain or a project,
+        oldest first. With no filter it lists every evaluation."""
+        conditions: list[Any] = [
+            FieldCondition(key="memory_type", match=MatchValue(value=MEMORY_TYPE_EVALUATION))
+        ]
+        for key, value in (("gen_id", gen_id), ("chain_root_id", chain_root_id), ("project", project)):
+            if value is not None:
+                conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
+        out: list[EvaluationEntry] = []
+        offset = None
+        while True:
+            records, offset = await self._store._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=Filter(must=conditions),
+                limit=100,
+                offset=offset,
+                with_payload=True,
+            )
+            out.extend(EvaluationEntry.from_payload(r.payload or {}) for r in records)
+            if offset is None:
+                break
+        return sorted(out, key=lambda e: e.created_at)
+
+    async def search_evaluations(
+        self, query: str, *, project: str | None = None, limit: int = 10
+    ) -> list[tuple[str, float, EvaluationEntry]]:
+        conditions: list[Any] = [
+            FieldCondition(key="memory_type", match=MatchValue(value=MEMORY_TYPE_EVALUATION))
+        ]
+        if project is not None:
+            conditions.append(FieldCondition(key="project", match=MatchValue(value=project)))
+        embedder = self._store.embedding_client
+        [qv] = await embedder.embed([query], input_type="query")
+        raw = await self._store.query_by_vector(
+            self._collection, qv, limit=limit, filters=Filter(must=conditions)
+        )
+        record_memory_query(self._collection, query, len(raw))
+        return [(pid, score, EvaluationEntry.from_payload(p)) for pid, score, p in raw]
 
     # ── Generation cost history (seeds the per-run GPU estimate) ──────────────
 

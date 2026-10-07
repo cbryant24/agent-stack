@@ -203,6 +203,11 @@ class ShellApp:
         report = await walk_proposals(
             proposals, self.prompter, self.session.settings.drafts_dir(self.session.config.agent_name)
         )
+        for p in report.accepted:
+            if p.tool:
+                res = await self.session.apply_proposal(p)
+                mark, style = ("✗", "red") if res.is_error else ("✓", "green")
+                self.console.print(Text(f"{mark} {p.tool}: {res.text[:300]}", style=style))
         self.console.print(
             f"accepted {len(report.accepted)} · deferred {len(report.deferred)} · skipped {len(report.skipped)}"
         )

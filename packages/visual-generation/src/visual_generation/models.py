@@ -1,7 +1,7 @@
 """Pydantic v2 models for the visual-generation agent.
 
-Three models are stored in the `visual_generation_memory` Qdrant collection
-(`VisualGeneration`, `TechniqueLesson`, `WorkflowTemplate`); each carries a
+Four models are stored in the `visual_generation_memory` Qdrant collection
+(`VisualGeneration`, `TechniqueLesson`, `WorkflowTemplate`, `EvaluationEntry`); each carries a
 `memory_type` discriminator and `to_payload()`/`from_payload()` round-trip
 helpers. `ModelAsset` is the registry record (local JSON, not embedded). The
 binary asset of a generation is a disk file referenced by `asset_path` — never
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -155,7 +156,12 @@ class TechniqueLesson(BaseModel):
     valence: Literal["positive", "negative"]
     scope: Literal["prompt", "settings", "workflow", "model"] = "settings"
     confirmed: bool = False
-    derived_from: list[str] = Field(default_factory=list)
+    derived_from: list[str] = Field(default_factory=list)  # source evaluation ids
+    # Evaluation-era fields (all optional, so lessons stored before they existed load unchanged).
+    layer: str | None = None                   # where the lesson lives (see `Layer`)
+    evidence_n: int | None = None              # how many evaluations support it
+    falsification_test: str | None = None      # a counter-case that would disprove it
+    claim_level: Literal["tuned", "validated"] = "tuned"
     created_at: str = Field(default_factory=_now_iso)
 
     def to_payload(self) -> dict[str, Any]:
@@ -191,6 +197,95 @@ class WorkflowTemplate(BaseModel):
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> WorkflowTemplate:
+        return cls(**{k: v for k, v in payload.items() if k in cls.model_fields})
+
+
+class Layer(str, Enum):
+    """Where a finding lives. `outcome` is the production-quality layer: rendered faithfully, but
+    misses a stated requirement or taste. Identity, staging and set failures are
+    `conditioning_asset` until shown otherwise."""
+
+    PLATFORM = "platform"                      # pod, volume, model load, retrieval of outputs
+    AGENT_CORRECTNESS = "agent_correctness"    # submitted graph vs spec: seed, slots, LoRAs, sources
+    CONDITIONING_ASSET = "conditioning_asset"  # identity, staging, set: references, plates, masks
+    PROMPT = "prompt"                          # wording, negations, length
+    OUTCOME = "outcome"
+
+
+class Evidence(str, Enum):
+    OBSERVED = "observed"
+    INFERRED = "inferred"
+    UNRESOLVED = "unresolved"
+
+
+class Finding(BaseModel):
+    layer: Layer
+    evidence: Evidence
+    statement: str
+    basis: str = ""                  # what was looked at: graph path, record field, image region
+    suggested_action: str | None = None
+
+
+class KeepConstraint(BaseModel):
+    attribute: str                   # "jaw"
+    source_gen_id: str               # resolved from "attempt-07"
+
+
+class ArchitectureQuestion(BaseModel):
+    """The written question the three-strikes rule asks for before a fourth same-class attempt."""
+
+    layer_blamed: Layer
+    alternative_layer: Layer
+    question: str
+
+    @model_validator(mode="after")
+    def _layers_differ(self) -> ArchitectureQuestion:
+        if self.layer_blamed == self.alternative_layer:
+            raise ValueError("an architecture question must name a different alternative layer")
+        return self
+
+
+class EvaluationEntry(BaseModel):
+    """One evaluation of one generation, in `visual_generation_memory` (`memory_type="evaluation"`).
+
+    Linked to the generation by `gen_id` and to its lineage by `chain_root_id`. The embedded
+    text is the director's verbatim feedback plus the finding statements. Additive: existing
+    points are untouched.
+    """
+
+    memory_type: Literal["evaluation"] = "evaluation"   # == constants.MEMORY_TYPE_EVALUATION
+    entry_id: str = Field(default_factory=_new_id)
+    gen_id: str
+    chain_root_id: str
+    project: str | None = None
+    question: str | None = None            # the single question this attempt was meant to answer
+    reaction: str                          # the existing REACTIONS vocabulary
+    rating: int | None = Field(default=None, ge=1, le=5)
+    raw_feedback: str                      # verbatim
+    keep: list[KeepConstraint] = Field(default_factory=list)
+    change: list[str] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
+    required_outcomes: list[str] = Field(default_factory=list)
+    infrastructure_status: str | None = None   # evaluation-charter status vocabulary
+    agent_status: str | None = None
+    visual_status: str | None = None
+    director_signoff: bool = False
+    strike_class: str | None = None        # fix class, for three-strikes counting
+    architecture_question: ArchitectureQuestion | None = None
+    session_id: str = ""
+    engine_provider: str = ""
+    engine_model: str = ""
+    created_at: str = Field(default_factory=_now_iso)
+
+    @property
+    def embed_text(self) -> str:
+        return "\n".join([self.raw_feedback, *[f.statement for f in self.findings]])
+
+    def to_payload(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> EvaluationEntry:
         return cls(**{k: v for k, v in payload.items() if k in cls.model_fields})
 
 

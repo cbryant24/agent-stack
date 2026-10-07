@@ -160,6 +160,52 @@ class ProjectCanon:
         `lora`). The complement to `set_subject`, which replaces a whole subject —
         this is the surgical edit. Raises ValueError if no subject matches, or if an
         edit would leave the subject with zero aliases."""
+        subjects, idx, updated = self._compute_update(
+            selector, add_aliases=add_aliases, remove_aliases=remove_aliases, lora=lora,
+            clear_lora=clear_lora, id=id, reference_pack=reference_pack, wardrobe=wardrobe,
+            hair=hair, region=region,
+        )
+        subjects[idx] = updated
+        self._write(subjects)
+        return updated
+
+    def preview_update(
+        self,
+        selector: str,
+        *,
+        add_aliases: list[str] | None = None,
+        remove_aliases: list[str] | None = None,
+        lora: LoraRef | None = None,
+        clear_lora: bool = False,
+        id: str | None = None,
+        reference_pack: str | None = None,
+        wardrobe: str | None = None,
+        hair: str | None = None,
+        region: str | None = None,
+    ) -> tuple[CanonSubject, CanonSubject]:
+        """(before, after) for the same edit `update_subject` would make, writing nothing.
+        Raises the same ValueErrors."""
+        subjects, idx, updated = self._compute_update(
+            selector, add_aliases=add_aliases, remove_aliases=remove_aliases, lora=lora,
+            clear_lora=clear_lora, id=id, reference_pack=reference_pack, wardrobe=wardrobe,
+            hair=hair, region=region,
+        )
+        return subjects[idx], updated
+
+    def _compute_update(
+        self,
+        selector: str,
+        *,
+        add_aliases: list[str] | None,
+        remove_aliases: list[str] | None,
+        lora: LoraRef | None,
+        clear_lora: bool,
+        id: str | None,
+        reference_pack: str | None,
+        wardrobe: str | None,
+        hair: str | None,
+        region: str | None,
+    ) -> tuple[list[CanonSubject], int, CanonSubject]:
         if lora is not None and clear_lora:
             raise ValueError("pass either a new lora or clear_lora, not both")
         subjects = self.load()
@@ -206,9 +252,7 @@ class ProjectCanon:
                 raise ValueError(
                     f"alias {aliases[0]!r} would collide with another subject's key"
                 )
-        subjects[idx] = updated
-        self._write(subjects)
-        return updated
+        return subjects, idx, updated
 
 
 def _alias_set(subj: CanonSubject) -> set[str]:

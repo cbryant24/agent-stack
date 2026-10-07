@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from agent_runtime.tracing import span
 from agent_shell.audit.log import AuditLog
-from agent_shell.guard.gate import Gate
+from agent_shell.guard.gate import GATED, Gate, GateOutcome
 from agent_shell.proposals import write_draft
 from agent_shell.tools.registry import ToolResult, ToolSpec
 
@@ -43,18 +44,25 @@ class Executor:
 
         return spec.model_copy(update={"handler": handler})
 
-    async def run(self, spec: ToolSpec, raw_args: dict[str, Any]) -> ToolResult:
+    async def run(
+        self, spec: ToolSpec, raw_args: dict[str, Any], *, confirmed: bool = False
+    ) -> ToolResult:
+        """Run a tool through validate -> gate -> dry-run -> call -> audit.
+
+        `confirmed=True` is for a call the user has already approved by another route (an accepted
+        end-of-session proposal): the gate is skipped, everything else still applies."""
         with span(f"shell.tool.{spec.name}"):
-            args, result, decision, cost = await self._run(spec, raw_args)
+            args, result, decision, cost = await self._run(spec, raw_args, confirmed)
         self.audit.record(
             kind="tool_call", tool=spec.name, effect=spec.effect.value, args=args, decision=decision,
             dry_run=self._dry_run(), is_error=result.is_error, summary=result.text[:300],
+            result_data=result.data, artifacts=result.artifacts,
             cost_usd=cost, provider=self._provider(), model=self._model(),
         )
         return result
 
     async def _run(
-        self, spec: ToolSpec, raw: dict[str, Any]
+        self, spec: ToolSpec, raw: dict[str, Any], confirmed: bool = False
     ) -> tuple[dict[str, Any], ToolResult, str, float]:
         try:
             parsed = spec.input_model.model_validate(raw)
@@ -62,11 +70,29 @@ class Executor:
             return raw, _error(e), "invalid", 0.0
 
         args = parsed.model_dump()
-        preview = _call(spec.preview, parsed)
+        if spec.precheck is not None:
+            try:
+                refusal = await spec.precheck(parsed)
+            except Exception as e:  # noqa: BLE001 - a broken check is an error result, not a crash
+                return args, _error(e), "precheck_error", 0.0
+            if refusal:
+                return args, ToolResult(
+                    text=refusal, is_error=True, data={"refused": True}
+                ), "precheck_failed", 0.0
+        try:
+            preview = _call(spec.preview, parsed)
+            if inspect.isawaitable(preview):
+                preview = await preview
+        except Exception as e:  # noqa: BLE001
+            return args, _error(e), "preview_error", 0.0
         est = float(_call(spec.estimate_cost, parsed) or 0.0)
-        outcome = await self.gate.decide(
-            spec, args, preview=preview, est_cost=est, dry_run=self._dry_run()
-        )
+        if confirmed:
+            dry = self._dry_run() and spec.effect in GATED
+            outcome = GateOutcome(action="dry_run" if dry else "allow", args=args, reason="proposal_accept")
+        else:
+            outcome = await self.gate.decide(
+                spec, args, preview=preview, est_cost=est, dry_run=self._dry_run()
+            )
 
         if outcome.action == "dry_run":
             text = f"[dry-run] would run {spec.name}" + (f": {preview}" if preview else "")
@@ -98,7 +124,10 @@ class Executor:
         budget = self.gate.budgets.for_effect(spec.effect)
         if budget is not None:
             budget.charge(cost)
-        decision = "edit" if outcome.reason == "edited" else "allow"
+        decision = (
+            "edit" if outcome.reason == "edited"
+            else "proposal_accept" if confirmed else "allow"
+        )
         return args, result, decision, cost
 
 

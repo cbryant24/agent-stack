@@ -14,12 +14,18 @@ functions are pure string builders (testable without a store).
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent_runtime import MemoryStore, get_memory_store
 
 from visual_generation.constants import REACTIONS
-from visual_generation.models import TechniqueLesson, VisualGeneration, WorkflowTemplate
+from visual_generation.models import (
+    EvaluationEntry,
+    TechniqueLesson,
+    VisualGeneration,
+    WorkflowTemplate,
+)
 from visual_generation.store import VisualGenerationStore
 
 
@@ -216,8 +222,10 @@ def render_recall(
     gens: list[tuple[str, float, VisualGeneration]],
     lessons: list[tuple[str, float, TechniqueLesson]],
     templates: list[tuple[str, float, WorkflowTemplate]],
+    evaluations: list[tuple[str, float, EvaluationEntry]] | None = None,
 ) -> str:
-    if not gens and not lessons and not templates:
+    evaluations = evaluations or []
+    if not gens and not lessons and not templates and not evaluations:
         return "No results found."
 
     lines: list[str] = []
@@ -248,8 +256,41 @@ def render_recall(
         lines.append(f"── Workflow Templates ({len(templates)}) ──────────────────")
         for _id, score, tmpl in templates:
             lines.append(f"  [{score:.3f}] {tmpl.name} ({len(tmpl.slot_map)} slots) — {tmpl.descriptor[:60]}")
+        lines.append("")
+
+    if evaluations:
+        lines.append(f"── Evaluations ({len(evaluations)}) ──────────────────")
+        for _id, score, ev in evaluations:
+            tag = f"[{ev.reaction.upper().replace('_', ' ')}" + (f" ★{ev.rating}" if ev.rating is not None else "") + "]"
+            lines.append(f"  [{score:.3f}] {tag} gen {ev.gen_id[:8]}: {ev.raw_feedback[:80]}")
 
     return "\n".join(lines).rstrip("\n")
+
+
+@dataclass
+class RecallResult:
+    generations: list[tuple[str, float, VisualGeneration]] = field(default_factory=list)
+    lessons: list[tuple[str, float, TechniqueLesson]] = field(default_factory=list)
+    templates: list[tuple[str, float, WorkflowTemplate]] = field(default_factory=list)
+    evaluations: list[tuple[str, float, EvaluationEntry]] = field(default_factory=list)
+
+
+async def recall_all(
+    query: str,
+    *,
+    limit: int = 5,
+    store: VisualGenerationStore | None = None,
+    memory_store: MemoryStore | None = None,
+) -> RecallResult:
+    """`recall` plus evaluations as a fourth kind. (`recall` keeps its 3-tuple for existing callers.)"""
+    store = store or VisualGenerationStore(memory_store or get_memory_store())
+    gens, lessons, templates = await recall(query, limit=limit, store=store)
+    evaluations = await store.search_evaluations(query, limit=limit)
+    return RecallResult(gens, lessons, templates, evaluations)
+
+
+def render_recall_all(result: RecallResult) -> str:
+    return render_recall(result.generations, result.lessons, result.templates, result.evaluations)
 
 
 def recall_sync(query: str, **kwargs: Any) -> tuple[Any, Any, Any]:

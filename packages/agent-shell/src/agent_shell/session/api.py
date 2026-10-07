@@ -24,7 +24,7 @@ from agent_shell.proposals import Proposal
 from agent_shell.session.recorder import TurnRecorder
 from agent_shell.session.store import SessionStore
 from agent_shell.tools.executor import Executor
-from agent_shell.tools.registry import Registry
+from agent_shell.tools.registry import Registry, ToolResult
 
 
 class ConfirmRequested(BaseModel):
@@ -243,6 +243,19 @@ class Session:
                 await queue.put(TurnEnd(reason="budget_exhausted", detail="repl budget spent"))
                 return True
         return False
+
+    async def apply_proposal(self, proposal: Proposal) -> ToolResult:
+        """Carry out an accepted end-of-session proposal through its tool. The user's accept was
+        the confirmation, so the gate is skipped; validation, dry-run and audit still apply."""
+        if self.executor is None:
+            raise RuntimeError("session not started")
+        if not proposal.tool:
+            return ToolResult(text="this proposal names no tool; the caller must apply it", is_error=True)
+        try:
+            spec = self.registry.get(proposal.tool)
+        except KeyError:
+            return ToolResult(text=f"unknown tool: {proposal.tool}", is_error=True)
+        return await self.executor.run(spec, proposal.payload, confirmed=True)
 
     def _record_cost(self, ev: TurnCost) -> None:
         provider = self.engine.provider

@@ -164,9 +164,12 @@ def test_lesson_rm_errors_on_missing_id(monkeypatch) -> None:
 
 
 def test_fact_add_writes_to_user_knowledge_with_domain(monkeypatch) -> None:
+    # `fact add` now goes through UserKnowledgeStore's propose -> confirm path (the stored payload
+    # is identical to bulk_load_verified's; see test_curation.py::test_add_fact_stores_the_same_...).
     uks = MagicMock()
     uks.ensure_collection = AsyncMock()
-    uks.bulk_load_verified = AsyncMock(return_value=["uk-entry-1"])
+    uks.propose_entry = AsyncMock(return_value=MagicMock(draft_id="draft-1"))
+    uks.confirm_entry = AsyncMock(return_value="uk-entry-1")
     monkeypatch.setattr("agent_runtime.UserKnowledgeStore", lambda *a, **k: uks)
     monkeypatch.setattr("agent_runtime.get_memory_store", lambda: MagicMock())
 
@@ -174,11 +177,10 @@ def test_fact_add_writes_to_user_knowledge_with_domain(monkeypatch) -> None:
         cli, ["fact", "add", "Pods bill per-second of uptime", "--domain", "runpod_mechanics"],
     )
     assert result.exit_code == 0, result.output
-    entries, kwargs = uks.bulk_load_verified.call_args.args, uks.bulk_load_verified.call_args.kwargs
-    payload = entries[0][0]
-    assert payload["domain"] == "runpod_mechanics"
-    assert payload["statement"] == "Pods bill per-second of uptime"
-    assert kwargs["source_ref"] == "manual:cli"
+    args, kwargs = uks.propose_entry.call_args.args, uks.propose_entry.call_args.kwargs
+    assert args == ("Pods bill per-second of uptime", "runpod_mechanics", "user_verified")
+    assert kwargs["source_ref"] == "manual:cli" and kwargs["confidence"] == "high"
+    uks.confirm_entry.assert_awaited_once_with("draft-1")
     assert "uk-entry-1" in result.output
 
 
