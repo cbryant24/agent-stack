@@ -94,6 +94,7 @@ from visual_generation.model_registry import ModelRegistry
 from visual_generation.model_sync import parse_object_info, reconcile
 from visual_generation.models import LoraRef, VisualSource, WorkflowTemplate
 from visual_generation.quick import (
+    QuickLoraUnsafe,
     QuickSeedUnmapped,
     QuickSourceError,
     QuickTemplateNotFound,
@@ -698,6 +699,11 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
     for sp in plan.plans:
         _echo_lora_strength_warnings(sp.spec.lora_stack, indent="  ")
         _echo_unmapped_warning(sp.unmapped, sp.template.name, label=sp.spec.spec_id, indent="  ")
+        if sp.neutralized_loras:
+            click.echo(
+                f"  ℹ {sp.spec.spec_id}: switched off template-baked LoRA(s) the spec did not ask "
+                f"for: {', '.join(sp.neutralized_loras)}"
+            )
     if max_session_cost is not None:
         click.echo(f"  Hard ceiling:       ${max_session_cost:.2f} (--max-session-cost)")
         if est > max_session_cost:
@@ -904,7 +910,7 @@ def quick(
             gpu_rate=rate,
             poll_timeout=timeout,
         )
-    except (QuickTemplateNotFound, QuickSourceError, QuickSeedUnmapped) as exc:
+    except (QuickTemplateNotFound, QuickSourceError, QuickSeedUnmapped, QuickLoraUnsafe) as exc:
         raise click.ClickException(str(exc)) from exc
     except ComfyUIError as exc:
         raise click.ClickException(str(exc)) from exc

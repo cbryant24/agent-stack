@@ -56,7 +56,12 @@ from visual_generation.constants import (
     GPU_SECONDS_SPAN_ATTR,
     SESSION_COST_SPAN_ATTR,
 )
-from visual_generation.graph_build import apply_source_filenames, build_prompt_graph, write_slot
+from visual_generation.graph_build import (
+    apply_source_filenames,
+    build_prompt_graph,
+    neutralize_unused_loras,
+    write_slot,
+)
 from visual_generation.gpu_tracker import GpuLedger, SessionMeter, estimate_per_run_cost
 from visual_generation.identity import derive_identity_bearing
 from visual_generation.models import (
@@ -86,6 +91,8 @@ class SpecPlan:
     resolved_seed: int | None
     unmapped: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)  # advisory (e.g. high denoise)
+    # Baked-in template LoRAs switched off because the spec did not ask for them.
+    neutralized_loras: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -348,6 +355,16 @@ async def plan_generation(
                 "sampler seed, or register it again so the seed slot is inferred"
             )
             continue
+        neutralized, stuck = neutralize_unused_loras(graph, template.slot_map, len(spec.lora_stack))
+        if stuck:
+            skipped.append(spec.spec_id)
+            skip_reasons[spec.spec_id] = (
+                f"Skipped {spec.spec_id}: workflow template '{template.name}' bakes in LoRA "
+                f"{', '.join(repr(n) for n in stuck)} and has no strength slot to switch it off, "
+                "so it would apply to this render although the spec did not ask for it — register "
+                "the template again so the loader's strength slot is inferred"
+            )
+            continue
         warnings: list[str] = []
         if spec.source is not None:
             warnings = await _plan_source_advisories(spec, graph, template.slot_map, store)
@@ -359,6 +376,7 @@ async def plan_generation(
                 resolved_seed=resolved_seed,
                 unmapped=unmapped,
                 warnings=warnings,
+                neutralized_loras=neutralized,
             )
         )
 

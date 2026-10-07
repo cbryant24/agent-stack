@@ -44,7 +44,11 @@ from visual_generation.constants import (
     WAN_T2V_TEMPLATE_NAME,
 )
 from visual_generation.generate import _ext_for, _poll_history
-from visual_generation.graph_build import apply_source_filenames, build_prompt_graph
+from visual_generation.graph_build import (
+    apply_source_filenames,
+    build_prompt_graph,
+    neutralize_unused_loras,
+)
 from visual_generation.models import LoraRef, VisualSource, VisualSpec, _new_id
 from visual_generation.store import VisualGenerationStore
 
@@ -55,6 +59,10 @@ class QuickTemplateNotFound(RuntimeError):
 
 class QuickSourceError(RuntimeError):
     """A seed image (`--image`) could not be resolved or applied."""
+
+
+class QuickLoraUnsafe(RuntimeError):
+    """The template bakes in a LoRA that cannot be switched off for this render."""
 
 
 class QuickSeedUnmapped(RuntimeError):
@@ -161,6 +169,13 @@ async def quick_generate(
         raise QuickSeedUnmapped(
             f"template {resolved_template!r} has no seed slot, so seed {resolved_seed} "
             "can't be applied — the render would ignore it."
+        )
+
+    _, stuck = neutralize_unused_loras(graph, template.slot_map, len(spec.lora_stack))
+    if stuck:
+        raise QuickLoraUnsafe(
+            f"template {resolved_template!r} bakes in LoRA {', '.join(repr(n) for n in stuck)} and "
+            "has no strength slot to switch it off — it would apply although none was requested."
         )
 
     client = client or ComfyUIClient(endpoint)

@@ -158,3 +158,19 @@ def wan_i2v_template(wan_i2v_graph: dict):
         slot_map=inferred.slot_map,
         required_models=inferred.required_models,
     )
+
+
+@pytest.fixture
+def zimage_lora_template():
+    """The real Z-Image-Turbo LoRA workflow, with its LoRA loader baked to 'narrator-zimage'."""
+    import json
+
+    from visual_generation.models import WorkflowTemplate
+    from visual_generation.slot_inference import infer_slots
+
+    graph = json.loads((WORKFLOWS_DIR / "z-image-turbo-lora-api.json").read_text(encoding="utf-8"))
+    inferred = infer_slots(graph)
+    return WorkflowTemplate(
+        name="z-image-turbo-lora", descriptor="z-image stills with a LoRA loader", graph=graph,
+        slot_map=inferred.slot_map, required_models=inferred.required_models,
+    )

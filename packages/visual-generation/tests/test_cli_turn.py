@@ -126,7 +126,7 @@ def test_cli_draft_mask_without_source_is_a_usage_error(monkeypatch: pytest.Monk
 def _fake_plan() -> SimpleNamespace:
     return SimpleNamespace(
         plans=[SimpleNamespace(
-            warnings=[], unmapped=[], template=SimpleNamespace(name="flux-txt2img"),
+            warnings=[], unmapped=[], neutralized_loras=[], template=SimpleNamespace(name="flux-txt2img"),
             spec=VisualSpec(spec_id="spec-1", prompt="p"),
         )],
         skipped=[],
@@ -210,6 +210,23 @@ def test_cli_generate_gate_warns_on_unmapped_values_before_the_confirm(
     assert "spec-1" in out.output and "negative, lora_0" in out.output
     assert "will NOT affect the render" in out.output
     assert out.output.index("negative, lora_0") < out.output.index("Spend ~$")
+
+
+def test_cli_generate_gate_shows_template_loras_that_were_switched_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    batch = tmp_path / "p.batch.md"
+    batch.write_text("<!-- vg-batch: {} -->\n\n## s\n\nbody\n", encoding="utf-8")
+    plan = _fake_plan()
+    plan.plans[0].neutralized_loras = ["narrator-zimage.safetensors"]
+    monkeypatch.setattr("visual_generation.cli.plan_generation_sync", lambda *a, **k: plan)
+    monkeypatch.setattr("visual_generation.cli.spend_generation_sync", lambda *a, **k: _fake_result())
+
+    out = CliRunner().invoke(
+        cli, ["generate", str(batch), "--all", "--endpoint", "http://pod:8188"], input="n\n"
+    )
+    assert "switched off template-baked LoRA(s)" in out.output and "narrator-zimage.safetensors" in out.output
+    assert out.output.index("narrator-zimage") < out.output.index("Spend ~$")
 
 
 def test_cli_generate_prints_the_reason_when_every_spec_is_skipped(

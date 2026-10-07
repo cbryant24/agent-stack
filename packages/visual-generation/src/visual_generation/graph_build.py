@@ -11,6 +11,7 @@ forced into the graph.
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from visual_generation.models import VisualSpec, WorkflowTemplate
@@ -117,3 +118,44 @@ def build_prompt_graph(spec: VisualSpec, template: WorkflowTemplate) -> tuple[di
         put(f"lora_{i}_strength", lora.strength, advise_as=f"lora_{i}_strength")
 
     return graph, unmapped
+
+
+_LORA_SLOT = re.compile(r"^lora_(\d+)$")
+
+
+def neutralize_unused_loras(
+    graph: dict[str, Any], slot_map: dict[str, Any], used_count: int
+) -> tuple[list[str], list[str]]:
+    """Switch off LoRA loaders the spec did not ask for.
+
+    A template can bake a LoRA into a loader node (the Z-Image workflows bake in a character
+    LoRA at strength 1.0). `build_prompt_graph` only writes loaders for the spec's own stack, so
+    with an empty or shorter stack a baked LoRA would still apply and the record would claim it
+    did not. For each loader slot `lora_{i}` with `i >= used_count` that holds a name, set its
+    strength to 0.0 (and `strength_clip` too when the node has one).
+
+    Returns `(neutralized, stuck)`: baked LoRA names turned off, and names that could not be
+    turned off because the template has no strength slot for that loader (the caller must not
+    render those). Mutates `graph`.
+    """
+    neutralized: list[str] = []
+    stuck: list[str] = []
+    indices = sorted(
+        int(m.group(1)) for slot in slot_map if (m := _LORA_SLOT.match(slot)) is not None
+    )
+    for i in indices:
+        if i < used_count:
+            continue
+        target = slot_map[f"lora_{i}"]
+        node = graph.get(target["node_id"])
+        inputs = node.get("inputs", {}) if isinstance(node, dict) else {}
+        name = inputs.get(target["input_key"])
+        if not name or isinstance(name, list):      # nothing baked, or wired from another node
+            continue
+        if write_slot(graph, slot_map, f"lora_{i}_strength", 0.0):
+            if isinstance(inputs.get("strength_clip"), (int, float)):
+                inputs["strength_clip"] = 0.0
+            neutralized.append(str(name))
+        else:
+            stuck.append(str(name))
+    return neutralized, stuck
