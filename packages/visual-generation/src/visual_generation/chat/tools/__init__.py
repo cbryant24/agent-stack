@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from agent_runtime import UserKnowledgeStore
+from agent_shell.packs.knowledge import knowledge_tools
 from agent_shell.tools.registry import ToolSpec
 
 from visual_generation.chat.state import ChatState
@@ -17,4 +19,6 @@ def tool_pack(state: ChatState) -> list[ToolSpec]:
     return [
         *make_read_tools(state), *make_craft_tools(state), *make_interpret_tools(state),
         *make_write_tools(state), *make_generation_tools(state), *make_pod_tools(state),
+        # shared across every agent's chat: knowledge drafts awaiting a confirm, and knowledge search
+        *knowledge_tools(lambda: UserKnowledgeStore(state.stores()[1])),
     ]

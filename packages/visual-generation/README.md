@@ -721,7 +721,7 @@ agent visual-generation chat --provider openai --model <model with a price row>
 
 Without the extra, every other command still works and `chat` prints how to install it.
 
-- **Tools** (39): `recall` (now also returns evaluations), `review_pending`, `chain_show`,
+- **Tools** (43): `recall` (now also returns evaluations), `review_pending`, `chain_show`,
   `inspect_generation`, `digest`, `batch_list`, `model_list`, `workflow_list`, `lesson_list`, `canon_show`,
   `knowledge_verify`, `list_evaluations` (reads); `explain`, `draft`, `redraft`, `batch_build` (LLM calls, a
   few cents; capped per call); `propose_interpretation` (structures your feedback; stores nothing);
@@ -730,6 +730,7 @@ Without the extra, every other command still works and `chat` prints how to inst
   `model_rm`, `canon_rm`. Generation: `plan_generation`, `gpu_ledger` (free), `generate`, `quick_generate`
   (GPU spend). Pod: `pod_status`, `pod_bootstrap`, `pod_tunnel`, `export_artifacts` (no confirmation),
   `pod_up` (GPU spend: billing starts), `model_sync` (registry write), `pod_down` (destructive: billing stops).
+  Shared with every agent's chat: `knowledge_drafts`, `knowledge_search`, `knowledge_confirm`, `knowledge_reject`.
 - **Rendering from the chat.** The standard sequence is `pod_up`, `pod_bootstrap`, `pod_tunnel`,
   `model_sync`, `generate`, `export_artifacts`, `pod_down`, then review. Bootstrap, tunnel and sync are
   separate checkpoints and report their own failures. The pod tools call `scripts/pod` and

@@ -86,6 +86,10 @@ Optional extension points, all agent-neutral:
 - `Session.run_tool(...)` runs a registered tool outside a turn through the same validate, gate, dry-run and audit path; the confirmer is passed per call.
 - `agent_shell.ui.ScriptedUI` answers questions from a script, for tests with no terminal.
 
+### Shared tool pack: knowledge
+
+`agent_shell.packs.knowledge.knowledge_tools(get_store)` returns four tools every agent's chat includes: `knowledge_drafts` and `knowledge_search` (reads), `knowledge_confirm` and `knowledge_reject` (gated writes). They surface the `user_knowledge` propose-then-confirm workflow: drafts that agents proposed and nobody confirmed (they expire after 7 days). `get_store` returns the agent's `UserKnowledgeStore`; its own methods do every read and write.
+
 ### Data it writes
 
 - `~/agent-data/agent-stack.db`, tables prefixed `agent_shell_` (created at startup; LangGraph's tables are untouched).

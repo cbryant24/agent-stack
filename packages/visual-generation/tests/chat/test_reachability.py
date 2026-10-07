@@ -22,12 +22,12 @@ from .conftest import Built  # type: ignore[import-not-found]
 
 READS = {"recall", "review_pending", "chain_show", "inspect_generation", "digest", "batch_list",
          "model_list", "workflow_list", "lesson_list", "canon_show", "knowledge_verify", "list_evaluations",
-         "plan_generation", "gpu_ledger", "export_artifacts"}
+         "plan_generation", "gpu_ledger", "export_artifacts", "knowledge_drafts", "knowledge_search"}
 EXTERNAL = {"pod_status", "pod_bootstrap", "pod_tunnel"}
 GPU = {"generate", "quick_generate", "pod_up"}
 LLM = {"explain", "draft", "redraft", "batch_build"}
 MEMORY = {"report", "record_evaluation", "add_lesson", "add_fact", "canon_set", "canon_edit", "workflow_register",
-          "model_sync"}
+          "model_sync", "knowledge_confirm", "knowledge_reject"}
 DESTRUCTIVE = {"lesson_rm", "batch_rm", "model_rm", "canon_rm", "pod_down"}
 EXPECTED = READS | EXTERNAL | GPU | LLM | MEMORY | DESTRUCTIVE | {"propose_interpretation"}
 # Still not exposed: delegation that ingests, and the CLI spellings of tools that exist under other names.
