@@ -164,11 +164,8 @@ async def curate(
         items_processed=items_processed,
         wall_time_sec=wall_time_sec,
         report_path=report_path,
+        pending_question=question_result or None,
     )
-
-    # Attach question to result for CLI display
-    if question_result:
-        result.__dict__["_pending_question"] = question_result
 
     return result
 

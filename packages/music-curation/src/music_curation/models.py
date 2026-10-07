@@ -66,6 +66,9 @@ class MusicResult(BaseModel):
     items_processed: int
     wall_time_sec: float
     report_path: Path | None = None
+    # The one clarifying question the agent raised alongside these prompts, if any
+    # ({ask, question, suggestion, reasoning}). Advisory: the prompts were generated anyway.
+    pending_question: dict[str, Any] | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 

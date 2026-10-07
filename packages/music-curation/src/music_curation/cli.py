@@ -10,6 +10,7 @@ Usage:
     music-curation chain show <chain_root_id>
     music-curation seed ingest <path>
     music-curation seed review-taste
+    music-curation chat
 """
 from __future__ import annotations
 
@@ -23,6 +24,8 @@ import click
 
 from music_curation.agent import _get_stores, curate_sync
 from music_curation.constants import DEFAULT_BUDGET
+from music_curation.curation import add_fact, add_taste, rating_warning, record_reaction
+from music_curation.reads import render_chain, render_pending, render_recall, render_result
 from music_curation.retrieval import retrieve_context
 from music_curation.seed_ingestion import ingest_seed, review_taste_queue
 
@@ -54,44 +57,7 @@ def generate(request: str, max_cost: float | None, skip_question: bool, dry_run:
     )
 
     result = curate_sync(request, budget=budget, skip_question=skip_question, dry_run=dry_run)
-
-    # Show clarifying question if one was raised
-    pending_q = result.__dict__.get("_pending_question")
-    if pending_q and pending_q.get("ask"):
-        click.echo("\n── Clarifying question ──────────────────────────────")
-        click.echo(f"Q: {pending_q['question']}")
-        click.echo(f"   Suggestion: {pending_q['suggestion']}")
-        click.echo(f"   Why: {pending_q['reasoning']}")
-        click.echo("")
-
-    click.echo(f"Status:    {result.status}")
-    click.echo(f"Run ID:    {result.run_id}")
-    click.echo(f"Cost:      ${result.cost_usd:.4f}")
-    click.echo(f"Wall time: {result.wall_time_sec:.1f}s")
-
-    for i, prompt in enumerate(result.prompts, 1):
-        click.echo(f"\n── Prompt {i} ─────────────────────────────────────────")
-        if i <= len(result.suggested_titles):
-            click.echo(f"Title: {result.suggested_titles[i-1]}")
-        click.echo(f"Style ({len(prompt.style_field)} chars):\n{prompt.style_field}")
-        if prompt.lyrics_field:
-            click.echo(f"\nLyrics:\n{prompt.lyrics_field}")
-        if i <= len(result.generation_ids):
-            click.echo(f"\nGeneration ID: {result.generation_ids[i-1]}")
-            click.echo("(Use 'music-curation report <id> --reaction <X>' after running in Suno)")
-
-    if result.theory_reasoning:
-        click.echo(f"\n── Theory Reasoning ─────────────────────────────────")
-        click.echo(result.theory_reasoning)
-
-    if result.cross_references:
-        click.echo(f"\n── Similar Prior Generations ({len(result.cross_references)}) ──────────")
-        for ref in result.cross_references:
-            click.echo(f"  [{ref.reaction}] {ref.suggested_track_title or ref.entry_id[:8]}")
-            click.echo(f"    {ref.style_field_excerpt}...")
-
-    if result.report_path:
-        click.echo(f"\nReport: {result.report_path}")
+    click.echo(render_result(result))
 
 
 # ── report ─────────────────────────────────────────────────────────────────────
@@ -118,25 +84,18 @@ def generate(request: str, max_cost: float | None, skip_question: bool, dry_run:
 def report(gen_id: str, reaction: str, rating: int | None,
            notes: str | None, context: str | None) -> None:
     """Record your reaction to a generated prompt after running it in Suno."""
-    from music_curation.constants import POSITIVE_REACTIONS
-
-    if rating is not None and reaction not in POSITIVE_REACTIONS:
-        click.echo(
-            f"Warning: --rating is unusual for '{reaction}' (ratings are meaningful "
-            f"for positive reactions). Recording it anyway.",
-            err=True,
-        )
+    warning = rating_warning(reaction, rating)
+    if warning:
+        click.echo(warning, err=True)
 
     async def _run():
         curation_store, _, _ = _get_stores()
-        await curation_store.ensure_collection()
-        gen = await curation_store.get_generation(gen_id)
+        gen = await record_reaction(
+            gen_id, reaction, store=curation_store, rating=rating, notes=notes, context=context
+        )
         if gen is None:
             click.echo(f"Error: generation '{gen_id}' not found.", err=True)
             sys.exit(1)
-        await curation_store.update_generation_reaction(
-            gen_id, reaction, notes=notes, context=context, rating=rating
-        )
         rating_str = f" ★{rating}" if rating is not None else ""
         click.echo(f"Recorded: {gen.suggested_track_title or gen_id[:12]} → {reaction}{rating_str}")
 
@@ -151,19 +110,7 @@ def review_pending() -> None:
     async def _run():
         curation_store, _, _ = _get_stores()
         await curation_store.ensure_collection()
-        pending = await curation_store.list_pending()
-        if not pending:
-            click.echo("No pending generations.")
-            return
-        click.echo(f"{len(pending)} pending generation(s):\n")
-        for gen in pending:
-            title = gen.suggested_track_title or gen.entry_id[:12]
-            click.echo(f"  {gen.entry_id}")
-            click.echo(f"  Title: {title}")
-            click.echo(f"  Style: {gen.style_field[:80]}...")
-            click.echo(f"  Created: {gen.created_at}")
-            click.echo("  Use: music-curation report <id> --reaction <X>")
-            click.echo("")
+        click.echo(render_pending(await curation_store.list_pending()))
 
     asyncio.run(_run())
 
@@ -182,34 +129,7 @@ def recall(query: str, limit: int) -> None:
             query, curation_store, memory_store,
             generation_limit=limit, taste_limit=limit, suno_fact_limit=limit,
         )
-
-        if ctx.is_empty():
-            click.echo("No results found.")
-            return
-
-        if ctx.prior_generations:
-            click.echo(f"\n── Prior Generations ({len(ctx.prior_generations)}) ────────────────")
-            for score, gen in ctx.prior_generations:
-                title = gen.suggested_track_title or gen.entry_id[:12]
-                rating_str = f" ★{gen.rating}" if gen.rating is not None else ""
-                click.echo(f"  [{score:.3f}] {title} (reaction={gen.reaction}{rating_str})")
-                click.echo(f"    {gen.style_field[:100]}...")
-
-        if ctx.taste_lessons:
-            click.echo(f"\n── Taste Lessons ({len(ctx.taste_lessons)}) ─────────────────────")
-            for score, lesson in ctx.taste_lessons:
-                click.echo(f"  [{score:.3f}][{lesson.valence}/{lesson.scope}] {lesson.statement[:80]}")
-
-        if ctx.suno_facts:
-            click.echo(f"\n── Suno Facts ({len(ctx.suno_facts)}) ──────────────────────────")
-            for score, statement, _ in ctx.suno_facts:
-                click.echo(f"  [{score:.3f}] {statement[:80]}")
-
-        if ctx.tutorial_hits:
-            click.echo(f"\n── Tutorial Knowledge ({len(ctx.tutorial_hits)}) ─────────────────")
-            for score, content in ctx.tutorial_hits:
-                if content:
-                    click.echo(f"  [{score:.3f}] {content[:100]}")
+        click.echo(render_recall(ctx))
 
     asyncio.run(_run())
 
@@ -227,13 +147,9 @@ def taste() -> None:
 @click.option("--scope", type=click.Choice(["genre", "production", "instrumentation", "vocal", "arrangement", "general"]), default="general")
 def taste_add(lesson: str, valence: str, scope: str) -> None:
     """Add an explicit confirmed taste lesson."""
-    from music_curation.models import TasteLesson
-
     async def _run():
         curation_store, _, _ = _get_stores()
-        await curation_store.ensure_collection()
-        t = TasteLesson(statement=lesson, valence=valence, scope=scope, confirmed=True)
-        await curation_store.upsert_taste(t)
+        await add_taste(lesson, valence, scope, store=curation_store)
         click.echo(f"Added taste lesson [{valence}/{scope}]: {lesson[:60]}")
 
     asyncio.run(_run())
@@ -255,15 +171,9 @@ def fact_add(statement: str, domain: str, confidence: str) -> None:
     from agent_runtime import UserKnowledgeStore, get_memory_store
 
     async def _run():
-        ms = get_memory_store()
-        uks = UserKnowledgeStore(ms)
-        await uks.ensure_collection()
-        entry_id = await uks.bulk_load_verified(
-            [{"statement": statement, "domain": domain, "confidence": confidence}],
-            source_ref="manual:cli",
-        )
+        entry_id = await add_fact(statement, domain, confidence, uks=UserKnowledgeStore(get_memory_store()))
         click.echo(f"Added fact to {domain}: {statement[:60]}")
-        click.echo(f"Entry ID: {entry_id[0]}")
+        click.echo(f"Entry ID: {entry_id}")
 
     asyncio.run(_run())
 
@@ -282,20 +192,7 @@ def chain_show(chain_root_id: str) -> None:
     async def _run():
         curation_store, _, _ = _get_stores()
         await curation_store.ensure_collection()
-        entries = await curation_store.get_chain(chain_root_id)
-        if not entries:
-            click.echo(f"No chain found for root_id: {chain_root_id}")
-            return
-        click.echo(f"Chain ({len(entries)} entries):\n")
-        for i, gen in enumerate(entries):
-            indent = "  " * (1 if gen.parent_id else 0)
-            title = gen.suggested_track_title or gen.entry_id[:12]
-            click.echo(f"{indent}[{gen.reaction}] {title}")
-            if gen.change_summary:
-                click.echo(f"{indent}  Changes: {gen.change_summary[:80]}")
-            click.echo(f"{indent}  Style: {gen.style_field[:80]}...")
-            click.echo(f"{indent}  ID: {gen.entry_id}")
-            click.echo("")
+        click.echo(render_chain(chain_root_id, await curation_store.get_chain(chain_root_id)))
 
     asyncio.run(_run())
 
@@ -320,3 +217,32 @@ def seed_ingest(path: Path, dry_run: bool, yes: bool) -> None:
 def seed_review_taste() -> None:
     """Interactively review and confirm deferred taste lessons."""
     asyncio.run(review_taste_queue())
+
+
+# ── chat (conversational front end; needs the optional `chat` extra) ───────────
+
+_CHAT_LIBS = {"agent_shell", "langgraph", "langchain_core", "langchain_anthropic",
+              "langchain_openai", "prompt_toolkit", "rich"}
+
+
+@cli.command("chat")
+@click.option("--provider", type=click.Choice(["claude", "openai"]), default="claude",
+              show_default=True, help="Which model runs the conversation.")
+@click.option("--model", default=None, help="Model id (must have a price row). Required for openai.")
+@click.option("--resume", "resume_id", default=None, help="Resume a chat session id.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Paid and writing tools describe what they would do and run nothing.")
+def chat(provider: str, model: str | None, resume_id: str | None, dry_run: bool) -> None:
+    """Chat with the agent: look things up, write prompts, record reactions, curate taste.
+
+    Every memory write is confirmed first. Run under op run: `agent music-curation chat`."""
+    try:
+        from music_curation.chat.cli import run_chat
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] not in _CHAT_LIBS:
+            raise
+        raise click.ClickException(
+            f"chat needs its optional libraries ({exc.name} is missing). "
+            "Install them with: uv sync --all-packages --extra chat   (music-curation[chat])"
+        ) from exc
+    run_chat(provider, model, resume_id, dry_run)
