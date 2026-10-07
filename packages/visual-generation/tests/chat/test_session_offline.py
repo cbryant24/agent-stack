@@ -190,7 +190,7 @@ async def test_an_unwritten_proposal_is_offered_at_exit_and_applied_when_accepte
     assert len(report.accepted) == 1 and len(b.evals) == 1 and gens[2].reaction == "disliked"
     assert "record_evaluation:" in out.getvalue() and "Wrote evaluation" in out.getvalue()
     assert s.audit is not None
-    assert [r["decision"] for r in s.audit.read() if r["tool"] == "record_evaluation"] == ["proposal_accept"]
+    assert [r["decision"] for r in s.audit.read() if r.get("tool") == "record_evaluation"] == ["proposal_accept"]
     assert b.state.unwritten_proposals() == []
 
 
@@ -256,5 +256,5 @@ async def test_the_session_exposes_exactly_the_chat_tools(build: Callable[..., B
     s = session(build(), [], tmp_path)
     await s.start()
     assert set(s.registry.names()) == EXPECTED
-    assert s.config.on_session_end is not None and s.budgets.gpu.max_usd == 0.0
+    assert s.config.on_session_end is not None and s.budgets.gpu.max_usd == 0.0     # run_chat sets --gpu-budget
     assert isinstance(s.config.default_budget, BudgetEnvelope)

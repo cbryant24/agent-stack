@@ -16,6 +16,7 @@ from agent_runtime import UserKnowledgeStore
 from agent_shell.tools.registry import EffectClass, ToolResult, ToolSpec
 from pydantic import BaseModel, Field
 
+from visual_generation.chat.attempt import link_attempt
 from visual_generation.chat.interpretation import (
     InterpretationError,
     build_evaluation,
@@ -186,6 +187,7 @@ def make_write_tools(state: ChatState) -> list[ToolSpec]:
     async def eval_preview(a: EvaluationInput) -> str:
         ctx = await gather_context(state, a)
         entry, questions = build_evaluation(a, ctx)
+        entry = link_attempt(state, entry)
         lines = [render_entry(entry, ctx.resolver)]
         if entry.agent_status == "unresolved" and a.agent_status != "unresolved":
             since = execution_truth_verified_since()
@@ -201,6 +203,7 @@ def make_write_tools(state: ChatState) -> list[ToolSpec]:
             entry, questions = build_evaluation(a, ctx)
         except InterpretationError as e:
             return fail(str(e))
+        entry = link_attempt(state, entry)
         store, _ = state.stores()
         try:
             written = await _record_evaluation(entry, store=store)
@@ -215,6 +218,7 @@ def make_write_tools(state: ChatState) -> list[ToolSpec]:
             f"({written.reaction}); the generation's reaction is set. agent_status={written.agent_status}.",
             data={"evaluation_id": written.entry_id, "gen_id": written.gen_id,
                   "chain_root_id": written.chain_root_id, "agent_status": written.agent_status,
+                  "attempt_id": written.attempt_id,
                   "open_questions": questions},
         )
 

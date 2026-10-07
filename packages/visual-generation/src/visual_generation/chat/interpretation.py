@@ -209,6 +209,8 @@ def render_entry(entry: EvaluationEntry, resolver: LabelResolver) -> str:
     ]
     if entry.question:
         lines.append(f"  Question this attempt answered: {entry.question}")
+    if entry.attempt_id:
+        lines.append(f"  Attempt plan: {entry.attempt_id}")
     for k in entry.keep:
         lines.append(f"  Keep: {k.attribute} (from {resolver.display(k.source_gen_id)})")
     for c in entry.change:

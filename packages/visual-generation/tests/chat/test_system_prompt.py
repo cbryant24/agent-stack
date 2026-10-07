@@ -39,8 +39,8 @@ def test_each_rule_is_quoted_from_a_doc_that_still_says_it(rule: str, doc: str, 
 
 def test_the_prompt_states_the_chat_limits_and_the_propose_first_rule() -> None:
     p = system_prompt()
-    assert "You cannot render images or spend GPU" in p
-    assert "only after the director confirms each write" in p
+    assert "Every memory write and every GPU spend is shown to the director and confirmed first" in p
+    assert "attempt_plan" in p and "loading models" in p and "Do not review images with a pod up" in p
     assert "Always propose before any write or spend" in p
     assert "propose_interpretation" in p and "stores nothing" in p
 

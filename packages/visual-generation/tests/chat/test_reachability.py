@@ -1,4 +1,8 @@
-"""The chat tool pack has no GPU path, no direct Qdrant code, and every write is a gated tool."""
+"""The chat tool pack: its exact tool set and effect classes, which modules may reach the GPU,
+no direct Qdrant code, and every write and every spend a gated tool with a preview.
+
+Phase 5 (after Gate 0 passed, 2026-10-07) added the generation and pod tools. The rule changed
+from "the chat cannot spend" to "only the generation and pod modules can, and only through the gate"."""
 
 from __future__ import annotations
 
@@ -17,14 +21,17 @@ from .conftest import Built  # type: ignore[import-not-found]
 
 
 READS = {"recall", "review_pending", "chain_show", "inspect_generation", "digest", "batch_list",
-         "model_list", "workflow_list", "lesson_list", "canon_show", "knowledge_verify", "list_evaluations"}
+         "model_list", "workflow_list", "lesson_list", "canon_show", "knowledge_verify", "list_evaluations",
+         "plan_generation", "gpu_ledger", "export_artifacts"}
+EXTERNAL = {"pod_status", "pod_bootstrap", "pod_tunnel"}
+GPU = {"generate", "quick_generate", "pod_up"}
 LLM = {"explain", "draft", "redraft", "batch_build"}
-MEMORY = {"report", "record_evaluation", "add_lesson", "add_fact", "canon_set", "canon_edit", "workflow_register"}
-DESTRUCTIVE = {"lesson_rm", "batch_rm", "model_rm", "canon_rm"}
-EXPECTED = READS | LLM | MEMORY | DESTRUCTIVE | {"propose_interpretation"}
-# Not exposed in this phase: anything that renders or needs a pod, and delegation that ingests.
-ABSENT = {"generate", "quick", "fact_ingest_docs", "model_sync", "batch_rebuild", "research", "lesson_add",
-          "fact_add", "sync_models"}
+MEMORY = {"report", "record_evaluation", "add_lesson", "add_fact", "canon_set", "canon_edit", "workflow_register",
+          "model_sync"}
+DESTRUCTIVE = {"lesson_rm", "batch_rm", "model_rm", "canon_rm", "pod_down"}
+EXPECTED = READS | EXTERNAL | GPU | LLM | MEMORY | DESTRUCTIVE | {"propose_interpretation"}
+# Still not exposed: delegation that ingests, and the CLI spellings of tools that exist under other names.
+ABSENT = {"quick", "fact_ingest_docs", "batch_rebuild", "research", "lesson_add", "fact_add", "sync_models"}
 
 # Every name chat/ may import from the rest of visual_generation. Adding to this list is the
 # review point: anything that renders on a GPU must never appear here, and Qdrant writes appear
@@ -60,11 +67,27 @@ ALLOWED_IMPORTS = {
     ("visual_generation.report", "report"),
     ("visual_generation.store", "VisualGenerationStore"),
     ("visual_generation.verify", "verify_knowledge"),
+    # Phase 5: the spend and pod paths. Only the files in MAY_SPEND import the rendering ones.
+    ("visual_generation.comfyui_client", "ComfyUIClient"),
+    ("visual_generation.comfyui_client", "ComfyUIError"),
+    *{("visual_generation.constants", n) for n in (
+        "AGENT_SUBDIR", "GPU_LEDGER_FILENAME", "IDENTITY_SUBDIR", "COLD_LOAD_POLL_TIMEOUT_SEC",
+        "DEFAULT_GPU_RATE_USD_PER_HR", "DEFAULT_PER_RUN_MINUTES", "DEFAULT_POLL_TIMEOUT_SEC",
+        "DEFAULT_QUICK_IMAGE_TEMPLATE", "LOADING_NOTICE_AFTER_SEC", "LOADING_NOTICE_EVERY_SEC")},
+    *{("visual_generation.generate", n) for n in ("GenerationPlan", "plan_generation", "spend_generation")},
+    ("visual_generation.gpu_tracker", "GpuLedger"),
+    ("visual_generation.lora_guard", "strength_warnings"),
+    ("visual_generation.model_registry", "ModelRegistry"),
+    *{("visual_generation.model_sync", n) for n in ("ReconcileResult", "parse_object_info", "reconcile")},
+    *{("visual_generation.quick", n) for n in (
+        "QuickInvalidSpec", "QuickLoraUnsafe", "QuickSeedUnmapped", "QuickSourceError", "QuickTemplateNotFound",
+        "quick_generate")},
 }
-SPENDING_MODULES = {
-    "generate", "quick", "comfyui_client", "gpu_tracker", "graph_build", "assets",
-    "model_sync", "slot_inference", "research", "lora_guard",
-}
+# Modules that render or spend, and the only chat files allowed to import each. Graph building,
+# slot inference and asset writing stay out of the chat entirely: it calls generate/quick, which own them.
+RENDERING_MODULES = {"generate", "quick", "model_sync", "lora_guard", "model_registry"}
+MAY_RENDER = {"tools/generation.py", "tools/pod.py"}
+NEVER_IMPORTED = {"graph_build", "assets", "slot_inference", "research", "provenance"}
 
 
 def tools(built: Built) -> dict[str, Any]:
@@ -85,19 +108,26 @@ async def test_effect_classes(build: Callable[..., Built]) -> None:
     assert by(EffectClass.READ) == READS and by(EffectClass.LLM_SPEND) == LLM
     assert by(EffectClass.MEMORY_WRITE) == MEMORY and by(EffectClass.DESTRUCTIVE_LOCAL) == DESTRUCTIVE
     assert by(EffectClass.NONE) == {"propose_interpretation"}
-    assert not by(EffectClass.GPU_SPEND)                       # nothing in the chat can spend on a GPU
+    assert by(EffectClass.GPU_SPEND) == GPU and by(EffectClass.EXTERNAL_READ) == EXTERNAL
 
 
 @pytest.mark.asyncio
 async def test_every_gated_tool_shows_what_it_will_do(build: Callable[..., Built]) -> None:
     for name, sp in tools(build()).items():
-        if sp.effect in (EffectClass.MEMORY_WRITE, EffectClass.DESTRUCTIVE_LOCAL, EffectClass.LLM_SPEND):
+        if sp.effect in (EffectClass.MEMORY_WRITE, EffectClass.DESTRUCTIVE_LOCAL, EffectClass.LLM_SPEND,
+                         EffectClass.GPU_SPEND):
             assert sp.preview is not None, f"{name} has no confirm preview"
+        if sp.effect is EffectClass.GPU_SPEND:
+            assert sp.estimate_cost is not None and sp.precheck is not None, f"{name} can spend unchecked"
 
 
-def _imports_from_visual_generation() -> set[tuple[str, str]]:
+def _imports_from_visual_generation(only: set[str] | None = None, skip: set[str] | None = None) -> set[tuple[str, str]]:
     used: set[tuple[str, str]] = set()
-    for path in Path(chat_pkg.__file__).parent.rglob("*.py"):
+    root = Path(chat_pkg.__file__).parent
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).as_posix()
+        if (only is not None and rel not in only) or (skip is not None and rel in skip):
+            continue
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.ImportFrom) and node.level == 0:
                 mod = node.module or ""
@@ -114,9 +144,25 @@ def test_chat_imports_only_allowlisted_names_from_the_library() -> None:
     assert used <= ALLOWED_IMPORTS, f"new imports to review: {sorted(used - ALLOWED_IMPORTS)}"
 
 
-def test_chat_never_imports_a_spending_or_rendering_module() -> None:
-    mods = {m.split(".")[1] for m, _ in _imports_from_visual_generation() if "." in m}
-    assert not mods & SPENDING_MODULES
+def _modules(pairs: set[tuple[str, str]]) -> set[str]:
+    return {m.split(".")[1] for m, _ in pairs if "." in m}
+
+
+def test_only_the_generation_and_pod_tools_import_a_rendering_module() -> None:
+    elsewhere = _modules(_imports_from_visual_generation(skip=MAY_RENDER))
+    assert not elsewhere & RENDERING_MODULES, elsewhere & RENDERING_MODULES
+    assert not _modules(_imports_from_visual_generation()) & NEVER_IMPORTED
+
+
+def test_the_chat_has_no_way_to_override_the_pod_template_or_image() -> None:
+    """scripts/pod reads TEMPLATE_ID and IMAGE from the environment; the chat must never set them."""
+    root = Path(chat_pkg.__file__).parent
+    runner = (root / "pod" / "runner.py").read_text()
+    assert "env=" not in runner and "shell=True" not in runner
+    for path in root.rglob("*.py"):
+        text = path.read_text()
+        assert "create_subprocess_shell" not in text and "os.system" not in text, path.name
+        assert "subprocess.run" not in text and "os.environ[" not in text and "putenv" not in text, path.name
 
 
 @pytest.mark.asyncio
@@ -161,7 +207,7 @@ async def test_running_every_non_write_tool_makes_no_data_write_and_no_spend(
         "inspect_generation": {"generation": "attempt-02"}, "digest": {}, "batch_list": {},
         "model_list": {}, "workflow_list": {}, "lesson_list": {}, "canon_show": {},
         "knowledge_verify": {"query": "x"},
-        "list_evaluations": {},
+        "list_evaluations": {}, "gpu_ledger": {},
         "propose_interpretation": {"generation": "attempt-01", "raw_feedback": "f", "reaction": "disliked"},
     }
     for name, kw in args.items():

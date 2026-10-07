@@ -174,3 +174,100 @@ def zimage_lora_template():
         name="z-image-turbo-lora", descriptor="z-image stills with a LoRA loader", graph=graph,
         slot_map=inferred.slot_map, required_models=inferred.required_models,
     )
+
+
+# ── a fake scripts directory: no test can reach scripts/pod, runpodctl, ssh or op ──
+
+_FAKE_POD = r"""#!/usr/bin/env bash
+echo "pod $* | TEMPLATE_ID=${TEMPLATE_ID-<unset>} IMAGE=${IMAGE-<unset>} KEY=${RUNPOD_API_KEY:+set}" >> "$FAKE_LOG"
+state="$FAKE_STATE/pod"
+case "$1" in
+  up)
+    if [[ "${FAKE_POD_UP:-ok}" == "no_key" ]]; then echo "error: RUNPOD_API_KEY is unset. Pod creation now goes..." >&2; exit 1; fi
+    if [[ "${FAKE_POD_UP:-ok}" == "capacity" ]]; then echo "!!! ERROR: could not create a pod with a GPU after 3 attempt(s)" >&2; exit 1; fi
+    if [[ "${FAKE_POD_UP:-ok}" == "hang" ]]; then sleep 30; fi
+    if [[ -f "$state" ]]; then echo "reusing pod pod-abc (RUNNING with 1 GPU(s))." >&2; exit 0; fi
+    touch "$state"; echo "pod pod-abc RUNNING with 1 GPU(s)." >&2 ;;
+  down) rm -f "$state"; echo "deleted pod pod-abc." >&2 ;;
+  status)
+    if [[ "${FAKE_POD_STATUS:-ok}" == "fail" ]]; then echo "error: runpodctl not found on PATH." >&2; exit 1; fi
+    if [[ -f "$state" ]]; then printf 'id:            pod-abc\nname:          visual-generation\ndesiredStatus: RUNNING\ngpuCount:      1\ncostPerHr:     0.6\n\n'; fi ;;
+  watch) sleep 30 ;;
+esac
+"""
+_FAKE_OP = r"""#!/usr/bin/env bash
+echo "op $*" >> "$FAKE_LOG"
+while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
+shift
+RUNPOD_API_KEY=resolved-secret exec "$@"
+"""
+_FAKE_RUNPODCTL = r"""#!/usr/bin/env bash
+echo "runpodctl $*" >> "$FAKE_LOG"
+if [[ "${FAKE_SSH_INFO:-ok}" == "not_ready" ]]; then echo '{"id":"pod-abc","ssh":{"error":"pod not ready"}}'; exit 0; fi
+echo '{"id":"pod-abc","ssh":{"ip":"203.0.113.7","port":22017}}'
+"""
+_FAKE_SSH = r"""#!/usr/bin/env bash
+echo "ssh $*" >> "$FAKE_LOG"
+all=" $* "
+if [[ "$all" == *" -G "* ]]; then printf 'serveraliveinterval %s\nserveralivecountmax 3\n' "${FAKE_KEEPALIVE:-30}"; exit 0; fi
+if [[ "$all" == *" -N "* ]]; then
+  if [[ "${FAKE_TUNNEL:-ok}" == "dies" ]]; then echo "bind: Address already in use" >&2; exit 255; fi
+  sleep 30; exit 0
+fi
+if [[ "$all" == *" curl "* ]]; then
+  if [[ "${FAKE_REMOTE:-ok}" == "down" ]]; then echo "curl: (7) Failed to connect" >&2; exit 7; fi
+  echo '{"system": {"os": "posix"}}'; exit 0
+fi
+if [[ "$all" == *" bash "* ]]; then
+  if [[ "${FAKE_BOOTSTRAP:-ok}" == "no_models" ]]; then echo "error: /workspace/runpod-slim/ComfyUI/models not found. Expected the volume's pre-populated model" >&2; exit 1; fi
+  if [[ "${FAKE_BOOTSTRAP:-ok}" == "fail" ]]; then echo "error: ComfyUI process exited immediately" >&2; exit 1; fi
+  echo "ComfyUI started (pid 4242), models dir: volume."; exit 0
+fi
+"""
+_FAKE_SCP = r"""#!/usr/bin/env bash
+echo "scp $*" >> "$FAKE_LOG"
+if [[ "${FAKE_SCP:-ok}" == "fail" ]]; then echo "scp: Connection closed" >&2; exit 1; fi
+dest="${@: -1}"
+if [[ " $* " == *" -r "* ]]; then mkdir -p "$dest/output"; echo png > "$dest/output/ComfyUI_00001_.png"; fi
+"""
+
+
+class FakeScripts:
+    """The fake scripts directory plus what was run through it."""
+
+    def __init__(self, root: Path) -> None:
+        self.dir = root / "scripts"
+        self.env = root / ".env"
+        self.log_path = root / "fake.log"
+        self.state = root / "state"
+
+    def log(self) -> list[str]:
+        return self.log_path.read_text().splitlines() if self.log_path.exists() else []
+
+    def ran(self, prefix: str) -> list[str]:
+        return [ln for ln in self.log() if ln.startswith(prefix)]
+
+    def pod_exists(self, yes: bool = True) -> None:
+        (self.state / "pod").touch() if yes else (self.state / "pod").unlink(missing_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def fake_scripts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeScripts:
+    fake = FakeScripts(tmp_path / "fake-repo")
+    fake.dir.mkdir(parents=True)
+    fake.state.mkdir()
+    for name, body in (("pod", _FAKE_POD), ("op", _FAKE_OP), ("runpodctl", _FAKE_RUNPODCTL),
+                       ("ssh", _FAKE_SSH), ("scp", _FAKE_SCP), ("comfyui-bootstrap", "#!/usr/bin/env bash\n")):
+        path = fake.dir / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+    fake.env.write_text(
+        "RUNPOD_API_KEY=op://Personal/runpod/credential\nIMAGE_NETWORK_VOLUME_ID=vol-123\n"
+        "TEMPLATE_ID=runpod-torch-v280\n", encoding="utf-8")
+    monkeypatch.setenv("VISUAL_GENERATION_SCRIPTS_DIR", str(fake.dir))
+    monkeypatch.setenv("PATH", f"{fake.dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_LOG", str(fake.log_path))
+    monkeypatch.setenv("FAKE_STATE", str(fake.state))
+    for name in ("TEMPLATE_ID", "IMAGE", "RUNPOD_API_KEY", "POD_SSH_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    return fake

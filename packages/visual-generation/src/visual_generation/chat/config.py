@@ -5,6 +5,7 @@ from pathlib import Path
 from agent_runtime.models import BudgetEnvelope
 from agent_shell.config import ChatConfig
 
+from visual_generation.chat.pod.hooks import POD_HELP, PodHooks
 from visual_generation.chat.state import ChatState
 from visual_generation.chat.tools import tool_pack
 
@@ -19,6 +20,7 @@ def system_prompt() -> str:
 def build_chat_config(state: ChatState) -> ChatConfig:
     """The ChatConfig agent-shell needs. The system prompt is static (byte-stable, so provider
     prefix caching works); project state rides in the tool descriptions, set once per session."""
+    pod_hooks = PodHooks(state)
     return ChatConfig(
         agent_name=AGENT_NAME,
         system_prompt=system_prompt(),
@@ -27,4 +29,8 @@ def build_chat_config(state: ChatState) -> ChatConfig:
         # Anything proposed but not written by /exit is offered again (accepted ones are applied
         # through their tool; deferred ones queue under drafts/visual-generation/).
         on_session_end=lambda transcript: state.unwritten_proposals(),
+        # Pod safety: startup check, drain prompt, idle check-in, exit question, and /pod.
+        hooks=pod_hooks.shell_hooks(),
+        slash_commands={"/pod": pod_hooks.slash},
+        slash_help=POD_HELP,
     )
