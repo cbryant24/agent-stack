@@ -599,7 +599,8 @@ What `generate` (and `quick`) now guarantee, so the record can be trusted:
   fixture (`docs/gate0/batch.md`: two random-seed images and one fixed-seed image of a plain mug). After the
   run, `visual-generation gate0 verify --project gate0 --template <name> --out docs/audit/gate0-result.md`
   judges it (read-only, spends nothing) and writes the result record. Set `EXECUTION_TRUTH_VERIFIED_SINCE`
-  only after it passes and you sign off.
+  only after it passes and you sign off. First pass: 2026-10-07 (`docs/audit/gate0-result.md`), on the
+  `visual-workflow` template.
 
 ### `quick "<prompt>" --endpoint <url> [--video] [--image <seed.png>] [...]`
 

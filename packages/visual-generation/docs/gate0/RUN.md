@@ -54,7 +54,7 @@ agent visual-generation generate packages/visual-generation/docs/gate0/batch.md 
 ./scripts/pod down
 
 # 5. Free and read-only: judge the evidence and write the record.
-agent visual-generation gate0 verify --project gate0 --template z-image-turbo-lora \
+agent visual-generation gate0 verify --project gate0 --template visual-workflow \
     --fixed-seed 12345 --out docs/audit/gate0-result.md
 ```
 

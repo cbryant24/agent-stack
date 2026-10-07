@@ -11,7 +11,7 @@ question: Does each saved record's seed equal the seed in the graph that was sub
 baseline_attempt:
 hypothesis: the agent submits and records the same seed
 changed_variable: none (control run on a neutral fixture)
-controlled_variables: [template z-image-turbo-lora, prompt, size 1024x1024, steps 8, cfg 1.0]
+controlled_variables: [template visual-workflow, prompt, size 1024x1024, steps 8, cfg 1.0]
 acceptance_gate: evaluation-charter.md Gate 0
 stop_rule: stop after the three images; do not iterate
 session_cost_cap_usd: 1.00
@@ -29,7 +29,7 @@ environment:
 
 execution:
   prompt_id:                 # one per image
-  workflow_name: z-image-turbo-lora
+  workflow_name: visual-workflow
   workflow_sha256:
   submitted_graph_path:
   submitted_graph_sha256:

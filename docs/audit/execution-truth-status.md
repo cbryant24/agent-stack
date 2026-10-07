@@ -14,8 +14,10 @@ input/output hashes are now saved beside every output (`provenance.py`, `generat
 `quick.py:236,263`; tests `test_execution_truth_provenance.py`, `2eb2ba5`). Row 5 (the template's
 1152×896 default size) is **still open**: validation covers values a spec states, not a size it leaves
 unset. The phase doc numbers these gate items 3 to 6; this table keeps the audit's own row numbers.
-**Gate 0 itself has not been run:** it needs a pod. `packages/visual-generation/docs/gate0/RUN.md` has the
-commands and `visual-generation gate0 verify` judges the evidence.
+**Gate 0 was run and passed on 2026-10-07** (all five checks; record: `docs/audit/gate0-result.md`). It ran on
+the plain `visual-workflow` template, not the LoRA one, because the character LoRAs are not on the pod's volume,
+so the live run did not exercise switching off a baked-in LoRA (unit tests cover that). Setting
+`EXECUTION_TRUTH_VERIFIED_SINCE` is the director's separate sign-off.
 
 **Verdict at audit time: Gate 0 was not met.** Items 1 and 2 have since been fixed in the working tree
 (2026-10-04, uncommitted, see below); items 3–13 are still open. Phase 5 needs those two fixes committed.

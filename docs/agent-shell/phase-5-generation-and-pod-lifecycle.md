@@ -19,10 +19,11 @@ Then run **Gate 0** from `evaluation-charter.md` on a neutral fixture: two rando
 
 These fixes are their own Claude Code sessions, separate from the REPL work. They can run in parallel with Phases 1-4.
 
-**Status (2026-10-07).** Session 1 is done except for the live run: items 1 to 6 above are fixed and tested
+**Status (2026-10-07).** Session 1 is done and **Gate 0 passed** on 2026-10-07 (record: `docs/audit/gate0-result.md`;
+fixture ran on `visual-workflow`, since the character LoRAs were absent from the pod). Session 2 is unblocked.
+Items 1 to 6 above are fixed and tested
 (`a2395c1`, `b117501`, `2a7b9b4`, `dc30283`, `2eb2ba5`). A read-only checker, `visual-generation gate0 verify`,
 the neutral fixture batch, the run guide and a record template are in `packages/visual-generation/docs/gate0/`.
-**Gate 0 itself still has to be run on a pod by you**, and passed, before Session 2 (the tools) starts.
 Two notes on what was built: out-of-range values are rejected at plan time and never clamped; and the
 audit's "template default 1152×896" row is not part of this and remains open.
 
