@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,8 @@ from visual_generation.comfyui_client import ComfyUIClient, ComfyUIError
 from visual_generation.constants import (
     DEFAULT_GPU_RATE_USD_PER_HR,
     DEFAULT_POLL_TIMEOUT_SEC,
+    LOADING_NOTICE_AFTER_SEC,
+    LOADING_NOTICE_EVERY_SEC,
     EXPLAIN_LEVELS,
     IMG2IMG_TEMPLATE_NAME,
     LESSON_SCOPE_MODEL,
@@ -641,6 +644,24 @@ def _run_batch(project: str, output: str | None, model: str | None, provider: st
 # ── generate (Phase B — GPU spend, soft-inform gate) ─────────────────────────
 
 
+def _loading_notifier() -> Callable[[str, float], Awaitable[None]]:
+    """Say "loading models" while a render has produced nothing yet, so a cold model load on a
+    fresh pod (minutes, not seconds) does not look like a hang."""
+    last = {"at": 0.0}
+
+    async def on_wait(prompt_id: str, elapsed: float) -> None:
+        due = LOADING_NOTICE_AFTER_SEC if not last["at"] else last["at"] + LOADING_NOTICE_EVERY_SEC
+        if elapsed < due:
+            return
+        last["at"] = elapsed
+        click.echo(
+            "  loading models (first render on a fresh pod can take about 8 min) … "
+            f"{int(elapsed) // 60}m{int(elapsed) % 60:02d}s"
+        )
+
+    return on_wait
+
+
 @cli.command()
 @click.argument("batch", type=click.Path(exists=True, dir_okay=False))
 @click.option("--section", "section_id", default=None, help="Generate one spec by id.")
@@ -714,7 +735,8 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
         click.confirm(f"Spend ~${est:.4f} of GPU time on {len(plan.plans)} generation(s)?", abort=True)
 
     result = spend_generation_sync(
-        plan, endpoint=endpoint, gpu_rate=rate, max_session_cost=max_session_cost
+        plan, endpoint=endpoint, gpu_rate=rate, max_session_cost=max_session_cost,
+        on_wait=_loading_notifier(),
     )
 
     click.echo(f"\nStatus:       {result.status}")
@@ -745,6 +767,17 @@ def generate(batch: str, section_id: str | None, all_sections: bool, endpoint: s
         click.echo("\n── Batch drained ───────────────────────────────────")
         click.echo("Stop your pod now to stop GPU billing — the agent issues no RunPod stop.")
         click.echo("⚠ Idle warning: every minute the pod stays up keeps billing, even idle.")
+
+    if result.error:
+        # One line with the fix, never a traceback: the usual cause is no pod, or a dropped tunnel.
+        click.echo(
+            f"\nError: ComfyUI is not reachable at {endpoint}. {result.items_processed} of "
+            f"{len(plan.plans)} rendered. Fix: bring a pod up (op run --env-file=.env -- ./scripts/pod up), "
+            "run comfyui-bootstrap, open the tunnel (ssh -N -L 8188:127.0.0.1:8188 root@<IP> -p <PORT>), "
+            "then retry with --endpoint http://127.0.0.1:8188.",
+            err=True,
+        )
+        raise SystemExit(1)
 
     click.echo("\nReview each asset, then run its `React:` command above (the gen id is filled in).")
     if result.report_path:
@@ -910,6 +943,7 @@ def quick(
             out_path=out_path,
             gpu_rate=rate,
             poll_timeout=timeout,
+            on_wait=_loading_notifier(),
         )
     except (QuickTemplateNotFound, QuickSourceError, QuickSeedUnmapped, QuickLoraUnsafe, QuickInvalidSpec) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -944,11 +978,14 @@ _CHAT_LIBS = {"agent_shell", "langgraph", "langchain_core", "langchain_anthropic
 @click.option("--resume", "resume_id", default=None, help="Resume a chat session id.")
 @click.option("--dry-run", is_flag=True, default=False,
               help="Spend tools describe what they would do and run nothing.")
+@click.option("--gpu-budget", type=click.FloatRange(min=0), default=5.0, show_default=True,
+              help="GPU budget for this session (USD). Going over it warns at each GPU confirmation.")
 def chat(provider: str, model: str | None, project: str | None, resume_id: str | None,
-         dry_run: bool) -> None:
-    """Chat with the agent: look things up, craft and revise specs, interpret feedback.
+         dry_run: bool, gpu_budget: float) -> None:
+    """Chat with the agent: look things up, craft and revise specs, interpret feedback, and
+    bring a pod up, render, export and tear it down.
 
-    Read and craft only: no GPU spend and no memory writes. Run under op run:
+    Every memory write and every GPU spend is confirmed first. Run under op run:
     `agent visual-generation chat --project <slug>`."""
     try:
         from visual_generation.chat.cli import run_chat
@@ -959,7 +996,7 @@ def chat(provider: str, model: str | None, project: str | None, resume_id: str |
             f"chat needs its optional libraries ({exc.name} is missing). "
             "Install them with: uv sync --all-packages --extra chat   (visual-generation[chat])"
         ) from exc
-    run_chat(provider, model, project, resume_id, dry_run)
+    run_chat(provider, model, project, resume_id, dry_run, gpu_budget)
 
 
 def chat_entry() -> None:

@@ -263,6 +263,7 @@ class EvaluationEntry(BaseModel):
     chain_root_id: str
     project: str | None = None
     question: str | None = None            # the single question this attempt was meant to answer
+    attempt_id: str | None = None          # the AttemptPlan this generation was rendered under, if any
     reaction: str                          # the existing REACTIONS vocabulary
     rating: int | None = Field(default=None, ge=1, le=5)
     raw_feedback: str                      # verbatim
@@ -442,7 +443,7 @@ class GenerationResult(BaseModel):
     skipped: list[str] = Field(default_factory=list)  # spec ids skipped
     skip_reasons: list[str] = Field(default_factory=list)  # plain-language, one per skip
     run_id: str = ""
-    status: Literal["completed", "partial", "failed"] = "completed"
+    status: Literal["completed", "partial", "failed", "unreachable"] = "completed"
     items_processed: int = 0
     session_cost_usd: float = 0.0
     gpu_rate_usd_per_hr: float = 0.0
@@ -450,5 +451,7 @@ class GenerationResult(BaseModel):
     cost_usd: float = 0.0  # Claude axis (≈0)
     wall_time_sec: float = 0.0
     report_path: Path | None = None
+    # Set when the endpoint dropped mid-run (status "unreachable"); `results` holds what rendered first.
+    error: str | None = None
 
     model_config = {"arbitrary_types_allowed": True}

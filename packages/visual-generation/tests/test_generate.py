@@ -615,3 +615,54 @@ def test_unmapped_values_ride_on_the_plan_and_the_result(tmp_path: Path, flux_te
         ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(),
     )
     assert result.results[0].unmapped == ["negative"]
+
+
+# ── spend: an endpoint that drops, and the wait callback ─────────────────────
+
+
+def test_spend_keeps_what_rendered_when_the_endpoint_drops_mid_drain(tmp_path: Path, flux_template) -> None:
+    from visual_generation.comfyui_client import ComfyUIUnreachable
+
+    class _Drops(_FakeComfy):
+        async def submit(self, graph: dict, client_id=None) -> str:
+            if self.submitted:
+                raise ComfyUIUnreachable("ComfyUI endpoint unreachable at http://pod:8188 (ConnectError).")
+            return await super().submit(graph, client_id)
+
+    first, second = _spec(spec_id="one"), _spec(spec_id="two")
+    plan = _plan(flux_template, first)
+    plan.plans.append(_plan(flux_template, second).plans[0])
+    ledger = GpuLedger(tmp_path / "ledger.json")
+
+    result = spend_generation_sync(
+        plan, endpoint="http://pod:8188", gpu_rate=3.0, store=_store(), client=_Drops(), ledger=ledger,
+        clock=_clock(),
+    )
+
+    assert result.status == "unreachable" and not result.drained
+    assert result.error and "unreachable" in result.error
+    assert [r.spec_id for r in result.results] == ["one"]        # the first render is not lost
+    assert ledger.cumulative() > 0                                # and its session cost is recorded
+
+
+def test_spend_reports_each_empty_poll_through_on_wait(tmp_path: Path, flux_template) -> None:
+    class _Slow(_FakeComfy):
+        polls = 0
+
+        async def history(self, prompt_id: str) -> dict:
+            self.polls += 1
+            return {} if self.polls < 3 else await super().history(prompt_id)
+
+    waits: list[tuple[str, float]] = []
+
+    async def on_wait(prompt_id: str, elapsed: float) -> None:
+        waits.append((prompt_id, elapsed))
+
+    result = spend_generation_sync(
+        _plan(flux_template, _spec()), endpoint="http://pod:8188", gpu_rate=3.0, store=_store(),
+        client=_Slow(), ledger=GpuLedger(tmp_path / "ledger.json"), clock=_clock(), poll_interval=0,
+        on_wait=on_wait,
+    )
+
+    assert result.status == "completed" and len(result.results) == 1     # a slow first render is not a failure
+    assert [w[0] for w in waits] == ["pid-1", "pid-1"] and waits[0][1] < waits[1][1]

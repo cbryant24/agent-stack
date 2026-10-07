@@ -11,6 +11,11 @@ No RunPod credential in v1 (Q4), so nothing here reads RunPod pricing or balance
 
 The per-run estimate that seeds the gate is learned from prior generations'
 recorded `cost_usd` when any exist, else a cold-start config default.
+
+Pod uptime is a second, separate axis: a caller that creates and deletes the pod itself
+(the chat's pod tools) records each pod's create-to-delete window as a `pod_uptime` entry.
+It is never added to `cumulative_usd`: inference time sits inside uptime, so summing the two
+would count it twice.
 """
 
 from __future__ import annotations
@@ -19,7 +24,9 @@ import json
 import os
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from agent_runtime import get_config
 
@@ -29,6 +36,18 @@ from visual_generation.constants import (
     GPU_LEDGER_FILENAME,
     RECENT_COST_SAMPLE,
 )
+
+
+POD_UPTIME_ENTRY = "pod_uptime"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def uptime_seconds(started_at: str, ended_at: str) -> float:
+    """Seconds between two ISO timestamps (never negative)."""
+    return max(0.0, (datetime.fromisoformat(ended_at) - datetime.fromisoformat(started_at)).total_seconds())
 
 
 def estimate_per_run_cost(prior_costs: list[float], rate: float) -> tuple[float, str]:
@@ -87,6 +106,55 @@ class GpuLedger:
         if budget is None:
             return None
         return budget - self.cumulative()
+
+    # ── pod uptime (its own entry type; wall-clock UTC so it survives a restart) ──
+
+    def entries(self, entry_type: str | None = None) -> list[dict[str, Any]]:
+        rows = list(self._load().get("entries", []))
+        return rows if entry_type is None else [r for r in rows if r.get("type") == entry_type]
+
+    def open_pod_entry(self) -> dict[str, Any] | None:
+        """The pod_uptime entry that has not been closed yet, if any."""
+        for row in reversed(self.entries(POD_UPTIME_ENTRY)):
+            if row.get("ended_at") is None:
+                return row
+        return None
+
+    def open_pod_uptime(
+        self, pod_id: str, rate_usd_per_hr: float, *, session_id: str = "",
+        started_at: str | None = None, start_observed: bool = True,
+    ) -> dict[str, Any]:
+        """Start a pod's uptime window. `start_observed=False` marks a pod that was already
+        running when it was first seen, so the true start is earlier than `started_at`."""
+        data = self._load()
+        row: dict[str, Any] = {
+            "type": POD_UPTIME_ENTRY, "pod_id": pod_id, "started_at": started_at or _utc_now().isoformat(),
+            "ended_at": None, "seconds": None, "rate_usd_per_hr": rate_usd_per_hr, "cost_usd": None,
+            "session_id": session_id, "start_observed": start_observed, "end_observed": None,
+        }
+        data.setdefault("entries", []).append(row)
+        self._write(data)
+        return row
+
+    def close_pod_uptime(
+        self, pod_id: str, *, ended_at: str | None = None, end_observed: bool = True
+    ) -> dict[str, Any] | None:
+        """Close the open window for `pod_id` and price it. `end_observed=False` marks a pod
+        found already gone, so `ended_at` is an upper bound. Returns the entry, or None."""
+        data = self._load()
+        for row in reversed(data.get("entries", [])):
+            if row.get("type") == POD_UPTIME_ENTRY and row.get("pod_id") == pod_id and row.get("ended_at") is None:
+                row["ended_at"] = ended_at or _utc_now().isoformat()
+                row["seconds"] = uptime_seconds(row["started_at"], row["ended_at"])
+                row["cost_usd"] = row["seconds"] / 3600.0 * float(row.get("rate_usd_per_hr") or 0.0)
+                row["end_observed"] = end_observed
+                self._write(data)
+                return dict(row)
+        return None
+
+    def pod_uptime_total(self) -> float:
+        """USD across every closed pod_uptime entry (kept apart from `cumulative()`)."""
+        return sum(float(r.get("cost_usd") or 0.0) for r in self.entries(POD_UPTIME_ENTRY))
 
 
 class SessionMeter:

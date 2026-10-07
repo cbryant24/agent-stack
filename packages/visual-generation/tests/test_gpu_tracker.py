@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+from pathlib import Path
 
 import pytest
 
@@ -67,3 +68,38 @@ def test_session_meter_uptime_and_costs() -> None:
     # 60s at $3/hr = $0.05
     assert meter.session_cost() == pytest.approx(0.05)
     assert meter.per_run_cost(120) == pytest.approx(0.10)
+
+
+# ── pod uptime: its own entry type, apart from inference estimates ───────────
+
+
+def test_pod_uptime_is_recorded_apart_from_inference_estimates(tmp_path: Path) -> None:
+    ledger = GpuLedger(tmp_path / "ledger.json")
+    ledger.record_session(0.10)                                   # an inference estimate
+
+    ledger.open_pod_uptime("pod-1", 0.60, session_id="s1", started_at="2026-10-07T17:00:00+00:00")
+    assert ledger.open_pod_entry()["pod_id"] == "pod-1"
+    closed = ledger.close_pod_uptime("pod-1", ended_at="2026-10-07T17:30:00+00:00")
+
+    assert closed is not None and closed["type"] == "pod_uptime"
+    assert closed["seconds"] == 1800 and closed["cost_usd"] == pytest.approx(0.30)
+    assert ledger.open_pod_entry() is None
+    assert ledger.pod_uptime_total() == pytest.approx(0.30)
+    assert ledger.cumulative() == pytest.approx(0.10)             # uptime never folds into the estimates
+
+
+def test_pod_uptime_marks_what_was_not_observed(tmp_path: Path) -> None:
+    ledger = GpuLedger(tmp_path / "ledger.json")
+    ledger.open_pod_uptime("pod-2", 0.69, start_observed=False)
+    closed = ledger.close_pod_uptime("pod-2", end_observed=False)
+    assert closed is not None and closed["start_observed"] is False and closed["end_observed"] is False
+    assert ledger.close_pod_uptime("pod-2") is None                # nothing left open
+
+
+def test_a_ledger_written_before_pod_entries_still_loads(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.json"
+    path.write_text('{"cumulative_usd": 1.5, "declared_budget_usd": 10.0}', encoding="utf-8")
+    ledger = GpuLedger(path)
+    assert ledger.cumulative() == 1.5 and ledger.entries() == [] and ledger.pod_uptime_total() == 0.0
+    ledger.open_pod_uptime("pod-3", 0.69)
+    assert ledger.cumulative() == 1.5 and ledger.remaining() == 8.5

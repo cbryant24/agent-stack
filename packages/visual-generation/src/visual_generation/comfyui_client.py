@@ -11,6 +11,8 @@ Surface (the native ComfyUI API, "Export Workflow (API)" format):
   - view(filename, ...)    GET  /view              → asset bytes
   - upload_image(data, …)  POST /upload/image      → pod-side input filename
   - object_info()          GET  /object_info       → installed nodes/models
+  - system_stats()         GET  /system_stats      → liveness
+  - queue()                GET  /queue             → running / pending prompt ids
 
 /ws live progress is deferred to Step 4 (the poll loop): a connect method with no
 consumer here would be dead, untestable code. Step 4's poll loop is served by
@@ -179,6 +181,17 @@ class ComfyUIClient:
             raise ComfyUIError(f"ComfyUI /upload/image returned no name: {body}")
         sub = body.get("subfolder", "")
         return f"{sub}/{name}" if sub else name
+
+    async def system_stats(self) -> dict[str, Any]:
+        """GET /system_stats — the cheap liveness check (is ComfyUI answering here?)."""
+        response = await self._request("GET", "/system_stats")
+        return response.json()
+
+    async def queue(self) -> dict[str, Any]:
+        """GET /queue — `queue_running` / `queue_pending`, each a list whose items carry the
+        prompt_id at index 1. Tells a job that is still working from one that vanished."""
+        response = await self._request("GET", "/queue")
+        return response.json()
 
     async def object_info(self) -> dict[str, Any]:
         """GET /object_info — the full node/model enumeration (parsed by model_sync)."""

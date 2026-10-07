@@ -43,7 +43,7 @@ from visual_generation.constants import (
     WAN_I2V_TEMPLATE_NAME,
     WAN_T2V_TEMPLATE_NAME,
 )
-from visual_generation.generate import _ext_for, _poll_history
+from visual_generation.generate import OnWait, _ext_for, _poll_history
 from visual_generation.graph_build import (
     apply_source_filenames,
     build_prompt_graph,
@@ -135,6 +135,7 @@ async def quick_generate(
     poll_timeout: float = DEFAULT_POLL_TIMEOUT_SEC,
     store: VisualGenerationStore | None = None,
     client: ComfyUIClient | None = None,
+    on_wait: OnWait | None = None,
 ) -> QuickResult:
     """Generate one image or WAN video from a raw prompt straight to ComfyUI.
 
@@ -236,7 +237,9 @@ async def quick_generate(
     graph_json = canonical_json(graph)          # the bytes that get hashed and saved
     started_at = now_iso()
     prompt_id = await client.submit(graph)
-    record = await _poll_history(client, prompt_id, poll_interval, poll_timeout, time.monotonic)
+    record = await _poll_history(
+        client, prompt_id, poll_interval, poll_timeout, time.monotonic, on_wait
+    )
     media = client.videos_from_history(record) if video else client.images_from_history(record)
     if not media:
         raise RuntimeError("the pod produced no output — re-run, or check the graph/endpoint.")

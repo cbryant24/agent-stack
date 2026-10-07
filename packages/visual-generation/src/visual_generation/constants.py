@@ -206,6 +206,12 @@ RESEARCH_GAP_THRESHOLD = 0.35
 # ── History poll loop (bounded; interval/timeout injectable for tests) ────────
 DEFAULT_POLL_INTERVAL_SEC = 2.0
 DEFAULT_POLL_TIMEOUT_SEC = 600.0
+# The first render on a fresh pod streams model weights off the Global Volume before any
+# sampling (477 s measured for Z-Image on 2026-09-20), so it gets a longer allowance.
+COLD_LOAD_POLL_TIMEOUT_SEC = 1800.0
+# While a render has produced nothing yet: say so after this long, then at this interval.
+LOADING_NOTICE_AFTER_SEC = 15.0
+LOADING_NOTICE_EVERY_SEC = 30.0
 
 # ── Refinement (img2img / inpaint) denoise ────────────────────────────────────
 # A source spec with no explicit `denoise` defaults to this at runtime only (the

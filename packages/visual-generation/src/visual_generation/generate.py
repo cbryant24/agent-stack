@@ -23,7 +23,7 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,7 +42,7 @@ from opentelemetry import trace
 
 from visual_generation.assets import write_asset
 from visual_generation.batch_file import read_batch
-from visual_generation.comfyui_client import ComfyUIClient
+from visual_generation.comfyui_client import ComfyUIClient, ComfyUIUnreachable
 from visual_generation.constants import (
     AGENT_NAME,
     DEFAULT_ASSET_EXT,
@@ -85,6 +85,10 @@ from visual_generation.store import VisualGenerationStore
 from visual_generation.validation import validate_spec
 
 logger = logging.getLogger(__name__)
+
+# Awaited once per empty poll with (prompt_id, seconds waited), so a caller can report a long
+# model load in place of silence.
+OnWait = Callable[[str, float], Awaitable[None]]
 
 
 # ── Plan structures ──────────────────────────────────────────────────────────
@@ -454,12 +458,16 @@ async def spend_generation(
     clock: Callable[[], float] = time.monotonic,
     poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
     poll_timeout: float = DEFAULT_POLL_TIMEOUT_SEC,
+    on_wait: OnWait | None = None,
 ) -> GenerationResult:
     """Drain the plan against a warm ComfyUI session, writing pending generations.
 
     `--max-session-cost` (if set) is an optional HARD ceiling: once the running
     session cost plus the next per-run estimate would exceed it, the drain stops
     (status `partial`, `drained=False`). GPU spend never enters the budget.
+
+    If the endpoint stops answering mid-drain the run ends with status `unreachable` and
+    `error` set; whatever rendered before the drop is still returned and recorded.
     """
     store = store or VisualGenerationStore(get_memory_store())
     await store.ensure_collection()
@@ -476,6 +484,7 @@ async def spend_generation(
     skipped = list(plan.skipped)
     skip_reasons: list[str] = [plan.skip_reason(sid) for sid in plan.skipped]
     tracker_ref: BudgetTracker | None = None
+    error: str | None = None
 
     try:
         async with BudgetTracker(budget or GENERATE_BUDGET, AGENT_NAME) as tracker:
@@ -509,7 +518,7 @@ async def spend_generation(
                     started_at = now_iso()
                     prompt_id = await client.submit(sp.graph)
                     record = await _poll_history(
-                        client, prompt_id, poll_interval, poll_timeout, clock
+                        client, prompt_id, poll_interval, poll_timeout, clock, on_wait
                     )
                     images = client.images_from_history(record)
                     if not images:
@@ -605,6 +614,10 @@ async def spend_generation(
     except BudgetExhaustedError:
         status = "partial"
         drained = False
+    except ComfyUIUnreachable as exc:
+        status = "unreachable"
+        drained = False
+        error = str(exc)
 
     if tracker_ref is not None:
         snap = tracker_ref._consumption
@@ -635,6 +648,7 @@ async def spend_generation(
         cost_usd=cost_usd,
         wall_time_sec=wall_time_sec,
         report_path=report_path,
+        error=error,
     )
 
 
@@ -644,19 +658,25 @@ async def _poll_history(
     poll_interval: float,
     poll_timeout: float,
     clock: Callable[[], float],
+    on_wait: OnWait | None = None,
 ) -> dict[str, Any]:
     """Poll /history until the run produces outputs or the timeout elapses.
 
     A mocked client that returns the record immediately exits on the first pass
     (no sleep). `clock` is the injected time source so the deadline is deterministic.
+    `on_wait` is awaited after each empty poll with the seconds waited so far.
     """
-    deadline = clock() + poll_timeout
+    started = clock()
+    deadline = started + poll_timeout
     while True:
         record = await client.history(prompt_id)
         if record and record.get("outputs"):
             return record
-        if clock() >= deadline:
+        now = clock()
+        if now >= deadline:
             return record or {}
+        if on_wait is not None:
+            await on_wait(prompt_id, now - started)
         await asyncio.sleep(poll_interval)
 
 
