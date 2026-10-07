@@ -703,13 +703,14 @@ This is the **first remove/replace path** for batch files — `batch_file` was p
 **losslessly**: every other spec's metadata and prose is preserved byte-for-byte, only
 the targeted spec is dropped.
 
-### `chat [--provider claude|openai] [--model M] [--project <slug>] [--resume <id>] [--dry-run]`  (alias: `visual-agent`)
+### `chat [--provider claude|openai] [--model M] [--project <slug>] [--resume <id>] [--dry-run] [--gpu-budget N]`  (alias: `visual-agent`)
 
 A conversation over the same read, craft and curation functions, so you can look things up, craft and
 revise specs, give feedback that becomes a structured, lineage-linked evaluation, and fix memory without
-typing one command per step. **It can never spend on a GPU**: no `generate`, `quick` or `model sync`.
-**Every write asks you first** (confirm, edit, defer or reject; destructive ones show the exact item and
-are yes/no only), and rejecting leaves memory unchanged.
+typing one command per step. Since Gate 0 passed (2026-10-07) it can also bring a pod up, render, export
+and delete the pod. **Every write and every GPU spend asks you first** (writes: confirm, edit, defer or
+reject; spends and destructive calls show exactly what will happen and are yes/no only), and rejecting
+leaves everything unchanged.
 
 ```bash
 uv sync --all-packages --extra chat            # the chat libraries are an optional extra
@@ -720,13 +721,46 @@ agent visual-generation chat --provider openai --model <model with a price row>
 
 Without the extra, every other command still works and `chat` prints how to install it.
 
-- **Tools** (28): `recall` (now also returns evaluations), `review_pending`, `chain_show`,
+- **Tools** (39): `recall` (now also returns evaluations), `review_pending`, `chain_show`,
   `inspect_generation`, `digest`, `batch_list`, `model_list`, `workflow_list`, `lesson_list`, `canon_show`,
   `knowledge_verify`, `list_evaluations` (reads); `explain`, `draft`, `redraft`, `batch_build` (LLM calls, a
   few cents; capped per call); `propose_interpretation` (structures your feedback; stores nothing);
   memory writes behind the gate: `report`, `record_evaluation`, `add_lesson`, `add_fact`, `canon_set`,
   `canon_edit`, `workflow_register`; destructive, showing the exact item: `lesson_rm`, `batch_rm`,
-  `model_rm`, `canon_rm`.
+  `model_rm`, `canon_rm`. Generation: `plan_generation`, `gpu_ledger` (free), `generate`, `quick_generate`
+  (GPU spend). Pod: `pod_status`, `pod_bootstrap`, `pod_tunnel`, `export_artifacts` (no confirmation),
+  `pod_up` (GPU spend: billing starts), `model_sync` (registry write), `pod_down` (destructive: billing stops).
+- **Rendering from the chat.** The standard sequence is `pod_up`, `pod_bootstrap`, `pod_tunnel`,
+  `model_sync`, `generate`, `export_artifacts`, `pod_down`, then review. Bootstrap, tunnel and sync are
+  separate checkpoints and report their own failures. The pod tools call `scripts/pod` and
+  `scripts/comfyui-bootstrap` as subprocesses (argument lists, a timeout, output in the audit log); `pod_up`
+  runs as `op run --env-file=.env -- scripts/pod up`, and nothing in the chat can set `TEMPLATE_ID` or
+  `IMAGE`. SSH is always the direct-TCP form.
+- **A paid run needs an attempt plan.** `generate` and `quick_generate` refuse without an `attempt_plan`
+  (question, baseline, hypothesis, changed variable, controlled variables, acceptance gate, stop rule,
+  cost cap). The cap is passed as `max_session_cost`, a hard ceiling. The plan is in the confirm panel
+  and the audit log, saved under `~/agent-data/visual-generation/attempts/`, and an evaluation of any
+  generation it produced carries its `attempt_id`. A spec sourced from a generation without a positive
+  reaction is skipped unless `allow_unapproved_sources` is set.
+- **Endpoint health and cold loads.** A paid call checks `/system_stats` before it asks you and again
+  before it submits. No pod, or a dropped tunnel, comes back as a "Platform-layer finding" with the fix,
+  and is written to the audit log as one. The first render on a new pod prints "loading models" every 30 s
+  (about 8 min for Z-Image) and gets a 30-minute allowance, so a cold load is not treated as a hang.
+- **`model_sync` runs once per new pod** and rewrites the registry to match that pod's volume. Its confirm
+  panel lists every entry it would drop before anything is written.
+- **Pod uptime is in the GPU ledger** as `pod_uptime` entries (create to delete, at the pod's real rate),
+  separate from the per-run inference estimates in `cumulative_usd`. The two are never added together.
+- **Not leaving a pod running.** At startup the chat runs `pod_status` and tells you if a pod is already
+  up. When a batch drains it asks to export and delete, and warns while a pod is up during review. An
+  idle check-in asks every `CHECKIN_INTERVAL` (30 min); **no answer within `GRACE` (3 min) exports and
+  deletes the pod**, as `scripts/pod watch` would. On exit with a pod up it asks first and can start
+  `scripts/pod watch`. The check-in only runs while the chat is open.
+- **`/pod rebuild`** walks the ten-step rebuild runbook with one checkpoint per step
+  (`~/agent-data/visual-generation/pod-rebuild.json`) and resumes at the first step not passed;
+  `/pod rebuild status` and `/pod rebuild restart`. Step 1 asks you to confirm the Global Volume in the
+  RunPod console (nothing checks it automatically); a missing volume stops the runbook.
+- **`--dry-run`** walks all of it and creates nothing: gated tools print their confirm panel, the ssh
+  tools print the commands they would run.
 - **Feedback becomes an evaluation.** Tell it your reaction and what you saw; it calls
   `propose_interpretation` (a proposal, nothing stored), you read it, then `record_evaluation` shows the
   full record and you confirm, edit or defer. The record is a new `evaluation` point in

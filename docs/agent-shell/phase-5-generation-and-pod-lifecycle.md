@@ -27,6 +27,13 @@ the neutral fixture batch, the run guide and a record template are in `packages/
 Two notes on what was built: out-of-range values are rejected at plan time and never clamped; and the
 audit's "template default 1152×896" row is not part of this and remains open.
 
+**Status (2026-10-07, later).** Session 2 is built: the Part A and Part B tools, the session behavior and
+`/pod rebuild` are in `visual_generation/chat/` (`tools/generation.py`, `tools/pod.py`, `pod/`), with small
+hook additions to `agent-shell`. Unit and offline-session tests pass against a fake scripts directory.
+Open against the acceptance list below: the live end-to-end run from the REPL on a neutral fixture has not
+been done. Decisions taken: runbook step 1 asks the director to confirm the Global Volume in the console
+(no automatic check exists); an idle check-in with no answer in `GRACE` exports and then deletes the pod.
+
 Remaining §9 items (drafter grounding, stale LoRAs offered, alias matching, trigger tokens, image-level verification, ledger coverage) are not blockers for wrapping `generate`, but the REPL surfaces them as warnings where it can.
 
 ## Part A — generation tools

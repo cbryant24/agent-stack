@@ -77,7 +77,14 @@ ChatConfig(agent_name=..., system_prompt=..., tool_pack=lambda: [ToolSpec(...)],
            default_budget=BudgetEnvelope(max_cost_usd=...), on_session_end=...)
 ```
 
-Handlers take the validated `input_model` and return a `ToolResult`. Put the real cost in `result.data["cost_usd"]`; the executor charges it to the right budget. Optional `estimate_cost` and `preview` feed the gate.
+Handlers take the validated `input_model` and return a `ToolResult`. Put the real cost in `result.data["cost_usd"]`; the executor charges it to the right budget. Optional `estimate_cost` and `preview` feed the gate. Set `preview_is_complete=True` when the preview states everything the call will do; the confirm panel then shows it without the raw-arguments block.
+
+Optional extension points, all agent-neutral:
+
+- `ChatConfig.hooks` (`ShellHooks`): `on_start`, `on_turn_end`, `on_exit`, and `idle_due_in` + `on_idle` (the REPL ends a waiting prompt when the idle check comes due). Each hook receives a `ShellUI` (`agent_shell.ui`): `say`, `ask`, `choose(prompt, options, timeout=)`, and `run_tool(name, args, confirmed=False)`. A failing hook is reported and the REPL carries on.
+- `ChatConfig.slash_commands`: `{"/name": async (args, ui) -> str}`, listed in `/help` via `slash_help`. No model call.
+- `Session.run_tool(...)` runs a registered tool outside a turn through the same validate, gate, dry-run and audit path; the confirmer is passed per call.
+- `agent_shell.ui.ScriptedUI` answers questions from a script, for tests with no terminal.
 
 ### Data it writes
 
