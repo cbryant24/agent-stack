@@ -15,11 +15,13 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "agent-shell[langgraph]",
     "visual-generation[chat]",
+    "music-curation[chat]",
 ]
 
 [tool.uv.sources]
 agent-shell = { workspace = true }
 visual-generation = { workspace = true }
+music-curation = { workspace = true }
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"

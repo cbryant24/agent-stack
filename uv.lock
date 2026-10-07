@@ -120,6 +120,7 @@ source = { virtual = "." }
 dev = [
     { name = "agent-shell", extra = ["langgraph"] },
     { name = "ipython" },
+    { name = "music-curation", extra = ["chat"] },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -133,6 +134,7 @@ dev = [
 dev = [
     { name = "agent-shell", extras = ["langgraph"], editable = "packages/agent-shell" },
     { name = "ipython", specifier = ">=8.0" },
+    { name = "music-curation", extras = ["chat"], editable = "packages/music-curation" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
@@ -1797,12 +1799,27 @@ dependencies = [
     { name = "click" },
 ]
 
+[package.optional-dependencies]
+chat = [
+    { name = "agent-shell", extra = ["langgraph"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "import-linter" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "agent-runtime", editable = "packages/agent-runtime" },
+    { name = "agent-shell", extras = ["langgraph"], marker = "extra == 'chat'", editable = "packages/agent-shell" },
     { name = "anthropic", specifier = ">=0.40" },
     { name = "click", specifier = ">=8.0" },
 ]
+provides-extras = ["chat"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "import-linter", specifier = ">=2.0" }]
 
 [[package]]
 name = "mypy"

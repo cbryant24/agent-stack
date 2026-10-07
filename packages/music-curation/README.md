@@ -43,6 +43,43 @@ music-curation seed ingest ~/path/to/file.md --yes              # no prompts
 music-curation seed review-taste                                 # review deferred taste
 ```
 
+## Chat
+
+`music-curation chat` is a conversation over the same library functions: look things up, write prompts,
+give a reaction in your own words, add taste lessons and Suno facts, and import seed files, without
+typing one command per step. **Every memory write asks you first** (confirm, edit, defer or reject), and
+rejecting leaves memory unchanged. Suno has no API, so nothing here spends outside the LLM calls.
+
+```bash
+uv sync --all-packages --extra chat            # the chat libraries are an optional extra
+agent music-curation chat                      # op run --env-file=.env -- uv run music-curation chat
+agent music-curation chat --dry-run            # paid and writing tools describe what they would do
+agent music-curation chat --provider openai --model <model with a price row>
+```
+
+Without the extra, every other command still works and `chat` prints how to install it.
+
+- **Tools** (16): `recall`, `review_pending`, `chain_show`, `seed_preview`, `taste_queue` (reads);
+  `generate` (an LLM call, capped at $0.60; saves each prompt as a pending generation automatically);
+  `propose_reaction` (structures your feedback; stores nothing); memory writes behind the gate: `report`,
+  `taste_add`, `fact_add`, `seed_ingest`, `taste_queue_decide`; and the shared knowledge tools
+  `knowledge_drafts`, `knowledge_search`, `knowledge_confirm`, `knowledge_reject`.
+- **A reaction is proposed, then recorded.** Tell it what happened in Suno. It calls `propose_reaction`
+  (nothing stored), you read it, then `report` shows the record and you confirm. Rules enforced in code:
+  `disliked` is a taste verdict on a faithful render and `prompt_failed` is Suno not rendering the prompt,
+  and the two are never swapped (if it cannot tell, it asks you); a track you never heard takes no rating.
+  Taste lessons are offered one at a time. Anything proposed but unwritten at `/exit` is offered again.
+- **Seed import is two steps.** `seed_preview` parses the files, writes nothing, and numbers every
+  inferred taste lesson and template. You decide each one in conversation; `seed_ingest` then carries all
+  the decisions in one confirmed call and refuses if any is missing. The decisions reach the same
+  `ingest_seed` the terminal uses, through a decision source (`SeedDecisions`), so parsing and writing are
+  one code path (`docs/decisions-mode-spec.md`). `taste_queue` and `taste_queue_decide` do the same for
+  lessons you deferred.
+- **Generations are referred to by id**: the full id, a unique prefix of 8+ characters among those the
+  chat has shown, or `latest` for the newest pending one. Nothing else is guessed.
+- **Tests.** `uv run pytest packages/music-curation/tests/music_chat`. Surface audit:
+  `docs/audit/music-curation-tool-surface.md`.
+
 ## Reusable prompt files
 
 For repeated, multi-paragraph requests, keep a markdown file per genre and pipe it in:
