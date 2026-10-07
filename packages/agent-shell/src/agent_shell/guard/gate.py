@@ -27,6 +27,7 @@ class ConfirmRequest(BaseModel):
     preview: str | None = None
     allowed: tuple[DecisionKind, ...] = _YN
     warning: str | None = None
+    show_args: bool = True
 
 
 class Decision(BaseModel):
@@ -111,7 +112,9 @@ class Gate:
         preview: str | None,
         est_cost: float,
         dry_run: bool,
+        confirmer: Confirmer | None = None,
     ) -> GateOutcome:
+        """`confirmer` replaces the session's own for this one call (a front end asking outside a turn)."""
         effect = spec.effect
         if effect not in GATED:
             return GateOutcome(action="allow", args=args)
@@ -132,9 +135,9 @@ class Gate:
             if effect is EffectClass.GPU_SPEND and budget and not budget.can_afford(est_cost):
                 warning = f"exceeds {budget.name} budget (remaining {budget.remaining})"
 
-        decision = await self.confirmer.ask(ConfirmRequest(
+        decision = await (confirmer or self.confirmer).ask(ConfirmRequest(
             tool=spec.name, effect=effect, args=args, preview=preview,
-            allowed=allowed, warning=warning,
+            allowed=allowed, warning=warning, show_args=not (spec.preview_is_complete and preview),
         ))
         if decision.kind not in allowed:
             return GateOutcome(action="reject", args=args, reason=f"{decision.kind} not allowed")

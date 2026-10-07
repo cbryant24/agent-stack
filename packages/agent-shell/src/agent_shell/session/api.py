@@ -257,6 +257,23 @@ class Session:
             return ToolResult(text=f"unknown tool: {proposal.tool}", is_error=True)
         return await self.executor.run(spec, proposal.payload, confirmed=True)
 
+    async def run_tool(
+        self, name: str, args: dict[str, Any] | None = None, *, confirmed: bool = False,
+        confirmer: Confirmer | None = None,
+    ) -> ToolResult:
+        """Run a registered tool outside a model turn (a hook or a slash command). Validation, the
+        gate, dry-run and the audit log apply as for any call; `confirmer` is who gets asked."""
+        if self.executor is None:
+            raise RuntimeError("session not started")
+        try:
+            spec = self.registry.get(name)
+        except KeyError:
+            return ToolResult(text=f"unknown tool: {name}", is_error=True)
+        result = await self.executor.run(spec, args or {}, confirmed=confirmed, confirmer=confirmer)
+        if self.trace is not None:
+            self.trace.tool_call(name)
+        return result
+
     def _record_cost(self, ev: TurnCost) -> None:
         provider = self.engine.provider
         model = ev.model or self.engine.model

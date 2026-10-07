@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from agent_runtime.tracing import span
 from agent_shell.audit.log import AuditLog
-from agent_shell.guard.gate import GATED, Gate, GateOutcome
+from agent_shell.guard.gate import GATED, Confirmer, Gate, GateOutcome
 from agent_shell.proposals import write_draft
 from agent_shell.tools.registry import ToolResult, ToolSpec
 
@@ -45,14 +45,16 @@ class Executor:
         return spec.model_copy(update={"handler": handler})
 
     async def run(
-        self, spec: ToolSpec, raw_args: dict[str, Any], *, confirmed: bool = False
+        self, spec: ToolSpec, raw_args: dict[str, Any], *, confirmed: bool = False,
+        confirmer: Confirmer | None = None,
     ) -> ToolResult:
         """Run a tool through validate -> gate -> dry-run -> call -> audit.
 
         `confirmed=True` is for a call the user has already approved by another route (an accepted
-        end-of-session proposal): the gate is skipped, everything else still applies."""
+        end-of-session proposal): the gate is skipped, everything else still applies. `confirmer`
+        asks in place of the gate's own, for a call made outside a turn (a hook, a slash command)."""
         with span(f"shell.tool.{spec.name}"):
-            args, result, decision, cost = await self._run(spec, raw_args, confirmed)
+            args, result, decision, cost = await self._run(spec, raw_args, confirmed, confirmer)
         self.audit.record(
             kind="tool_call", tool=spec.name, effect=spec.effect.value, args=args, decision=decision,
             dry_run=self._dry_run(), is_error=result.is_error, summary=result.text[:300],
@@ -62,7 +64,8 @@ class Executor:
         return result
 
     async def _run(
-        self, spec: ToolSpec, raw: dict[str, Any], confirmed: bool = False
+        self, spec: ToolSpec, raw: dict[str, Any], confirmed: bool = False,
+        confirmer: Confirmer | None = None,
     ) -> tuple[dict[str, Any], ToolResult, str, float]:
         try:
             parsed = spec.input_model.model_validate(raw)
@@ -91,7 +94,7 @@ class Executor:
             outcome = GateOutcome(action="dry_run" if dry else "allow", args=args, reason="proposal_accept")
         else:
             outcome = await self.gate.decide(
-                spec, args, preview=preview, est_cost=est, dry_run=self._dry_run()
+                spec, args, preview=preview, est_cost=est, dry_run=self._dry_run(), confirmer=confirmer
             )
 
         if outcome.action == "dry_run":

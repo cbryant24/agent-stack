@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -9,6 +9,20 @@ from agent_runtime.models import BudgetEnvelope
 
 from agent_shell.proposals import Proposal
 from agent_shell.tools.registry import ToolSpec
+
+
+class ShellHooks(BaseModel):
+    """Optional points where an agent joins the REPL's life cycle. Each receives a `ShellUI`
+    (agent_shell.ui): it can print, ask, and run a registered tool through the executor."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    on_start: Callable[..., Awaitable[None]] | None = None       # after the session starts
+    on_turn_end: Callable[..., Awaitable[None]] | None = None    # after each model turn
+    on_exit: Callable[..., Awaitable[None]] | None = None        # before the session closes
+    # Seconds until `on_idle` should run while the prompt sits unanswered, or None for never.
+    idle_due_in: Callable[[], float | None] | None = None
+    on_idle: Callable[..., Awaitable[None]] | None = None
 
 
 class ChatConfig(BaseModel):
@@ -21,6 +35,10 @@ class ChatConfig(BaseModel):
     tool_pack: Callable[[], list[ToolSpec]]
     default_budget: BudgetEnvelope
     on_session_end: Callable[..., list[Proposal]] | None = None
+    # Agent-owned slash commands: "/name" -> async (args, ui) -> text to print. No LLM call.
+    slash_commands: dict[str, Callable[..., Awaitable[str]]] = Field(default_factory=dict)
+    slash_help: str = ""            # lines appended to /help for those commands
+    hooks: ShellHooks | None = None
 
 
 class ShellSettings(BaseModel):

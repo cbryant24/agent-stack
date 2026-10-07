@@ -40,6 +40,9 @@ class ToolSpec(BaseModel):
     handler: Callable[..., Awaitable[ToolResult]]
     # Text shown in the confirm panel. May be async, so it can read what the call will touch.
     preview: Callable[..., str | Awaitable[str]] | None = None
+    # True when the preview already states everything the call will do, so the confirm panel
+    # shows it alone and leaves out the raw-arguments block.
+    preview_is_complete: bool = False
     estimate_cost: Callable[..., float] | None = None
     # Optional async check run BEFORE the gate: return a message and the call is refused with it
     # (an error result, no prompt), so the user is never asked to approve a call that would fail.

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from agent_shell.engine.base import Engine
 from agent_shell.session.api import Session
+from agent_shell.ui import ShellUI
 
 COMMANDS = [
     "/help", "/exit", "/cost", "/budget", "/dry-run", "/tools", "/audit",
@@ -46,8 +47,10 @@ class ReplContext:
         session: Session,
         engines: Mapping[str, Engine] | None = None,
         engine_factory: EngineFactory | None = None,
+        ui: ShellUI | None = None,
     ) -> None:
         self.session = session
+        self.ui = ui            # what an agent's own slash command talks through
         self.engines: dict[str, Engine] = dict(engines or {})
         self.engine_factory = engine_factory
 
@@ -74,7 +77,8 @@ async def handle_slash(line: str, ctx: ReplContext) -> SlashResult:
     s = ctx.session
 
     if cmd == "/help":
-        return SlashResult(HELP)
+        extra = s.config.slash_help
+        return SlashResult(HELP + ("\n" + extra if extra else ""))
     if cmd == "/exit":
         return SlashResult(exit=True)
     if cmd == "/cost":
@@ -127,6 +131,14 @@ async def handle_slash(line: str, ctx: ReplContext) -> SlashResult:
             return SlashResult(built)
         await s.switch_engine(built)
         return SlashResult(f"model: {built.model}; history carried over")
+    agent_cmd = s.config.slash_commands.get(cmd)
+    if agent_cmd is not None:
+        if ctx.ui is None:
+            return SlashResult(f"{cmd} needs an interactive front end")
+        try:
+            return SlashResult(await agent_cmd(args, ctx.ui) or "")
+        except Exception as e:  # noqa: BLE001 - shown to the user, the session carries on
+            return SlashResult(f"{type(e).__name__}: {e}")
     return SlashResult(f"unknown command: {cmd} (try /help)")
 
 
